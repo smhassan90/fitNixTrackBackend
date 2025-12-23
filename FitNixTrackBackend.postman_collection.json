@@ -1,0 +1,881 @@
+{
+	"info": {
+		"_postman_id": "fitnix-track-backend-api",
+		"name": "FitNix Track Backend API",
+		"description": "Complete API collection for FitNix Track multi-tenant gym management system",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Authentication",
+			"item": [
+				{
+					"name": "Login",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    var jsonData = pm.response.json();",
+									"    if (jsonData.data && jsonData.data.token) {",
+									"        pm.environment.set(\"auth_token\", jsonData.data.token);",
+									"        pm.environment.set(\"gym_id\", jsonData.data.user.gymId);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"email\": \"admin@fitnix.com\",\n    \"password\": \"password123\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/auth/login",
+							"host": ["{{base_url}}"],
+							"path": ["api", "auth", "login"]
+						}
+					}
+				},
+				{
+					"name": "Get Current User",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/auth/me",
+							"host": ["{{base_url}}"],
+							"path": ["api", "auth", "me"]
+						}
+					}
+				},
+				{
+					"name": "Logout",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/auth/logout",
+							"host": ["{{base_url}}"],
+							"path": ["api", "auth", "logout"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Members",
+			"item": [
+				{
+					"name": "Get All Members",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/members?search=&sortBy=createdAt&sortOrder=desc&page=1&limit=50",
+							"host": ["{{base_url}}"],
+							"path": ["api", "members"],
+							"query": [
+								{
+									"key": "search",
+									"value": ""
+								},
+								{
+									"key": "sortBy",
+									"value": "createdAt"
+								},
+								{
+									"key": "sortOrder",
+									"value": "desc"
+								},
+								{
+									"key": "page",
+									"value": "1"
+								},
+								{
+									"key": "limit",
+									"value": "50"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Member by ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/members/:id",
+							"host": ["{{base_url}}"],
+							"path": ["api", "members", ":id"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "member-{{gym_id}}-example-uuid"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Create Member",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"John Doe\",\n    \"phone\": \"+92-300-1234567\",\n    \"email\": \"john@example.com\",\n    \"gender\": \"Male\",\n    \"dateOfBirth\": \"1990-01-15\",\n    \"cnic\": \"1234567890123\",\n    \"comments\": \"New member\",\n    \"packageId\": null,\n    \"discount\": null,\n    \"trainerIds\": []\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/members",
+							"host": ["{{base_url}}"],
+							"path": ["api", "members"]
+						}
+					}
+				},
+				{
+					"name": "Update Member",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"John Doe Updated\",\n    \"phone\": \"+92-300-1234567\",\n    \"email\": \"john.updated@example.com\",\n    \"gender\": \"Male\",\n    \"dateOfBirth\": \"1990-01-15\",\n    \"cnic\": \"1234567890123\",\n    \"comments\": \"Updated member info\",\n    \"packageId\": null,\n    \"discount\": 10,\n    \"trainerIds\": []\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/members/:id",
+							"host": ["{{base_url}}"],
+							"path": ["api", "members", ":id"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "member-{{gym_id}}-example-uuid"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Delete Member",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/members/:id",
+							"host": ["{{base_url}}"],
+							"path": ["api", "members", ":id"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "member-{{gym_id}}-example-uuid"
+								}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Trainers",
+			"item": [
+				{
+					"name": "Get All Trainers",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/trainers?search=&sortBy=createdAt&sortOrder=desc&page=1&limit=50",
+							"host": ["{{base_url}}"],
+							"path": ["api", "trainers"],
+							"query": [
+								{
+									"key": "search",
+									"value": ""
+								},
+								{
+									"key": "sortBy",
+									"value": "createdAt"
+								},
+								{
+									"key": "sortOrder",
+									"value": "desc"
+								},
+								{
+									"key": "page",
+									"value": "1"
+								},
+								{
+									"key": "limit",
+									"value": "50"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Trainer by ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/trainers/:id",
+							"host": ["{{base_url}}"],
+							"path": ["api", "trainers", ":id"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "trainer-{{gym_id}}-example-uuid"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Create Trainer",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Mike Trainer\",\n    \"gender\": \"Male\",\n    \"dateOfBirth\": \"1985-05-20\",\n    \"specialization\": \"Weight Training, Bodybuilding\",\n    \"charges\": 5000,\n    \"startTime\": \"09:00\",\n    \"endTime\": \"18:00\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/trainers",
+							"host": ["{{base_url}}"],
+							"path": ["api", "trainers"]
+						}
+					}
+				},
+				{
+					"name": "Update Trainer",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Mike Trainer Updated\",\n    \"gender\": \"Male\",\n    \"specialization\": \"Weight Training, Bodybuilding, Cardio\",\n    \"charges\": 5500,\n    \"startTime\": \"08:00\",\n    \"endTime\": \"19:00\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/trainers/:id",
+							"host": ["{{base_url}}"],
+							"path": ["api", "trainers", ":id"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "trainer-{{gym_id}}-example-uuid"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Delete Trainer",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/trainers/:id",
+							"host": ["{{base_url}}"],
+							"path": ["api", "trainers", ":id"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "trainer-{{gym_id}}-example-uuid"
+								}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Packages",
+			"item": [
+				{
+					"name": "Get All Packages",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/packages?sortBy=createdAt&sortOrder=desc",
+							"host": ["{{base_url}}"],
+							"path": ["api", "packages"],
+							"query": [
+								{
+									"key": "sortBy",
+									"value": "createdAt"
+								},
+								{
+									"key": "sortOrder",
+									"value": "desc"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Package by ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/packages/:id",
+							"host": ["{{base_url}}"],
+							"path": ["api", "packages", ":id"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "package-{{gym_id}}-example-uuid"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Create Package",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Premium Package\",\n    \"price\": 15000,\n    \"duration\": \"3 months\",\n    \"features\": [\n        \"Gym Access\",\n        \"Locker\",\n        \"Shower\",\n        \"Personal Trainer\",\n        \"Nutrition Plan\",\n        \"Group Classes\"\n    ]\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/packages",
+							"host": ["{{base_url}}"],
+							"path": ["api", "packages"]
+						}
+					}
+				},
+				{
+					"name": "Update Package",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Premium Package Updated\",\n    \"price\": 16000,\n    \"duration\": \"3 months\",\n    \"features\": [\n        \"Gym Access\",\n        \"Locker\",\n        \"Shower\",\n        \"Personal Trainer\",\n        \"Nutrition Plan\",\n        \"Group Classes\",\n        \"Spa Access\"\n    ]\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/packages/:id",
+							"host": ["{{base_url}}"],
+							"path": ["api", "packages", ":id"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "package-{{gym_id}}-example-uuid"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Delete Package",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/packages/:id",
+							"host": ["{{base_url}}"],
+							"path": ["api", "packages", ":id"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "package-{{gym_id}}-example-uuid"
+								}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Payments",
+			"item": [
+				{
+					"name": "Get All Payments",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/payments?memberId=&status=&month=&search=&sortBy=dueDate&sortOrder=desc&page=1&limit=50",
+							"host": ["{{base_url}}"],
+							"path": ["api", "payments"],
+							"query": [
+								{
+									"key": "memberId",
+									"value": ""
+								},
+								{
+									"key": "status",
+									"value": ""
+								},
+								{
+									"key": "month",
+									"value": ""
+								},
+								{
+									"key": "search",
+									"value": ""
+								},
+								{
+									"key": "sortBy",
+									"value": "dueDate"
+								},
+								{
+									"key": "sortOrder",
+									"value": "desc"
+								},
+								{
+									"key": "page",
+									"value": "1"
+								},
+								{
+									"key": "limit",
+									"value": "50"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Payment by ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/payments/:id",
+							"host": ["{{base_url}}"],
+							"path": ["api", "payments", ":id"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "payment-{{gym_id}}-example-uuid"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Create Payment",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"memberId\": \"member-{{gym_id}}-example-uuid\",\n    \"month\": \"2024-03\",\n    \"amount\": 5000,\n    \"dueDate\": \"2024-03-15\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/payments",
+							"host": ["{{base_url}}"],
+							"path": ["api", "payments"]
+						}
+					}
+				},
+				{
+					"name": "Update Payment",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"month\": \"2024-03\",\n    \"amount\": 5500,\n    \"dueDate\": \"2024-03-20\",\n    \"status\": \"PENDING\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/payments/:id",
+							"host": ["{{base_url}}"],
+							"path": ["api", "payments", ":id"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "payment-{{gym_id}}-example-uuid"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Mark Payment as Paid",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/payments/:id/mark-paid",
+							"host": ["{{base_url}}"],
+							"path": ["api", "payments", ":id", "mark-paid"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "payment-{{gym_id}}-example-uuid"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Payment Receipt",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/payments/:id/receipt",
+							"host": ["{{base_url}}"],
+							"path": ["api", "payments", ":id", "receipt"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "payment-{{gym_id}}-example-uuid"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Delete Payment",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/payments/:id",
+							"host": ["{{base_url}}"],
+							"path": ["api", "payments", ":id"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "payment-{{gym_id}}-example-uuid"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Generate Overdue Payments",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/payments/generate-overdue",
+							"host": ["{{base_url}}"],
+							"path": ["api", "payments", "generate-overdue"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Attendance",
+			"item": [
+				{
+					"name": "Get All Attendance Records",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/attendance?memberId=&startDate=&endDate=&sortBy=date&sortOrder=desc&page=1&limit=50",
+							"host": ["{{base_url}}"],
+							"path": ["api", "attendance"],
+							"query": [
+								{
+									"key": "memberId",
+									"value": ""
+								},
+								{
+									"key": "startDate",
+									"value": ""
+								},
+								{
+									"key": "endDate",
+									"value": ""
+								},
+								{
+									"key": "sortBy",
+									"value": "date"
+								},
+								{
+									"key": "sortOrder",
+									"value": "desc"
+								},
+								{
+									"key": "page",
+									"value": "1"
+								},
+								{
+									"key": "limit",
+									"value": "50"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Attendance Record by ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/attendance/:id",
+							"host": ["{{base_url}}"],
+							"path": ["api", "attendance", ":id"],
+							"variable": [
+								{
+									"key": "id",
+									"value": "attendance-{{gym_id}}-example-uuid"
+								}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Dashboard",
+			"item": [
+				{
+					"name": "Get Dashboard Stats",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/dashboard/stats",
+							"host": ["{{base_url}}"],
+							"path": ["api", "dashboard", "stats"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Reports",
+			"item": [
+				{
+					"name": "Get Attendance Report",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/reports/attendance?startDate=&endDate=",
+							"host": ["{{base_url}}"],
+							"path": ["api", "reports", "attendance"],
+							"query": [
+								{
+									"key": "startDate",
+									"value": ""
+								},
+								{
+									"key": "endDate",
+									"value": ""
+								}
+							]
+						}
+					}
+				}
+			]
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:3001",
+			"type": "string"
+		},
+		{
+			"key": "auth_token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "gym_id",
+			"value": "",
+			"type": "string"
+		}
+	]
+}
+

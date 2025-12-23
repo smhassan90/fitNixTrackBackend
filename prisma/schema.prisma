@@ -1,0 +1,184 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Gym {
+  id        String   @id @default(uuid())
+  name      String
+  address   String?
+  phone     String?
+  email     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users     User[]
+  members   Member[]
+  trainers  Trainer[]
+  packages  Package[]
+  payments  Payment[]
+  attendanceRecords AttendanceRecord[]
+
+  @@map("gyms")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      UserRole @default(STAFF)
+  gymId     String
+  gymName   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  gym       Gym      @relation(fields: [gymId], references: [id], onDelete: Cascade)
+
+  @@map("users")
+}
+
+enum UserRole {
+  GYM_ADMIN
+  STAFF
+}
+
+model Member {
+  id              String    @id @default(uuid())
+  gymId           String
+  name            String
+  phone           String?
+  email           String?
+  gender          String?
+  dateOfBirth     DateTime?
+  cnic            String?   @db.VarChar(13)
+  comments        String?   @db.Text
+  packageId       String?
+  discount        Float?
+  membershipStart DateTime?
+  membershipEnd   DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  gym             Gym       @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  package         Package?  @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  trainers        MemberTrainer[]
+  payments        Payment[]
+  attendanceRecords AttendanceRecord[]
+
+  @@index([gymId])
+  @@index([packageId])
+  @@map("members")
+}
+
+model Trainer {
+  id            String    @id @default(uuid())
+  gymId         String
+  name          String
+  gender        String?
+  dateOfBirth   DateTime?
+  specialization String? @db.Text
+  charges       Float?
+  startTime     String?   @db.VarChar(5) // HH:mm format
+  endTime       String?   @db.VarChar(5) // HH:mm format
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  gym           Gym       @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  members       MemberTrainer[]
+
+  @@index([gymId])
+  @@map("trainers")
+}
+
+model Package {
+  id        String    @id @default(uuid())
+  gymId     String
+  name      String
+  price     Float
+  duration  String    // '1 month', '3 months', '6 months', '12 months'
+  features  String[] // Array of feature strings
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  gym       Gym       @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  members   Member[]
+
+  @@index([gymId])
+  @@map("packages")
+}
+
+model Payment {
+  id        String        @id @default(uuid())
+  gymId     String
+  memberId  String
+  month     String        @db.VarChar(7) // Format: 'YYYY-MM'
+  amount    Float
+  status    PaymentStatus @default(PENDING)
+  dueDate   DateTime
+  paidDate  DateTime?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  gym       Gym           @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  member    Member        @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([gymId])
+  @@index([memberId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("payments")
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  OVERDUE
+}
+
+model AttendanceRecord {
+  id        String            @id @default(uuid())
+  gymId     String
+  memberId  String
+  date      DateTime          @db.Date // Date only (no time)
+  status    AttendanceStatus  @default(PRESENT)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  gym       Gym               @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  member    Member            @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([gymId, memberId, date])
+  @@index([gymId])
+  @@index([memberId])
+  @@index([date])
+  @@map("attendance_records")
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+}
+
+model MemberTrainer {
+  memberId  String
+  trainerId String
+  createdAt DateTime @default(now())
+
+  member    Member  @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  trainer   Trainer @relation(fields: [trainerId], references: [id], onDelete: Cascade)
+
+  @@id([memberId, trainerId])
+  @@index([memberId])
+  @@index([trainerId])
+  @@map("member_trainers")
+}
+
