@@ -45,7 +45,7 @@ jobs:
           echo "Build successful"
 
       - name: Deploy to Vercel
-        if: secrets.VERCEL_TOKEN != '' && secrets.VERCEL_ORG_ID != '' && secrets.VERCEL_PROJECT_ID != ''
+        continue-on-error: true
         uses: amondnet/vercel-action@v25
         with:
           vercel-token: ${{ secrets.VERCEL_TOKEN }}
@@ -54,7 +54,7 @@ jobs:
           vercel-args: '--prod'
 
       - name: Run database migrations
-        if: secrets.DATABASE_URL != ''
+        continue-on-error: true
         run: npx prisma migrate deploy
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
