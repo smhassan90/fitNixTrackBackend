@@ -45,18 +45,18 @@ router.post(
         return;
       }
 
-      const token = jwt.sign(
-        {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-          gymId: user.gymId,
-          gymName: user.gym?.name,
-        },
-        jwtSecret,
-        { expiresIn: jwtExpiresIn }
-      );
+      const payload = {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        gymId: user.gymId,
+        gymName: user.gym?.name,
+      };
+
+      const token = jwt.sign(payload, jwtSecret, {
+        expiresIn: jwtExpiresIn,
+      } as jwt.SignOptions);
 
       // Return user data (without password) and token
       const { password: _, ...userWithoutPassword } = user;
@@ -92,7 +92,6 @@ router.get(
 
       const user = await prisma.user.findUnique({
         where: { id: req.user.id },
-        include: { gym: true },
         select: {
           id: true,
           name: true,
