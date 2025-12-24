@@ -12,7 +12,6 @@ import {
 } from '../validations/members';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError } from '../utils/errors';
-import { generateGymScopedId } from '../utils/idGenerator';
 import { parseDate } from '../utils/dateHelpers';
 import { generatePaymentsForMember } from '../services/paymentService';
 
@@ -39,11 +38,13 @@ router.get(
 
       // Search filter
       if (search) {
+        const searchNum = parseInt(search, 10);
         where.OR = [
           { name: { contains: search, mode: 'insensitive' } },
           { email: { contains: search, mode: 'insensitive' } },
           { phone: { contains: search, mode: 'insensitive' } },
-          { id: { contains: search, mode: 'insensitive' } },
+          // If search is a number, also search by ID
+          ...(isNaN(searchNum) ? [] : [{ id: searchNum }]),
         ];
       }
 
@@ -169,10 +170,9 @@ router.post(
       const dob = dateOfBirth ? parseDate(dateOfBirth) : null;
       const membershipStart = new Date();
 
-      // Create member
+      // Create member (ID will be auto-generated)
       const member = await prisma.member.create({
         data: {
-          id: generateGymScopedId('member', gymId),
           gymId,
           name,
           phone: phone || null,

@@ -22,6 +22,13 @@ export function sendSuccess<T>(
   message?: string,
   statusCode: number = 200
 ): Response {
+  // Prevent caching
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+    'Pragma': 'no-cache',
+    'Expires': '0',
+  });
+  
   const response: SuccessResponse<T> = {
     success: true,
     data,

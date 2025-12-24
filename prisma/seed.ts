@@ -139,10 +139,9 @@ async function main() {
 
   console.log('✅ Created trainers');
 
-  // Create members for gym1
+  // Create members for gym1 (IDs will be auto-generated)
   const member1 = await prisma.member.create({
     data: {
-      id: `member-${gym1.id}-${randomUUID()}`,
       gymId: gym1.id,
       name: 'Ahmed Ali',
       phone: '+92-300-1111111',
@@ -162,7 +161,6 @@ async function main() {
 
   const member2 = await prisma.member.create({
     data: {
-      id: `member-${gym1.id}-${randomUUID()}`,
       gymId: gym1.id,
       name: 'Fatima Khan',
       phone: '+92-300-2222222',
@@ -184,7 +182,6 @@ async function main() {
 
   const member3 = await prisma.member.create({
     data: {
-      id: `member-${gym1.id}-${randomUUID()}`,
       gymId: gym1.id,
       name: 'Hassan Raza',
       phone: '+92-300-3333333',

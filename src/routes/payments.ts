@@ -47,7 +47,13 @@ router.get(
 
       const where: any = { gymId };
 
-      if (memberId) where.memberId = memberId;
+      // memberId is already transformed to number by validation middleware
+      if (memberId) {
+        const memberIdNum = typeof memberId === 'number' ? memberId : parseInt(memberId as string, 10);
+        if (!isNaN(memberIdNum)) {
+          where.memberId = memberIdNum;
+        }
+      }
       if (status) where.status = status;
       if (month) where.month = month;
 

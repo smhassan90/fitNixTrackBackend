@@ -19,7 +19,7 @@ export const createMemberSchema = z.object({
 
 export const updateMemberSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Member ID must be a number').transform((val) => parseInt(val, 10)),
   }),
   body: z.object({
     name: z.string().min(1).max(255).optional(),
@@ -47,13 +47,13 @@ export const getMembersSchema = z.object({
 
 export const getMemberSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Member ID must be a number').transform((val) => parseInt(val, 10)),
   }),
 });
 
 export const deleteMemberSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Member ID must be a number').transform((val) => parseInt(val, 10)),
   }),
 });
 

@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const getAttendanceSchema = z.object({
   query: z.object({
-    memberId: z.string().uuid().optional(),
+    memberId: z.string().regex(/^\d+$/).optional().transform((val) => (val ? parseInt(val, 10) : undefined)),
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').optional(),
     endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').optional(),
     sortBy: z.string().optional(),

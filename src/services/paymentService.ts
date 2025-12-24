@@ -7,7 +7,7 @@ import { NotFoundError } from '../utils/errors';
  * Generate payments for a member based on their package
  */
 export async function generatePaymentsForMember(
-  memberId: string,
+  memberId: number,
   gymId: string,
   packageId: string | null,
   membershipStart: Date | null

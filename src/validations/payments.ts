@@ -4,7 +4,7 @@ const monthRegex = /^\d{4}-\d{2}$/; // YYYY-MM format
 
 export const createPaymentSchema = z.object({
   body: z.object({
-    memberId: z.string().uuid('Invalid member ID'),
+    memberId: z.number().int('Member ID must be an integer').positive('Member ID must be positive'),
     month: z.string().regex(monthRegex, 'Month must be in YYYY-MM format'),
     amount: z.number().min(0, 'Amount must be non-negative'),
     dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format'),
@@ -25,7 +25,7 @@ export const updatePaymentSchema = z.object({
 
 export const getPaymentsSchema = z.object({
   query: z.object({
-    memberId: z.string().uuid().optional(),
+    memberId: z.string().regex(/^\d+$/).optional().transform((val) => (val ? parseInt(val, 10) : undefined)),
     status: z.enum(['PENDING', 'PAID', 'OVERDUE']).optional(),
     month: z.string().regex(monthRegex).optional(),
     search: z.string().optional(),

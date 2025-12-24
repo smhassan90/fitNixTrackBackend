@@ -51,7 +51,7 @@ enum UserRole {
 }
 
 model Member {
-  id              String    @id @default(cuid())
+  id              Int       @id @default(autoincrement())
   gymId           String
   name            String
   phone           String?
@@ -118,7 +118,7 @@ model Package {
 model Payment {
   id        String        @id @default(cuid())
   gymId     String
-  memberId  String
+  memberId  Int
   month     String        @db.VarChar(7) // Format: 'YYYY-MM'
   amount    Float
   status    PaymentStatus @default(PENDING)
@@ -146,7 +146,7 @@ enum PaymentStatus {
 model AttendanceRecord {
   id        String            @id @default(cuid())
   gymId     String
-  memberId  String
+  memberId  Int
   date      DateTime          @db.Date // Date only (no time)
   status    AttendanceStatus  @default(PRESENT)
   createdAt DateTime          @default(now())
@@ -169,7 +169,7 @@ enum AttendanceStatus {
 }
 
 model MemberTrainer {
-  memberId  String
+  memberId  Int
   trainerId String
   createdAt DateTime @default(now())
 
