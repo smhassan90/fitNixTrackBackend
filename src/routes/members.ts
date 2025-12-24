@@ -96,9 +96,11 @@ router.get(
     try {
       const gymId = req.gymId!;
       const { id } = req.params;
+      // id is transformed to number by validation middleware
+      const memberId = typeof id === 'number' ? id : parseInt(id as string, 10);
 
       const member = await prisma.member.findFirst({
-        where: { id, gymId },
+        where: { id: memberId, gymId },
         include: {
           package: true,
           trainers: {
@@ -110,7 +112,7 @@ router.get(
       });
 
       if (!member) {
-        sendError(res, new NotFoundError('Member', id));
+        sendError(res, new NotFoundError('Member', String(memberId)));
         return;
       }
 
@@ -228,6 +230,8 @@ router.put(
     try {
       const gymId = req.gymId!;
       const { id } = req.params;
+      // id is transformed to number by validation middleware
+      const memberId = typeof id === 'number' ? id : parseInt(id as string, 10);
       const {
         name,
         phone,
@@ -243,11 +247,11 @@ router.put(
 
       // Check if member exists
       const existingMember = await prisma.member.findFirst({
-        where: { id, gymId },
+        where: { id: memberId, gymId },
       });
 
       if (!existingMember) {
-        sendError(res, new NotFoundError('Member', id));
+        sendError(res, new NotFoundError('Member', String(memberId)));
         return;
       }
 
@@ -345,19 +349,21 @@ router.delete(
     try {
       const gymId = req.gymId!;
       const { id } = req.params;
+      // id is transformed to number by validation middleware
+      const memberId = typeof id === 'number' ? id : parseInt(id as string, 10);
 
       const member = await prisma.member.findFirst({
-        where: { id, gymId },
+        where: { id: memberId, gymId },
       });
 
       if (!member) {
-        sendError(res, new NotFoundError('Member', id));
+        sendError(res, new NotFoundError('Member', String(memberId)));
         return;
       }
 
       // Delete member (cascades to payments and attendance records)
       await prisma.member.delete({
-        where: { id },
+        where: { id: memberId },
       });
 
       sendSuccess(res, { message: 'Member deleted successfully' });
