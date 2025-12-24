@@ -29,7 +29,11 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { search, sortBy = 'createdAt', sortOrder = 'desc', page = 1, limit = 50 } = req.query as any;
+      const { search, sortBy = 'createdAt', sortOrder = 'desc', page, limit } = req.query as any;
+
+      // Ensure page and limit are numbers (validation middleware should handle this, but add safeguard)
+      const pageNum = typeof page === 'number' ? page : parseInt(page as string, 10) || 1;
+      const limitNum = typeof limit === 'number' ? limit : parseInt(limit as string, 10) || 50;
 
       const where: any = { gymId };
 
@@ -58,8 +62,8 @@ router.get(
           },
         },
         orderBy: { [sortBy]: sortOrder },
-        skip: (page - 1) * limit,
-        take: limit,
+        skip: (pageNum - 1) * limitNum,
+        take: limitNum,
       });
 
       // Format response
@@ -71,10 +75,10 @@ router.get(
       sendSuccess(res, {
         members: formattedMembers,
         pagination: {
-          page,
-          limit,
+          page: pageNum,
+          limit: limitNum,
           total,
-          totalPages: Math.ceil(total / limit),
+          totalPages: Math.ceil(total / limitNum),
         },
       });
     } catch (error) {
