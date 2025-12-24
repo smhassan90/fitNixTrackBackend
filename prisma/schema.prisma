@@ -6,12 +6,12 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
 model Gym {
-  id        String   @id @default(uuid())
+  id        String   @id @default(cuid())
   name      String
   address   String?
   phone     String?
@@ -30,7 +30,7 @@ model Gym {
 }
 
 model User {
-  id        String   @id @default(uuid())
+  id        String   @id @default(cuid())
   name      String
   email     String   @unique
   password  String
@@ -51,7 +51,7 @@ enum UserRole {
 }
 
 model Member {
-  id              String    @id @default(uuid())
+  id              String    @id @default(cuid())
   gymId           String
   name            String
   phone           String?
@@ -79,7 +79,7 @@ model Member {
 }
 
 model Trainer {
-  id            String    @id @default(uuid())
+  id            String    @id @default(cuid())
   gymId         String
   name          String
   gender        String?
@@ -99,12 +99,12 @@ model Trainer {
 }
 
 model Package {
-  id        String    @id @default(uuid())
+  id        String    @id @default(cuid())
   gymId     String
   name      String
   price     Float
   duration  String    // '1 month', '3 months', '6 months', '12 months'
-  features  String[] // Array of feature strings
+  features  Json // Array of feature strings (stored as JSON in MySQL)
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
@@ -116,7 +116,7 @@ model Package {
 }
 
 model Payment {
-  id        String        @id @default(uuid())
+  id        String        @id @default(cuid())
   gymId     String
   memberId  String
   month     String        @db.VarChar(7) // Format: 'YYYY-MM'
@@ -144,7 +144,7 @@ enum PaymentStatus {
 }
 
 model AttendanceRecord {
-  id        String            @id @default(uuid())
+  id        String            @id @default(cuid())
   gymId     String
   memberId  String
   date      DateTime          @db.Date // Date only (no time)
