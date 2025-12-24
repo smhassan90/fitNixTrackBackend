@@ -54,12 +54,28 @@ app.get('/health', async (req, res) => {
       database: 'connected',
       timestamp: new Date().toISOString() 
     });
-  } catch (error) {
+  } catch (error: any) {
+    const errorMessage = error?.message || 'Database connection failed';
+    const errorCode = error?.code || 'UNKNOWN_ERROR';
+    
+    // Log full error for debugging (only in development)
+    if (process.env.NODE_ENV === 'development') {
+      console.error('Database connection error:', error);
+    }
+    
     res.status(503).json({ 
       status: 'error', 
       database: 'disconnected',
-      error: 'Database connection failed',
-      timestamp: new Date().toISOString() 
+      error: errorMessage,
+      code: errorCode,
+      timestamp: new Date().toISOString(),
+      // Only show details in development
+      ...(process.env.NODE_ENV === 'development' && {
+        details: {
+          hasDatabaseUrl: !!process.env.DATABASE_URL,
+          databaseUrlPrefix: process.env.DATABASE_URL?.substring(0, 10) || 'not set',
+        }
+      })
     });
   }
 });
