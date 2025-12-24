@@ -11,10 +11,14 @@ export const createMemberSchema = z.object({
     dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').optional().nullable(),
     cnic: z.string().regex(cnicRegex, 'CNIC must be exactly 13 digits').optional().nullable(),
     comments: z.string().max(1000).optional().nullable(),
-    packageId: z.preprocess(
-      (val) => (val === '' || val === null || val === undefined ? null : val),
-      z.string().uuid('Invalid package ID format').nullable()
-    ).optional(),
+    packageId: z
+      .union([
+        z.string().uuid('Invalid package ID format'),
+        z.literal(''),
+        z.null(),
+      ])
+      .optional()
+      .transform((val) => (val === '' ? null : val)),
     discount: z.number().min(0).max(100).optional().nullable(),
     trainerIds: z.array(z.string().uuid()).optional().default([]),
   }),
@@ -32,10 +36,14 @@ export const updateMemberSchema = z.object({
     dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
     cnic: z.string().regex(cnicRegex).optional().nullable(),
     comments: z.string().max(1000).optional().nullable(),
-    packageId: z.preprocess(
-      (val) => (val === '' || val === null || val === undefined ? null : val),
-      z.string().uuid('Invalid package ID format').nullable()
-    ).optional(),
+    packageId: z
+      .union([
+        z.string().uuid('Invalid package ID format'),
+        z.literal(''),
+        z.null(),
+      ])
+      .optional()
+      .transform((val) => (val === '' ? null : val)),
     discount: z.number().min(0).max(100).optional().nullable(),
     trainerIds: z.array(z.string().uuid()).optional(),
   }),
