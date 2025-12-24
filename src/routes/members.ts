@@ -300,7 +300,7 @@ router.put(
       }
 
       const member = await prisma.member.update({
-        where: { id },
+        where: { id: memberId },
         data: {
           ...updateData,
           ...(trainerIds !== undefined && {
