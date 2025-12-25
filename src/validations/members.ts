@@ -1,8 +1,6 @@
 import { z } from 'zod';
 
 const cnicRegex = /^\d{13}$/;
-// CUID format: starts with 'c' followed by 24 alphanumeric characters (lowercase), total 25 characters
-const cuidRegex = /^c[a-z0-9]{24}$/;
 
 export const createMemberSchema = z.object({
   body: z.object({
@@ -20,7 +18,7 @@ export const createMemberSchema = z.object({
           return val;
         },
         z.union([
-          z.string().regex(cuidRegex, 'Invalid package ID format'),
+          z.string().min(1, 'Package ID cannot be empty'),
           z.null(),
         ])
       )
@@ -33,7 +31,7 @@ export const createMemberSchema = z.object({
           // Filter out empty strings, null, and undefined
           return val.filter((id) => id && id !== '' && id !== null);
         },
-        z.array(z.string().regex(cuidRegex, 'Invalid trainer ID format'))
+        z.array(z.string().min(1, 'Trainer ID cannot be empty'))
       )
       .optional()
       .default([]),
@@ -59,7 +57,7 @@ export const updateMemberSchema = z.object({
           return val;
         },
         z.union([
-          z.string().regex(cuidRegex, 'Invalid package ID format'),
+          z.string().min(1, 'Package ID cannot be empty'),
           z.null(),
         ])
       )
@@ -72,7 +70,7 @@ export const updateMemberSchema = z.object({
           // Filter out empty strings, null, and undefined
           return val.filter((id) => id && id !== '' && id !== null);
         },
-        z.array(z.string().regex(cuidRegex, 'Invalid trainer ID format'))
+        z.array(z.string().min(1, 'Trainer ID cannot be empty'))
       )
       .optional(),
   }),
