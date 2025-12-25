@@ -75,6 +75,11 @@ model Member {
 
   @@index([gymId])
   @@index([packageId])
+  @@index([name])
+  @@index([email])
+  @@index([phone])
+  @@index([cnic])
+  @@index([gymId, createdAt])
   @@map("members")
 }
 

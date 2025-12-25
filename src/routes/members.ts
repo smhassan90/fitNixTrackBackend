@@ -49,24 +49,44 @@ router.get(
         ];
       }
 
-      // Get total count
-      const total = await prisma.member.count({ where });
+      // Validate sortBy to prevent SQL injection and ensure it uses indexed fields
+      const validSortFields = ['id', 'name', 'createdAt', 'updatedAt', 'membershipStart'];
+      const sortField = validSortFields.includes(sortBy) ? sortBy : 'createdAt';
 
-      // Get members
-      const members = await prisma.member.findMany({
-        where,
-        include: {
-          package: true,
-          trainers: {
-            include: {
-              trainer: true,
+      // Get total count and members in parallel for better performance
+      const [total, members] = await Promise.all([
+        prisma.member.count({ where }),
+        prisma.member.findMany({
+          where,
+          include: {
+            package: {
+              select: {
+                id: true,
+                name: true,
+                price: true,
+                duration: true,
+                features: true,
+              },
+            },
+            trainers: {
+              include: {
+                trainer: {
+                  select: {
+                    id: true,
+                    name: true,
+                    gender: true,
+                    specialization: true,
+                    charges: true,
+                  },
+                },
+              },
             },
           },
-        },
-        orderBy: { [sortBy]: sortOrder },
-        skip: (pageNum - 1) * limitNum,
-        take: limitNum,
-      });
+          orderBy: { [sortField]: sortOrder },
+          skip: (pageNum - 1) * limitNum,
+          take: limitNum,
+        }),
+      ]);
 
       // Format response
       const formattedMembers = members.map((member) => ({
