@@ -43,6 +43,7 @@ router.get(
           { name: { contains: search } },
           { email: { contains: search } },
           { phone: { contains: search } },
+          { cnic: { contains: search } },
           // If search is a number, also search by ID
           ...(isNaN(searchNum) ? [] : [{ id: searchNum }]),
         ];
