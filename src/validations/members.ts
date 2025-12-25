@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 const cnicRegex = /^\d{13}$/;
+// CUID format: starts with 'c' followed by 24 alphanumeric characters (lowercase), total 25 characters
+const cuidRegex = /^c[a-z0-9]{24}$/;
 
 export const createMemberSchema = z.object({
   body: z.object({
@@ -12,15 +14,29 @@ export const createMemberSchema = z.object({
     cnic: z.string().regex(cnicRegex, 'CNIC must be exactly 13 digits').optional().nullable(),
     comments: z.string().max(1000).optional().nullable(),
     packageId: z
-      .union([
-        z.string().uuid('Invalid package ID format'),
-        z.literal(''),
-        z.null(),
-      ])
-      .optional()
-      .transform((val) => (val === '' ? null : val)),
+      .preprocess(
+        (val) => {
+          if (val === '' || val === null || val === undefined) return null;
+          return val;
+        },
+        z.union([
+          z.string().regex(cuidRegex, 'Invalid package ID format'),
+          z.null(),
+        ])
+      )
+      .optional(),
     discount: z.number().min(0).max(100).optional().nullable(),
-    trainerIds: z.array(z.string().uuid()).optional().default([]),
+    trainerIds: z
+      .preprocess(
+        (val) => {
+          if (!val || !Array.isArray(val)) return [];
+          // Filter out empty strings, null, and undefined
+          return val.filter((id) => id && id !== '' && id !== null);
+        },
+        z.array(z.string().regex(cuidRegex, 'Invalid trainer ID format'))
+      )
+      .optional()
+      .default([]),
   }),
 });
 
@@ -37,15 +53,28 @@ export const updateMemberSchema = z.object({
     cnic: z.string().regex(cnicRegex).optional().nullable(),
     comments: z.string().max(1000).optional().nullable(),
     packageId: z
-      .union([
-        z.string().uuid('Invalid package ID format'),
-        z.literal(''),
-        z.null(),
-      ])
-      .optional()
-      .transform((val) => (val === '' ? null : val)),
+      .preprocess(
+        (val) => {
+          if (val === '' || val === null || val === undefined) return null;
+          return val;
+        },
+        z.union([
+          z.string().regex(cuidRegex, 'Invalid package ID format'),
+          z.null(),
+        ])
+      )
+      .optional(),
     discount: z.number().min(0).max(100).optional().nullable(),
-    trainerIds: z.array(z.string().uuid()).optional(),
+    trainerIds: z
+      .preprocess(
+        (val) => {
+          if (!val || !Array.isArray(val)) return [];
+          // Filter out empty strings, null, and undefined
+          return val.filter((id) => id && id !== '' && id !== null);
+        },
+        z.array(z.string().regex(cuidRegex, 'Invalid trainer ID format'))
+      )
+      .optional(),
   }),
 });
 

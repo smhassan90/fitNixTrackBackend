@@ -293,10 +293,12 @@ router.put(
       if (discount !== undefined) updateData.discount = discount;
 
       // Handle package change
-      const packageChanged = packageId !== undefined && packageId !== existingMember.packageId;
-      if (packageChanged) {
+      if (packageId !== undefined) {
         updateData.packageId = packageId;
-        updateData.membershipStart = membershipStart;
+        const packageChanged = packageId !== existingMember.packageId;
+        if (packageChanged && packageId) {
+          updateData.membershipStart = membershipStart;
+        }
       }
 
       const member = await prisma.member.update({
@@ -322,8 +324,8 @@ router.put(
         },
       });
 
-      // Regenerate payments if package changed
-      if (packageChanged && packageId) {
+      // Regenerate payments if package changed and new package is assigned
+      if (packageId !== undefined && packageId !== existingMember.packageId && packageId) {
         await generatePaymentsForMember(member.id, gymId, packageId, membershipStart);
       }
 
