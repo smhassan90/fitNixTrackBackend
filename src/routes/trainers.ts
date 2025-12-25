@@ -39,9 +39,9 @@ router.get(
       // Search filter
       if (search) {
         where.OR = [
-          { name: { contains: search, mode: 'insensitive' } },
-          { specialization: { contains: search, mode: 'insensitive' } },
-          { id: { contains: search, mode: 'insensitive' } },
+          { name: { contains: search } },
+          { specialization: { contains: search } },
+          { id: { contains: search } },
         ];
       }
 

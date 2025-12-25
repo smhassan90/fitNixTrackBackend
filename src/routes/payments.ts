@@ -60,9 +60,9 @@ router.get(
       // Search filter
       if (search) {
         where.OR = [
-          { month: { contains: search, mode: 'insensitive' } },
-          { member: { name: { contains: search, mode: 'insensitive' } } },
-          { member: { email: { contains: search, mode: 'insensitive' } } },
+          { month: { contains: search } },
+          { member: { name: { contains: search } } },
+          { member: { email: { contains: search } } },
         ];
       }
 

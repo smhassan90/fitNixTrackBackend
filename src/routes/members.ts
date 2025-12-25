@@ -40,9 +40,9 @@ router.get(
       if (search) {
         const searchNum = parseInt(search, 10);
         where.OR = [
-          { name: { contains: search, mode: 'insensitive' } },
-          { email: { contains: search, mode: 'insensitive' } },
-          { phone: { contains: search, mode: 'insensitive' } },
+          { name: { contains: search } },
+          { email: { contains: search } },
+          { phone: { contains: search } },
           // If search is a number, also search by ID
           ...(isNaN(searchNum) ? [] : [{ id: searchNum }]),
         ];
