@@ -18,7 +18,12 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "prisma:migrate:deploy": "prisma migrate deploy"
   },
-  "keywords": ["gym", "management", "api", "multi-tenant"],
+  "keywords": [
+    "gym",
+    "management",
+    "api",
+    "multi-tenant"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
@@ -29,6 +34,7 @@
     "express": "^4.18.2",
     "express-rate-limit": "^7.1.5",
     "jsonwebtoken": "^9.0.2",
+    "node-zklib": "^1.3.0",
     "zod": "^3.22.4"
   },
   "devDependencies": {
@@ -48,4 +54,3 @@
     "seed": "tsx prisma/seed.ts"
   }
 }
-

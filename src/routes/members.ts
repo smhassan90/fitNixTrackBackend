@@ -129,6 +129,18 @@ router.get(
               trainer: true,
             },
           },
+          deviceUserMappings: {
+            where: { isActive: true },
+            include: {
+              deviceConfig: {
+                select: {
+                  id: true,
+                  name: true,
+                  ipAddress: true,
+                },
+              },
+            },
+          },
         },
       });
 
@@ -140,6 +152,12 @@ router.get(
       sendSuccess(res, {
         ...member,
         trainers: member.trainers.map((mt) => mt.trainer),
+        deviceMappings: member.deviceUserMappings.map((mapping) => ({
+          id: mapping.id,
+          deviceUserId: mapping.deviceUserId,
+          deviceUserName: mapping.deviceUserName,
+          deviceConfig: mapping.deviceConfig,
+        })),
       });
     } catch (error) {
       sendError(res, error as Error);

@@ -19,12 +19,13 @@ model Gym {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users     User[]
-  members   Member[]
-  trainers  Trainer[]
-  packages  Package[]
-  payments  Payment[]
+  users             User[]
+  members           Member[]
+  trainers          Trainer[]
+  packages          Package[]
+  payments          Payment[]
   attendanceRecords AttendanceRecord[]
+  deviceConfigs     DeviceConfig[]
 
   @@map("gyms")
 }
@@ -40,7 +41,7 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  gym       Gym      @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  gym Gym @relation(fields: [gymId], references: [id], onDelete: Cascade)
 
   @@map("users")
 }
@@ -67,11 +68,12 @@ model Member {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  gym             Gym       @relation(fields: [gymId], references: [id], onDelete: Cascade)
-  package         Package?  @relation(fields: [packageId], references: [id], onDelete: SetNull)
-  trainers        MemberTrainer[]
-  payments        Payment[]
-  attendanceRecords AttendanceRecord[]
+  gym                Gym                 @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  package            Package?            @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  trainers           MemberTrainer[]
+  payments           Payment[]
+  attendanceRecords  AttendanceRecord[]
+  deviceUserMappings DeviceUserMapping[]
 
   @@index([gymId])
   @@index([packageId])
@@ -84,37 +86,37 @@ model Member {
 }
 
 model Trainer {
-  id            String    @id @default(cuid())
-  gymId         String
-  name          String
-  gender        String?
-  dateOfBirth   DateTime?
-  specialization String? @db.Text
-  charges       Float?
-  startTime     String?   @db.VarChar(5) // HH:mm format
-  endTime       String?   @db.VarChar(5) // HH:mm format
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id             String    @id @default(cuid())
+  gymId          String
+  name           String
+  gender         String?
+  dateOfBirth    DateTime?
+  specialization String?   @db.Text
+  charges        Float?
+  startTime      String?   @db.VarChar(5) // HH:mm format
+  endTime        String?   @db.VarChar(5) // HH:mm format
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  gym           Gym       @relation(fields: [gymId], references: [id], onDelete: Cascade)
-  members       MemberTrainer[]
+  gym     Gym             @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  members MemberTrainer[]
 
   @@index([gymId])
   @@map("trainers")
 }
 
 model Package {
-  id        String    @id @default(cuid())
+  id        String   @id @default(cuid())
   gymId     String
   name      String
   price     Float
-  duration  String    // '1 month', '3 months', '6 months', '12 months'
+  duration  String // '1 month', '3 months', '6 months', '12 months'
   features  Json // Array of feature strings (stored as JSON in MySQL)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  gym       Gym       @relation(fields: [gymId], references: [id], onDelete: Cascade)
-  members   Member[]
+  gym     Gym      @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  members Member[]
 
   @@index([gymId])
   @@map("packages")
@@ -132,8 +134,8 @@ model Payment {
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
 
-  gym       Gym           @relation(fields: [gymId], references: [id], onDelete: Cascade)
-  member    Member        @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  gym    Gym    @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
 
   @@index([gymId])
   @@index([memberId])
@@ -149,21 +151,27 @@ enum PaymentStatus {
 }
 
 model AttendanceRecord {
-  id        String            @id @default(cuid())
-  gymId     String
-  memberId  Int
-  date      DateTime          @db.Date // Date only (no time)
-  status    AttendanceStatus  @default(PRESENT)
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
+  id                 String           @id @default(cuid())
+  gymId              String
+  memberId           Int
+  date               DateTime         @db.Date // Date only (no time)
+  status             AttendanceStatus @default(PRESENT)
+  checkInTime        DateTime? // Check-in timestamp from device
+  checkOutTime       DateTime? // Check-out timestamp from device
+  deviceUserId       String? // User ID from ZKTeco device
+  deviceSerialNumber String? // Device serial number
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
 
-  gym       Gym               @relation(fields: [gymId], references: [id], onDelete: Cascade)
-  member    Member            @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  gym    Gym    @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
 
   @@unique([gymId, memberId, date])
   @@index([gymId])
   @@index([memberId])
   @@index([date])
+  @@index([deviceUserId])
+  @@index([checkInTime])
   @@map("attendance_records")
 }
 
@@ -178,8 +186,8 @@ model MemberTrainer {
   trainerId String
   createdAt DateTime @default(now())
 
-  member    Member  @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  trainer   Trainer @relation(fields: [trainerId], references: [id], onDelete: Cascade)
+  member  Member  @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  trainer Trainer @relation(fields: [trainerId], references: [id], onDelete: Cascade)
 
   @@id([memberId, trainerId])
   @@index([memberId])
@@ -187,3 +195,47 @@ model MemberTrainer {
   @@map("member_trainers")
 }
 
+model DeviceConfig {
+  id             String    @id @default(cuid())
+  gymId          String
+  name           String // Device name/identifier
+  ipAddress      String // Device IP address
+  port           Int       @default(4370) // Default ZKTeco port
+  serialNumber   String? // Device serial number
+  isActive       Boolean   @default(true)
+  lastSyncAt     DateTime? // Last successful sync timestamp
+  syncInterval   Int       @default(300) // Sync interval in seconds (5 minutes default)
+  deviceUserId   String? // Admin user ID on device (optional)
+  devicePassword String? // Admin password on device (optional)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  gym          Gym                 @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  userMappings DeviceUserMapping[]
+
+  @@unique([gymId, ipAddress, port])
+  @@index([gymId])
+  @@index([isActive])
+  @@map("device_configs")
+}
+
+model DeviceUserMapping {
+  id             String   @id @default(cuid())
+  deviceConfigId String
+  memberId       Int
+  deviceUserId   String // User ID on the ZKTeco device
+  deviceUserName String? // Name on the device
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  deviceConfig DeviceConfig @relation(fields: [deviceConfigId], references: [id], onDelete: Cascade)
+  member       Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceConfigId, deviceUserId])
+  @@unique([deviceConfigId, memberId])
+  @@index([deviceConfigId])
+  @@index([memberId])
+  @@index([deviceUserId])
+  @@map("device_user_mappings")
+}
