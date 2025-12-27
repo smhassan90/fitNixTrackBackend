@@ -95,118 +95,8 @@ router.post(
   }
 );
 
-// GET /api/device/:id - Get device configuration by ID
-router.get(
-  '/:id',
-  validate(getDeviceConfigSchema),
-  async (req: AuthRequest, res: Response) => {
-    try {
-      const gymId = req.gymId!;
-      const { id } = req.params;
-
-      const device = await prisma.deviceConfig.findFirst({
-        where: { id, gymId },
-        include: {
-          _count: {
-            select: { userMappings: true },
-          },
-        },
-      });
-
-      if (!device) {
-        sendError(res, new NotFoundError('Device configuration', id));
-        return;
-      }
-
-      sendSuccess(res, device);
-    } catch (error) {
-      sendError(res, error as Error);
-    }
-  }
-);
-
-// PUT /api/device/:id - Update device configuration
-router.put(
-  '/:id',
-  validate(updateDeviceConfigSchema),
-  async (req: AuthRequest, res: Response) => {
-    try {
-      const gymId = req.gymId!;
-      const { id } = req.params;
-      const updateData = req.body;
-
-      const device = await prisma.deviceConfig.findFirst({
-        where: { id, gymId },
-      });
-
-      if (!device) {
-        sendError(res, new NotFoundError('Device configuration', id));
-        return;
-      }
-
-      // If IP or port is being updated, check for duplicates
-      if (updateData.ipAddress || updateData.port) {
-        const newIp = updateData.ipAddress || device.ipAddress;
-        const newPort = updateData.port || device.port;
-
-        const existing = await prisma.deviceConfig.findUnique({
-          where: {
-            gymId_ipAddress_port: {
-              gymId,
-              ipAddress: newIp,
-              port: newPort,
-            },
-          },
-        });
-
-        if (existing && existing.id !== id) {
-          sendError(res, new BadRequestError('Device with this IP and port already exists'));
-          return;
-        }
-      }
-
-      const updated = await prisma.deviceConfig.update({
-        where: { id },
-        data: updateData,
-      });
-
-      sendSuccess(res, updated);
-    } catch (error) {
-      sendError(res, error as Error);
-    }
-  }
-);
-
-// DELETE /api/device/:id - Delete device configuration
-router.delete(
-  '/:id',
-  validate(deleteDeviceConfigSchema),
-  async (req: AuthRequest, res: Response) => {
-    try {
-      const gymId = req.gymId!;
-      const { id } = req.params;
-
-      const device = await prisma.deviceConfig.findFirst({
-        where: { id, gymId },
-      });
-
-      if (!device) {
-        sendError(res, new NotFoundError('Device configuration', id));
-        return;
-      }
-
-      await prisma.deviceConfig.delete({
-        where: { id },
-      });
-
-      sendSuccess(res, { message: 'Device configuration deleted successfully' });
-    } catch (error) {
-      sendError(res, error as Error);
-    }
-  }
-);
-
 // POST /api/device/:id/test - Test device connection
+// NOTE: More specific routes must come before /:id route
 router.post(
   '/:id/test',
   validate(testDeviceConnectionSchema),
@@ -323,6 +213,117 @@ router.post(
         unmappedCount: unmappedDeviceUsers.length,
         message: `Found ${result.users.length} users on device. Mapped ${result.mapped} users to members. ${unmappedDeviceUsers.length} users remain unmapped.`,
       });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// GET /api/device/:id - Get device configuration by ID
+router.get(
+  '/:id',
+  validate(getDeviceConfigSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { id } = req.params;
+
+      const device = await prisma.deviceConfig.findFirst({
+        where: { id, gymId },
+        include: {
+          _count: {
+            select: { userMappings: true },
+          },
+        },
+      });
+
+      if (!device) {
+        sendError(res, new NotFoundError('Device configuration', id));
+        return;
+      }
+
+      sendSuccess(res, device);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// PUT /api/device/:id - Update device configuration
+router.put(
+  '/:id',
+  validate(updateDeviceConfigSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { id } = req.params;
+      const updateData = req.body;
+
+      const device = await prisma.deviceConfig.findFirst({
+        where: { id, gymId },
+      });
+
+      if (!device) {
+        sendError(res, new NotFoundError('Device configuration', id));
+        return;
+      }
+
+      // If IP or port is being updated, check for duplicates
+      if (updateData.ipAddress || updateData.port) {
+        const newIp = updateData.ipAddress || device.ipAddress;
+        const newPort = updateData.port || device.port;
+
+        const existing = await prisma.deviceConfig.findUnique({
+          where: {
+            gymId_ipAddress_port: {
+              gymId,
+              ipAddress: newIp,
+              port: newPort,
+            },
+          },
+        });
+
+        if (existing && existing.id !== id) {
+          sendError(res, new BadRequestError('Device with this IP and port already exists'));
+          return;
+        }
+      }
+
+      const updated = await prisma.deviceConfig.update({
+        where: { id },
+        data: updateData,
+      });
+
+      sendSuccess(res, updated);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// DELETE /api/device/:id - Delete device configuration
+router.delete(
+  '/:id',
+  validate(deleteDeviceConfigSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { id } = req.params;
+
+      const device = await prisma.deviceConfig.findFirst({
+        where: { id, gymId },
+      });
+
+      if (!device) {
+        sendError(res, new NotFoundError('Device configuration', id));
+        return;
+      }
+
+      await prisma.deviceConfig.delete({
+        where: { id },
+      });
+
+      sendSuccess(res, { message: 'Device configuration deleted successfully' });
     } catch (error) {
       sendError(res, error as Error);
     }
