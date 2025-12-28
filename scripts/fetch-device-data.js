@@ -218,7 +218,7 @@ async function main() {
     // Step 5: Summary
     console.log('✨ Data fetch completed successfully!');
     console.log(`\n📋 View attendance data: GET ${options.apiUrl}/api/attendance`);
-    console.log(`   (Use same token and gym-id headers)\n`);
+    console.log(`   (Use same token - gymId is automatically extracted from token)\n`);
 
   } catch (error) {
     console.error(`\n❌ Error: ${error.message}`);

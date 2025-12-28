@@ -101,3 +101,13 @@ export const getUserMappingsSchema = z.object({
   }),
 });
 
+export const getDeviceAttendanceLogsSchema = z.object({
+  params: z.object({
+    id: z.string().min(1),
+  }),
+  query: z.object({
+    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').optional(),
+    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').optional(),
+  }),
+});
+

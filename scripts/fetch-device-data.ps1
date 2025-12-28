@@ -182,7 +182,7 @@ try {
     Write-Host "✨ Data fetch completed successfully!" -ForegroundColor Green
     Write-Host ""
     Write-Host "📋 View attendance data: GET $ApiUrl/api/attendance" -ForegroundColor Cyan
-    Write-Host "   (Use same token and gym-id headers)" -ForegroundColor Cyan
+    Write-Host "   (Use same token - gymId is automatically extracted from token)" -ForegroundColor Cyan
     Write-Host ""
 }
 catch {

@@ -15,10 +15,11 @@ import {
   updateUserMappingSchema,
   deleteUserMappingSchema,
   getUserMappingsSchema,
+  getDeviceAttendanceLogsSchema,
 } from '../validations/device';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, BadRequestError } from '../utils/errors';
-import { ZKTService, syncAttendanceFromDevice, syncUsersFromDevice } from '../services/zktService';
+import { ZKTService, syncAttendanceFromDevice, syncUsersFromDevice, autoCheckoutIncompleteRecords } from '../services/zktService';
 import { parseDate } from '../utils/dateHelpers';
 
 const router = Router();
@@ -127,6 +128,267 @@ router.post(
           ? 'Device connection successful'
           : 'Failed to connect to device. Please check IP address, port, and network connectivity.',
       });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// GET /api/device/:id/attendance-logs - Fetch attendance logs from device and save to database (incremental sync)
+router.get(
+  '/:id/attendance-logs',
+  validate(getDeviceAttendanceLogsSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { id } = req.params;
+      const { startDate, endDate } = req.query as any;
+
+      const device = await prisma.deviceConfig.findFirst({
+        where: { id, gymId },
+        include: {
+          userMappings: {
+            where: { isActive: true },
+            include: {
+              member: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                  phone: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!device) {
+        sendError(res, new NotFoundError('Device configuration', id));
+        return;
+      }
+
+      // Create ZKTService instance with device config
+      const zktService = new ZKTService({
+        ip: device.ipAddress,
+        port: device.port,
+      });
+
+      // Connect to device
+      const connected = await zktService.connect();
+      if (!connected) {
+        sendError(res, new Error('Failed to connect to device'));
+        return;
+      }
+
+      try {
+        // Get attendance logs from device
+        const logs = await zktService.getAttendanceLogs();
+
+        // Create a map of device user ID to member ID
+        const deviceUserToMemberMap = new Map<string, number>();
+        const deviceUserToMemberInfoMap = new Map<string, any>();
+        device.userMappings.forEach((mapping) => {
+          deviceUserToMemberMap.set(mapping.deviceUserId, mapping.member.id);
+          deviceUserToMemberInfoMap.set(mapping.deviceUserId, {
+            memberId: mapping.member.id,
+            memberName: mapping.member.name,
+            memberEmail: mapping.member.email,
+            memberPhone: mapping.member.phone,
+          });
+        });
+
+        // Determine the start time for incremental sync
+        // If lastSyncAt exists, only fetch logs after that time
+        // Otherwise, use provided startDate or fetch all
+        let syncStartTime: Date | undefined;
+        if (device.lastSyncAt) {
+          syncStartTime = device.lastSyncAt;
+          console.log(`Incremental sync: fetching logs after ${syncStartTime.toISOString()}`);
+        } else if (startDate) {
+          syncStartTime = parseDate(startDate);
+        }
+
+        // Parse end date if provided
+        const syncEndTime = endDate ? parseDate(endDate) : undefined;
+
+        // Filter logs: only process new logs since last sync
+        let newLogs = logs.filter((log) => {
+          const logDate = new Date(log.timestamp * 1000);
+          
+          // If we have a sync start time, only include logs after it
+          if (syncStartTime && logDate <= syncStartTime) {
+            return false;
+          }
+          
+          // Filter by date range if provided
+          if (syncEndTime && logDate > syncEndTime) {
+            return false;
+          }
+          
+          return true;
+        });
+
+        console.log(`Found ${logs.length} total logs, ${newLogs.length} new logs since last sync`);
+
+        let synced = 0;
+        let errors = 0;
+        const formattedLogs: any[] = [];
+
+        // Process each new log entry and save to database
+        for (const log of newLogs) {
+          try {
+            const deviceUserId = log.id.toString();
+            const memberId = deviceUserToMemberMap.get(deviceUserId);
+            const memberInfo = deviceUserToMemberInfoMap.get(deviceUserId);
+
+            if (!memberId) {
+              console.warn(`No member mapping found for device user ID: ${deviceUserId}`);
+              errors++;
+              continue;
+            }
+
+            const logDate = new Date(log.timestamp * 1000);
+            const dateOnly = new Date(logDate.getFullYear(), logDate.getMonth(), logDate.getDate());
+
+            // Determine if this is check-in or check-out
+            const isCheckIn = log.type === 0 || (log.type === undefined && log.state === 0);
+            const eventType = isCheckIn ? 'CHECK_IN' : 'CHECK_OUT';
+
+            // Find or create attendance record for this date
+            const existingRecord = await prisma.attendanceRecord.findUnique({
+              where: {
+                gymId_memberId_date: {
+                  gymId,
+                  memberId,
+                  date: dateOnly,
+                },
+              },
+            });
+
+            let wasUpdated = false;
+
+            if (existingRecord) {
+              // Update existing record
+              let updateData: any = {
+                deviceUserId,
+                deviceSerialNumber: device.serialNumber || undefined,
+                status: 'PRESENT',
+              };
+
+              if (isCheckIn) {
+                // This is a check-in - update if we don't have one or this is earlier
+                if (!existingRecord.checkInTime || logDate < existingRecord.checkInTime) {
+                  updateData.checkInTime = logDate;
+                  wasUpdated = true;
+                }
+              } else {
+                // This is a check-out - update if we don't have one or this is later
+                if (!existingRecord.checkOutTime || logDate > existingRecord.checkOutTime) {
+                  updateData.checkOutTime = logDate;
+                  wasUpdated = true;
+                }
+              }
+
+              // If we can't determine from type/state, use timing logic
+              if (log.type === undefined && log.state === undefined) {
+                if (!existingRecord.checkInTime) {
+                  updateData.checkInTime = logDate;
+                  wasUpdated = true;
+                } else if (!existingRecord.checkOutTime && logDate > existingRecord.checkInTime) {
+                  updateData.checkOutTime = logDate;
+                  wasUpdated = true;
+                } else if (logDate < existingRecord.checkInTime) {
+                  updateData.checkInTime = logDate;
+                  wasUpdated = true;
+                }
+              }
+
+              // Only update if we have changes
+              if (wasUpdated) {
+                await prisma.attendanceRecord.update({
+                  where: { id: existingRecord.id },
+                  data: updateData,
+                });
+                synced++;
+              }
+            } else {
+              // Create new record
+              await prisma.attendanceRecord.create({
+                data: {
+                  gymId,
+                  memberId,
+                  date: dateOnly,
+                  status: 'PRESENT',
+                  checkInTime: isCheckIn ? logDate : undefined,
+                  checkOutTime: !isCheckIn ? logDate : undefined,
+                  deviceUserId,
+                  deviceSerialNumber: device.serialNumber || undefined,
+                },
+              });
+              synced++;
+              wasUpdated = true;
+            }
+
+            // Add to formatted logs for response
+            if (wasUpdated || !existingRecord) {
+              formattedLogs.push({
+                uid: log.uid,
+                deviceUserId: deviceUserId,
+                eventType: eventType,
+                timestamp: log.timestamp,
+                dateTime: logDate.toISOString(),
+                date: logDate.toISOString().split('T')[0],
+                time: logDate.toTimeString().split(' ')[0],
+                type: log.type,
+                state: log.state,
+                member: memberInfo || null,
+              });
+            }
+          } catch (error) {
+            console.error(`Error processing log entry:`, error);
+            errors++;
+          }
+        }
+
+        // Update last sync time to current time
+        const newLastSyncAt = new Date();
+        await prisma.deviceConfig.update({
+          where: { id },
+          data: { lastSyncAt: newLastSyncAt },
+        });
+
+        // Auto-checkout members who checked in on previous dates but didn't check out
+        await autoCheckoutIncompleteRecords(gymId);
+
+        // Separate check-ins and check-outs
+        const checkIns = formattedLogs.filter((log) => log.eventType === 'CHECK_IN');
+        const checkOuts = formattedLogs.filter((log) => log.eventType === 'CHECK_OUT');
+
+        sendSuccess(res, {
+          total: formattedLogs.length,
+          checkIns: checkIns.length,
+          checkOuts: checkOuts.length,
+          synced,
+          errors,
+          logs: formattedLogs.sort((a, b) => b.timestamp - a.timestamp),
+          summary: {
+            totalRecords: formattedLogs.length,
+            checkInsCount: checkIns.length,
+            checkOutsCount: checkOuts.length,
+            syncedCount: synced,
+            errorCount: errors,
+            lastSyncAt: newLastSyncAt.toISOString(),
+            previousSyncAt: device.lastSyncAt ? device.lastSyncAt.toISOString() : null,
+            dateRange: {
+              start: syncStartTime ? syncStartTime.toISOString().split('T')[0] : null,
+              end: syncEndTime ? syncEndTime.toISOString().split('T')[0] : null,
+            },
+          },
+        });
+      } finally {
+        await zktService.disconnect();
+      }
     } catch (error) {
       sendError(res, error as Error);
     }
