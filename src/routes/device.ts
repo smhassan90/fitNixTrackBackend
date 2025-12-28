@@ -142,7 +142,7 @@ router.get(
     try {
       const gymId = req.gymId!;
       const { id } = req.params;
-      const { startDate, endDate } = req.query as any;
+      const { startDate, endDate, fullSync } = req.query as any;
 
       const device = await prisma.deviceConfig.findFirst({
         where: { id, gymId },
@@ -199,10 +199,20 @@ router.get(
         });
 
         // Determine the start time for incremental sync
-        // If lastSyncAt exists, only fetch logs after that time
+        // If fullSync=true, ignore lastSyncAt and fetch all records
+        // If lastSyncAt exists and fullSync is not true, only fetch logs after that time
         // Otherwise, use provided startDate or fetch all
         let syncStartTime: Date | undefined;
-        if (device.lastSyncAt) {
+        if (fullSync === true) {
+          // Force full sync - ignore lastSyncAt
+          console.log(`Full sync requested: fetching all logs from device`);
+          if (startDate) {
+            syncStartTime = parseDate(startDate);
+            console.log(`Using provided startDate: ${syncStartTime.toISOString()}`);
+          } else {
+            syncStartTime = undefined; // Fetch all
+          }
+        } else if (device.lastSyncAt) {
           syncStartTime = device.lastSyncAt;
           console.log(`Incremental sync: fetching logs after ${syncStartTime.toISOString()}`);
         } else if (startDate) {
@@ -214,7 +224,20 @@ router.get(
 
         // Filter logs: only process new logs since last sync
         let newLogs = logs.filter((log) => {
-          const logDate = new Date(log.timestamp * 1000);
+          // Handle both timestamp formats
+          let logDate: Date;
+          if (log.recordTime) {
+            logDate = new Date(log.recordTime);
+          } else if (log.timestamp) {
+            logDate = new Date(log.timestamp * 1000);
+          } else {
+            return false; // Skip logs without timestamp
+          }
+          
+          // Validate date
+          if (isNaN(logDate.getTime())) {
+            return false;
+          }
           
           // If we have a sync start time, only include logs after it
           if (syncStartTime && logDate <= syncStartTime) {
@@ -238,15 +261,22 @@ router.get(
         // Process each new log entry and save to database
         for (const log of newLogs) {
           try {
-            // Get device user ID - use id if available, otherwise fallback to uid
-            const deviceUserId = (log.id !== undefined && log.id !== null) 
-              ? log.id.toString() 
-              : (log.uid !== undefined && log.uid !== null)
-                ? log.uid.toString()
-                : null;
+            // Get device user ID - handle different log formats
+            // New format: deviceUserId field directly
+            // Old format: id or uid field
+            let deviceUserId: string | null = null;
+            
+            if (log.deviceUserId !== undefined && log.deviceUserId !== null) {
+              // New format: deviceUserId is already a string
+              deviceUserId = log.deviceUserId.toString();
+            } else if (log.id !== undefined && log.id !== null) {
+              deviceUserId = log.id.toString();
+            } else if (log.uid !== undefined && log.uid !== null) {
+              deviceUserId = log.uid.toString();
+            }
 
             if (!deviceUserId) {
-              console.warn(`Log entry missing both id and uid fields:`, JSON.stringify(log));
+              console.warn(`Log entry missing device user ID:`, JSON.stringify(log));
               errors++;
               continue;
             }
@@ -260,19 +290,30 @@ router.get(
               continue;
             }
 
-            // Validate timestamp exists
-            if (!log.timestamp) {
-              console.warn(`Log entry missing timestamp:`, JSON.stringify(log));
+            // Handle timestamp - support both formats
+            // New format: recordTime as ISO string
+            // Old format: timestamp as number (Unix timestamp in seconds)
+            let logDate: Date;
+            
+            if (log.recordTime) {
+              // New format: ISO string
+              logDate = new Date(log.recordTime);
+            } else if (log.timestamp) {
+              // Old format: Unix timestamp
+              logDate = new Date(log.timestamp * 1000);
+            } else {
+              console.warn(`Log entry missing timestamp/recordTime:`, JSON.stringify(log));
               errors++;
               continue;
             }
 
-            const logDate = new Date(log.timestamp * 1000);
+            // Validate date
+            if (isNaN(logDate.getTime())) {
+              console.warn(`Invalid date in log entry:`, JSON.stringify(log));
+              errors++;
+              continue;
+            }
             const dateOnly = new Date(logDate.getFullYear(), logDate.getMonth(), logDate.getDate());
-
-            // Determine if this is check-in or check-out
-            const isCheckIn = log.type === 0 || (log.type === undefined && log.state === 0);
-            const eventType = isCheckIn ? 'CHECK_IN' : 'CHECK_OUT';
 
             // Find or create attendance record for this date
             const existingRecord = await prisma.attendanceRecord.findUnique({
@@ -284,6 +325,29 @@ router.get(
                 },
               },
             });
+
+            // Determine if this is check-in or check-out
+            // Old format: has type/state fields
+            // New format: infer from existing record or timing
+            let isCheckIn: boolean;
+            if (log.type !== undefined || log.state !== undefined) {
+              // Old format: type 0 = Check-in, type 1 = Check-out
+              isCheckIn = log.type === 0 || (log.type === undefined && log.state === 0);
+            } else {
+              // New format: Check existing record to determine
+              if (!existingRecord || !existingRecord.checkInTime) {
+                // No record or no check-in yet, treat as check-in
+                isCheckIn = true;
+              } else if (!existingRecord.checkOutTime) {
+                // Has check-in but no check-out, treat as check-out
+                isCheckIn = false;
+              } else {
+                // Has both, compare times - earlier is check-in, later is check-out
+                isCheckIn = logDate < existingRecord.checkInTime;
+              }
+            }
+            
+            const eventType = isCheckIn ? 'CHECK_IN' : 'CHECK_OUT';
 
             let wasUpdated = false;
 
@@ -352,10 +416,11 @@ router.get(
             // Add to formatted logs for response
             if (wasUpdated || !existingRecord) {
               formattedLogs.push({
-                uid: log.uid ?? null,
+                uid: log.uid ?? log.userSn ?? null,
                 deviceUserId: deviceUserId,
                 eventType: eventType,
-                timestamp: log.timestamp,
+                timestamp: log.timestamp ?? (log.recordTime ? new Date(log.recordTime).getTime() / 1000 : null),
+                recordTime: log.recordTime ?? null,
                 dateTime: logDate.toISOString(),
                 date: logDate.toISOString().split('T')[0],
                 time: logDate.toTimeString().split(' ')[0],

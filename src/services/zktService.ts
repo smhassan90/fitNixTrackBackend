@@ -11,11 +11,16 @@ export interface ZKTDeviceConfig {
 }
 
 export interface AttendanceLog {
-  uid: number;
-  id: number;
-  state: number;
-  timestamp: number;
-  type: number;
+  uid?: number;
+  id?: number;
+  state?: number;
+  timestamp?: number;
+  type?: number;
+  // New format fields
+  userSn?: number;
+  deviceUserId?: string;
+  recordTime?: string; // ISO date string
+  ip?: string;
 }
 
 export interface DeviceUser {
@@ -322,7 +327,17 @@ export async function syncAttendanceFromDevice(
     let filteredLogs = logs;
     if (startDate || endDate) {
       filteredLogs = logs.filter((log) => {
-        const logDate = new Date(log.timestamp * 1000);
+        // Handle both timestamp formats
+        let logDate: Date;
+        if (log.recordTime) {
+          logDate = new Date(log.recordTime);
+        } else if (log.timestamp) {
+          logDate = new Date(log.timestamp * 1000);
+        } else {
+          return false; // Skip logs without timestamp
+        }
+        
+        if (isNaN(logDate.getTime())) return false;
         if (startDate && logDate < startDate) return false;
         if (endDate && logDate > endDate) return false;
         return true;
@@ -338,21 +353,39 @@ export async function syncAttendanceFromDevice(
     // Process each log entry
     for (const log of filteredLogs) {
       try {
-        // Get device user ID - use id if available, otherwise fallback to uid
-        const deviceUserId = (log.id !== undefined && log.id !== null) 
-          ? log.id.toString() 
-          : (log.uid !== undefined && log.uid !== null)
-            ? log.uid.toString()
-            : null;
+        // Get device user ID - handle different log formats
+        let deviceUserId: string | null = null;
+        
+        if (log.deviceUserId !== undefined && log.deviceUserId !== null) {
+          // New format: deviceUserId is already a string
+          deviceUserId = log.deviceUserId.toString();
+        } else if (log.id !== undefined && log.id !== null) {
+          deviceUserId = log.id.toString();
+        } else if (log.uid !== undefined && log.uid !== null) {
+          deviceUserId = log.uid.toString();
+        }
 
         if (!deviceUserId) {
-          console.warn(`Log entry missing both id and uid fields:`, JSON.stringify(log));
+          console.warn(`Log entry missing device user ID:`, JSON.stringify(log));
           errors++;
           continue;
         }
 
-        if (!log.timestamp) {
-          console.warn(`Log entry missing timestamp:`, JSON.stringify(log));
+        // Handle timestamp - support both formats
+        let logDate: Date;
+        if (log.recordTime) {
+          logDate = new Date(log.recordTime);
+        } else if (log.timestamp) {
+          logDate = new Date(log.timestamp * 1000);
+        } else {
+          console.warn(`Log entry missing timestamp/recordTime:`, JSON.stringify(log));
+          errors++;
+          continue;
+        }
+
+        // Validate date
+        if (isNaN(logDate.getTime())) {
+          console.warn(`Invalid date in log entry:`, JSON.stringify(log));
           errors++;
           continue;
         }
@@ -364,15 +397,7 @@ export async function syncAttendanceFromDevice(
           errors++;
           continue;
         }
-
-        const logDate = new Date(log.timestamp * 1000);
         const dateOnly = new Date(logDate.getFullYear(), logDate.getMonth(), logDate.getDate());
-
-        // Determine if this is check-in or check-out
-        // For ZKTeco devices: type 0 = Check-in, type 1 = Check-out
-        // State can also indicate: 0 = Check-in, 1 = Check-out
-        // We prioritize type field, fallback to state
-        const isCheckIn = log.type === 0 || (log.type === undefined && log.state === 0);
 
         // Find or create attendance record for this date
         const existingRecord = await prisma.attendanceRecord.findUnique({
@@ -384,6 +409,22 @@ export async function syncAttendanceFromDevice(
             },
           },
         });
+
+        // Determine if this is check-in or check-out
+        let isCheckIn: boolean;
+        if (log.type !== undefined || log.state !== undefined) {
+          // Old format: type 0 = Check-in, type 1 = Check-out
+          isCheckIn = log.type === 0 || (log.type === undefined && log.state === 0);
+        } else {
+          // New format: Check existing record to determine
+          if (!existingRecord || !existingRecord.checkInTime) {
+            isCheckIn = true;
+          } else if (!existingRecord.checkOutTime) {
+            isCheckIn = false;
+          } else {
+            isCheckIn = logDate < existingRecord.checkInTime;
+          }
+        }
 
         if (existingRecord) {
           // Update existing record
@@ -471,22 +512,28 @@ export async function syncAttendanceFromDevice(
 /**
  * Auto-checkout members who checked in on previous dates but didn't check out
  * Sets checkout time to 1 hour after check-in time
+ * Only processes records that are at least 1 day old to avoid interfering with recent syncs
  */
 export async function autoCheckoutIncompleteRecords(gymId: string): Promise<number> {
   try {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    
+    // Only auto-checkout records that are at least 1 day old
+    // This prevents interfering with records that might still have check-out logs to be synced
+    const oneDayAgo = new Date(today);
+    oneDayAgo.setDate(oneDayAgo.getDate() - 1);
 
     // Find all records where:
     // - checkInTime exists
     // - checkOutTime is null
-    // - date is not today (previous dates)
+    // - date is at least 1 day before today (to avoid interfering with recent syncs)
     const incompleteRecords = await prisma.attendanceRecord.findMany({
       where: {
         gymId,
         checkInTime: { not: null },
         checkOutTime: null,
-        date: { lt: today },
+        date: { lt: oneDayAgo }, // Only records older than 1 day
       },
     });
 

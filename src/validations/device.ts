@@ -108,6 +108,7 @@ export const getDeviceAttendanceLogsSchema = z.object({
   query: z.object({
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').optional(),
     endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').optional(),
+    fullSync: z.string().transform((val) => val === 'true').optional(), // Force full sync from beginning
   }),
 });
 
