@@ -338,7 +338,25 @@ export async function syncAttendanceFromDevice(
     // Process each log entry
     for (const log of filteredLogs) {
       try {
-        const deviceUserId = log.id.toString();
+        // Get device user ID - use id if available, otherwise fallback to uid
+        const deviceUserId = (log.id !== undefined && log.id !== null) 
+          ? log.id.toString() 
+          : (log.uid !== undefined && log.uid !== null)
+            ? log.uid.toString()
+            : null;
+
+        if (!deviceUserId) {
+          console.warn(`Log entry missing both id and uid fields:`, JSON.stringify(log));
+          errors++;
+          continue;
+        }
+
+        if (!log.timestamp) {
+          console.warn(`Log entry missing timestamp:`, JSON.stringify(log));
+          errors++;
+          continue;
+        }
+
         const memberId = deviceUserToMemberMap.get(deviceUserId);
 
         if (!memberId) {

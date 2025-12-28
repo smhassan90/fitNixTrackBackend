@@ -238,12 +238,31 @@ router.get(
         // Process each new log entry and save to database
         for (const log of newLogs) {
           try {
-            const deviceUserId = log.id.toString();
+            // Get device user ID - use id if available, otherwise fallback to uid
+            const deviceUserId = (log.id !== undefined && log.id !== null) 
+              ? log.id.toString() 
+              : (log.uid !== undefined && log.uid !== null)
+                ? log.uid.toString()
+                : null;
+
+            if (!deviceUserId) {
+              console.warn(`Log entry missing both id and uid fields:`, JSON.stringify(log));
+              errors++;
+              continue;
+            }
+
             const memberId = deviceUserToMemberMap.get(deviceUserId);
             const memberInfo = deviceUserToMemberInfoMap.get(deviceUserId);
 
             if (!memberId) {
               console.warn(`No member mapping found for device user ID: ${deviceUserId}`);
+              errors++;
+              continue;
+            }
+
+            // Validate timestamp exists
+            if (!log.timestamp) {
+              console.warn(`Log entry missing timestamp:`, JSON.stringify(log));
               errors++;
               continue;
             }
@@ -333,20 +352,21 @@ router.get(
             // Add to formatted logs for response
             if (wasUpdated || !existingRecord) {
               formattedLogs.push({
-                uid: log.uid,
+                uid: log.uid ?? null,
                 deviceUserId: deviceUserId,
                 eventType: eventType,
                 timestamp: log.timestamp,
                 dateTime: logDate.toISOString(),
                 date: logDate.toISOString().split('T')[0],
                 time: logDate.toTimeString().split(' ')[0],
-                type: log.type,
-                state: log.state,
+                type: log.type ?? null,
+                state: log.state ?? null,
                 member: memberInfo || null,
               });
             }
           } catch (error) {
             console.error(`Error processing log entry:`, error);
+            console.error(`Log entry data:`, JSON.stringify(log, null, 2));
             errors++;
           }
         }
