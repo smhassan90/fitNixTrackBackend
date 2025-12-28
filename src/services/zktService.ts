@@ -437,6 +437,9 @@ export async function syncAttendanceFromDevice(
       where: { id: deviceConfigId },
       data: { lastSyncAt: new Date() },
     });
+
+    // Auto-checkout members who checked in on previous dates but didn't check out
+    await autoCheckoutIncompleteRecords(gymId);
   } catch (error) {
     console.error('Error syncing attendance:', error);
     throw error;
@@ -445,6 +448,60 @@ export async function syncAttendanceFromDevice(
   }
 
   return { synced, errors };
+}
+
+/**
+ * Auto-checkout members who checked in on previous dates but didn't check out
+ * Sets checkout time to 1 hour after check-in time
+ */
+export async function autoCheckoutIncompleteRecords(gymId: string): Promise<number> {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Find all records where:
+    // - checkInTime exists
+    // - checkOutTime is null
+    // - date is not today (previous dates)
+    const incompleteRecords = await prisma.attendanceRecord.findMany({
+      where: {
+        gymId,
+        checkInTime: { not: null },
+        checkOutTime: null,
+        date: { lt: today },
+      },
+    });
+
+    let autoCheckedOut = 0;
+
+    for (const record of incompleteRecords) {
+      if (record.checkInTime) {
+        // Set checkout time to 1 hour after check-in time
+        const checkOutTime = new Date(record.checkInTime);
+        checkOutTime.setHours(checkOutTime.getHours() + 1);
+
+        await prisma.attendanceRecord.update({
+          where: { id: record.id },
+          data: { checkOutTime },
+        });
+
+        console.log(
+          `Auto-checked out member ${record.memberId} for date ${record.date.toISOString().split('T')[0]}. ` +
+          `Check-in: ${record.checkInTime.toISOString()}, Check-out: ${checkOutTime.toISOString()}`
+        );
+        autoCheckedOut++;
+      }
+    }
+
+    if (autoCheckedOut > 0) {
+      console.log(`Auto-checked out ${autoCheckedOut} incomplete attendance records from previous dates`);
+    }
+
+    return autoCheckedOut;
+  } catch (error) {
+    console.error('Error auto-checking out incomplete records:', error);
+    return 0;
+  }
 }
 
 /**
