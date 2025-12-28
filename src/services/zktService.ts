@@ -1,5 +1,7 @@
-import ZKLib from 'node-zklib';
 import { prisma } from '../lib/prisma';
+
+// Import node-zklib - it's a constructor function
+const ZKLibConstructor = require('node-zklib');
 
 export interface ZKTDeviceConfig {
   ip: string;
@@ -27,13 +29,14 @@ export interface DeviceUser {
 }
 
 export class ZKTService {
-  private device: ZKLib | null = null;
+  private device: any | null = null; // ZKLib instance
+  private zkInstance: any | null = null; // ZKLib constructor instance
   private config: ZKTDeviceConfig;
 
   constructor(config: ZKTDeviceConfig) {
     this.config = {
       ...config,
-      timeout: config.timeout || 5000,
+      timeout: config.timeout || 10000, // Increased timeout to 10 seconds
       inport: config.inport || 0,
     };
   }
@@ -43,10 +46,45 @@ export class ZKTService {
    */
   async connect(): Promise<boolean> {
     try {
-      this.device = await ZKLib.createSocket(this.config);
+      console.log(`Attempting to connect to ZKTeco device at ${this.config.ip}:${this.config.port}...`);
+      
+      // Create ZKLib instance with constructor parameters: (ip, port, timeout, inport)
+      if (!this.zkInstance) {
+        this.zkInstance = new ZKLibConstructor(
+          this.config.ip,
+          this.config.port,
+          this.config.timeout,
+          this.config.inport
+        );
+      }
+      
+      // createSocket takes optional callbacks (cbErr, cbClose) - we can pass undefined
+      await this.zkInstance.createSocket(undefined, undefined);
+      this.device = this.zkInstance; // Store the instance as device
+      console.log(`Successfully connected to device at ${this.config.ip}:${this.config.port}`);
       return true;
-    } catch (error) {
-      console.error('Failed to connect to ZKTeco device:', error);
+    } catch (error: any) {
+      const errorMessage = error?.message || 'Unknown error';
+      const errorCode = error?.code || 'NO_CODE';
+      const errorDetails = error?.stack || error?.toString() || '';
+      
+      console.error(`Failed to connect to ZKTeco device at ${this.config.ip}:${this.config.port}`);
+      console.error(`Error: ${errorMessage}`);
+      console.error(`Error Code: ${errorCode}`);
+      
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Full error details:', errorDetails);
+      }
+      
+      // Common error patterns
+      if (errorMessage.includes('timeout') || errorMessage.includes('ETIMEDOUT')) {
+        console.error('Connection timeout - device may be slow to respond or protocol mismatch');
+      } else if (errorMessage.includes('ECONNREFUSED')) {
+        console.error('Connection refused - device may not be accepting connections on this port');
+      } else if (errorMessage.includes('ENOTFOUND') || errorMessage.includes('EHOSTUNREACH')) {
+        console.error('Host unreachable - check IP address and network connectivity');
+      }
+      
       return false;
     }
   }
@@ -62,6 +100,7 @@ export class ZKTService {
         console.error('Error disconnecting from device:', error);
       } finally {
         this.device = null;
+        this.zkInstance = null;
       }
     }
   }
@@ -75,8 +114,28 @@ export class ZKTService {
     }
 
     try {
-      const logs = await this.device.getAttendances();
-      return logs || [];
+      const result = await this.device.getAttendances();
+      
+      // The library returns { data: [...], err: ... } structure
+      if (!result) {
+        return [];
+      }
+      
+      // Check if result has a data property (library format)
+      if (result && typeof result === 'object' && 'data' in result) {
+        const logs = result.data;
+        if (Array.isArray(logs)) {
+          return logs;
+        }
+        return [];
+      }
+      
+      // If it's already an array, return it
+      if (Array.isArray(result)) {
+        return result;
+      }
+      
+      return [];
     } catch (error) {
       console.error('Error fetching attendance logs:', error);
       throw error;
@@ -92,8 +151,39 @@ export class ZKTService {
     }
 
     try {
-      const users = await this.device.getUsers();
-      return users || [];
+      const result = await this.device.getUsers();
+      
+      // The library returns { data: [...], err: ... } structure
+      if (!result) {
+        console.warn('getUsers() returned null/undefined, returning empty array');
+        return [];
+      }
+      
+      // Check if result has a data property (library format)
+      if (result && typeof result === 'object' && 'data' in result) {
+        const users = result.data;
+        if (Array.isArray(users)) {
+          return users;
+        }
+        console.warn('getUsers().data is not an array:', typeof users, users);
+        return [];
+      }
+      
+      // If it's already an array, return it
+      if (Array.isArray(result)) {
+        return result;
+      }
+      
+      // If it's an object with a users property, use that
+      if (result && typeof result === 'object' && 'users' in result && Array.isArray(result.users)) {
+        return result.users;
+      }
+      
+      // Log what we got for debugging
+      console.warn('getUsers() returned unexpected format:', typeof result, result);
+      
+      // Last resort: return empty array
+      return [];
     } catch (error) {
       console.error('Error fetching users:', error);
       throw error;
@@ -384,26 +474,44 @@ export async function syncUsersFromDevice(
   try {
     const connected = await zktService.connect();
     if (!connected) {
-      throw new Error('Failed to connect to device');
+      throw new Error(
+        `Failed to connect to device at ${deviceConfig.ipAddress}:${deviceConfig.port}. ` +
+        `Please check: 1) Device is powered on, 2) IP address is correct, 3) Network connectivity, 4) Port 4370 is accessible, 5) Firewall settings`
+      );
     }
 
     const deviceUsers = await zktService.getUsers();
 
-    // Get all members for this gym
-    const members = await prisma.member.findMany({
-      where: { gymId },
-      select: { id: true, name: true },
-    });
+    // Ensure deviceUsers is an array
+    if (!Array.isArray(deviceUsers)) {
+      console.error('getUsers() did not return an array:', typeof deviceUsers, deviceUsers);
+      throw new Error(`Failed to fetch users from device. Expected array but got ${typeof deviceUsers}`);
+    }
 
-    // Try to match device users with members by name
+    console.log(`Found ${deviceUsers.length} users on device`);
+
+    // Map device users to members by member ID (userId field from device)
     let mapped = 0;
     for (const deviceUser of deviceUsers) {
-      const member = members.find(
-        (m) => m.name.toLowerCase().trim() === deviceUser.name.toLowerCase().trim()
-      );
+      // Use userId from device as member ID
+      const memberId = parseInt(deviceUser.userId, 10);
+      
+      if (isNaN(memberId)) {
+        console.log(`Skipping device user "${deviceUser.name}" (uid: ${deviceUser.uid}): userId "${deviceUser.userId}" is not a valid number`);
+        continue;
+      }
+
+      // Check if member exists in the database for this gym
+      const member = await prisma.member.findFirst({
+        where: {
+          id: memberId,
+          gymId,
+        },
+        select: { id: true },
+      });
 
       if (member) {
-        // Create or update mapping
+        // Create or update mapping using device userId (uid) and member ID
         await prisma.deviceUserMapping.upsert({
           where: {
             deviceConfigId_deviceUserId: {
@@ -415,15 +523,18 @@ export async function syncUsersFromDevice(
             deviceConfigId,
             memberId: member.id,
             deviceUserId: deviceUser.uid.toString(),
-            deviceUserName: deviceUser.name,
+            deviceUserName: null, // Don't save device name
             isActive: true,
           },
           update: {
-            deviceUserName: deviceUser.name,
             isActive: true,
+            // Don't update deviceUserName - keep it null
           },
         });
+        console.log(`Mapped device user (uid: ${deviceUser.uid}, userId: ${deviceUser.userId}) to member ID: ${member.id}`);
         mapped++;
+      } else {
+        console.log(`No member found with ID ${memberId} for gym ${gymId} (device user uid: ${deviceUser.uid}, userId: ${deviceUser.userId})`);
       }
     }
 
