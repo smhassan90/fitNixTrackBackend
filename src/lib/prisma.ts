@@ -28,7 +28,9 @@ function getDatabaseUrl(): string {
   const encodedUser = encodeURIComponent(dbUser);
 
   // Construct MySQL connection string
-  const databaseUrl = `mysql://${encodedUser}:${encodedPassword}@${dbHost}:${dbPort}/${dbName}`;
+  // Note: Prisma handles connection pooling internally, but we can add connection timeout
+  const connectionTimeout = process.env.DB_CONNECTION_TIMEOUT || '10'; // 10 seconds
+  const databaseUrl = `mysql://${encodedUser}:${encodedPassword}@${dbHost}:${dbPort}/${dbName}?connect_timeout=${connectionTimeout}`;
 
   // Set it in process.env so Prisma can use it
   process.env.DATABASE_URL = databaseUrl;
@@ -45,7 +47,50 @@ export const prisma =
   globalForPrisma.prisma ||
   new PrismaClient({
     log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+    datasources: {
+      db: {
+        url: process.env.DATABASE_URL,
+      },
+    },
   });
 
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;
+
+/**
+ * Helper function to retry database operations with exponential backoff
+ */
+export async function retryDatabaseOperation<T>(
+  operation: () => Promise<T>,
+  maxRetries: number = 3,
+  initialDelay: number = 1000
+): Promise<T> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error: any) {
+      lastError = error as Error;
+      
+      // Check if it's a connection error that might be retryable
+      const isConnectionError = 
+        error?.code === 'P1001' || // Can't reach database server
+        error?.code === 'P1017' || // Server has closed the connection
+        error?.message?.includes('Can\'t reach database server') ||
+        error?.message?.includes('connection') ||
+        error?.message?.includes('timeout');
+      
+      if (!isConnectionError || attempt === maxRetries - 1) {
+        throw error;
+      }
+      
+      // Exponential backoff: 1s, 2s, 4s
+      const delay = initialDelay * Math.pow(2, attempt);
+      console.warn(`Database operation failed (attempt ${attempt + 1}/${maxRetries}), retrying in ${delay}ms...`, error?.message);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  
+  throw lastError || new Error('Database operation failed after retries');
+}
 

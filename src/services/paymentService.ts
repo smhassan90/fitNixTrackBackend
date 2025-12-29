@@ -8,8 +8,8 @@ import { NotFoundError } from '../utils/errors';
  */
 export async function generatePaymentsForMember(
   memberId: number,
-  gymId: string,
-  packageId: string | null,
+  gymId: number,
+  packageId: number | null,
   membershipStart: Date | null
 ): Promise<void> {
   if (!packageId || !membershipStart) {
@@ -84,8 +84,8 @@ export async function generatePaymentsForMember(
  * Mark payment as paid and generate next payment if applicable
  */
 export async function markPaymentAsPaid(
-  paymentId: string,
-  gymId: string
+  paymentId: number,
+  gymId: number
 ): Promise<void> {
   const payment = await prisma.payment.findFirst({
     where: { id: paymentId, gymId },
@@ -137,7 +137,7 @@ export async function markPaymentAsPaid(
 /**
  * Check and mark overdue payments
  */
-export async function markOverduePayments(gymId: string): Promise<number> {
+export async function markOverduePayments(gymId: number): Promise<number> {
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
 

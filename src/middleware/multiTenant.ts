@@ -17,8 +17,21 @@ export function requireGymId(
     return;
   }
 
+  // After migration, gymId should always be a number
+  // If it's still a string (old token with CUID), user needs to re-login
+  const gymId = typeof req.user.gymId === 'string' 
+    ? parseInt(req.user.gymId, 10) 
+    : req.user.gymId;
+  
+  if (isNaN(gymId)) {
+    // This means the token has a CUID string that can't be parsed as integer
+    // User needs to re-login after the database migration
+    sendError(res, new UnauthorizedError('Your session token is outdated. Please log in again after the database migration.'));
+    return;
+  }
+
   // Add gymId to request for easy access
-  req.gymId = req.user.gymId;
+  req.gymId = gymId;
   next();
 }
 
@@ -26,7 +39,7 @@ export function requireGymId(
 declare global {
   namespace Express {
     interface Request {
-      gymId?: string;
+      gymId?: number;
     }
   }
 }

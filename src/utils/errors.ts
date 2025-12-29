@@ -50,3 +50,10 @@ export class BadRequestError extends AppError {
   }
 }
 
+export class DatabaseConnectionError extends AppError {
+  constructor(message: string = 'Database connection failed', details?: any) {
+    super('DATABASE_CONNECTION_ERROR', message, 503, details);
+    this.name = 'DatabaseConnectionError';
+  }
+}
+

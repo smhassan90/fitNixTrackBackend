@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import bcrypt from 'bcrypt';
+// import bcrypt from 'bcrypt'; // TEMPORARILY DISABLED - using plain text passwords for development
 import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma';
 import { validate } from '../middleware/validation';
@@ -30,7 +30,10 @@ router.post(
       }
 
       // Verify password
-      const isValidPassword = await bcrypt.compare(password, user.password);
+      // TEMPORARY: Using plain text comparison for development
+      // TODO: Re-enable bcrypt hashing before production
+      // const isValidPassword = await bcrypt.compare(password, user.password);
+      const isValidPassword = password === user.password;
       if (!isValidPassword) {
         sendError(res, new UnauthorizedError('Invalid email or password'));
         return;

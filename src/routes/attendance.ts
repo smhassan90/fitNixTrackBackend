@@ -212,8 +212,15 @@ router.get(
       const gymId = req.gymId!;
       const { id } = req.params;
 
+      // Parse id as integer since it's now an auto-increment field
+      const recordId = parseInt(id, 10);
+      if (isNaN(recordId)) {
+        sendError(res, new NotFoundError('Attendance record', id));
+        return;
+      }
+
       const record = await prisma.attendanceRecord.findFirst({
-        where: { id, gymId },
+        where: { id: recordId, gymId },
         include: {
           member: {
             select: {

@@ -243,28 +243,24 @@ async function main() {
   await prisma.attendanceRecord.createMany({
     data: [
       {
-        id: `attendance-${gym1.id}-${randomUUID()}`,
         gymId: gym1.id,
         memberId: member1.id,
         date: today,
         status: 'PRESENT',
       },
       {
-        id: `attendance-${gym1.id}-${randomUUID()}`,
         gymId: gym1.id,
         memberId: member1.id,
         date: yesterday,
         status: 'PRESENT',
       },
       {
-        id: `attendance-${gym1.id}-${randomUUID()}`,
         gymId: gym1.id,
         memberId: member2.id,
         date: today,
         status: 'PRESENT',
       },
       {
-        id: `attendance-${gym1.id}-${randomUUID()}`,
         gymId: gym1.id,
         memberId: member3.id,
         date: yesterday,

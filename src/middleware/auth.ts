@@ -5,11 +5,11 @@ import { sendError } from '../utils/response';
 
 export interface AuthRequest extends Request {
   user?: {
-    id: string;
+    id: number;
     email: string;
     name: string;
     role: string;
-    gymId: string;
+    gymId: number;
     gymName?: string;
   };
 }
@@ -35,14 +35,53 @@ export function authenticateToken(
 
   try {
     const decoded = jwt.verify(token, jwtSecret) as {
-      id: string;
+      id: number | string; // Can be string (old tokens) or number (new tokens)
       email: string;
       name: string;
       role: string;
-      gymId: string;
+      gymId: number | string; // Can be string (old tokens) or number (new tokens)
       gymName?: string;
     };
-    req.user = decoded;
+    
+    // Convert IDs to numbers if they're strings (for backward compatibility with old tokens)
+    let userId: number;
+    let gymId: number;
+    
+    // Convert user ID
+    if (typeof decoded.id === 'string') {
+      const parsed = parseInt(decoded.id, 10);
+      if (isNaN(parsed)) {
+        sendError(res, new UnauthorizedError(
+          'Your session token contains an old user ID format. ' +
+          'Please ensure the database migration has been run, then log in again to get a new token.'
+        ));
+        return;
+      }
+      userId = parsed;
+    } else {
+      userId = decoded.id;
+    }
+    
+    // Convert gym ID
+    if (typeof decoded.gymId === 'string') {
+      const parsed = parseInt(decoded.gymId, 10);
+      if (isNaN(parsed)) {
+        sendError(res, new UnauthorizedError(
+          'Your session token contains an old gym ID format. ' +
+          'Please ensure the database migration has been run, then log in again to get a new token.'
+        ));
+        return;
+      }
+      gymId = parsed;
+    } else {
+      gymId = decoded.gymId;
+    }
+    
+    req.user = {
+      ...decoded,
+      id: userId, // Ensure it's always a number
+      gymId, // Ensure it's always a number
+    };
     next();
   } catch (error) {
     sendError(res, new UnauthorizedError('Invalid or expired token'));

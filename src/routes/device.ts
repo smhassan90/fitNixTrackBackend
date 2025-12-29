@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { prisma } from '../lib/prisma';
+import { prisma, retryDatabaseOperation } from '../lib/prisma';
 import { validate } from '../middleware/validation';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { requireGymId } from '../middleware/multiTenant';
@@ -144,24 +144,29 @@ router.get(
       const { id } = req.params;
       const { startDate, endDate, fullSync } = req.query as any;
 
-      const device = await prisma.deviceConfig.findFirst({
-        where: { id, gymId },
-        include: {
-          userMappings: {
-            where: { isActive: true },
-            include: {
-              member: {
-                select: {
-                  id: true,
-                  name: true,
-                  email: true,
-                  phone: true,
+      // Use retry logic for database connection issues
+      const device = await retryDatabaseOperation(
+        () => prisma.deviceConfig.findFirst({
+          where: { id, gymId },
+          include: {
+            userMappings: {
+              where: { isActive: true },
+              include: {
+                member: {
+                  select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                    phone: true,
+                  },
                 },
               },
             },
           },
-        },
-      });
+        }),
+        3, // max retries
+        1000 // initial delay 1 second
+      );
 
       if (!device) {
         sendError(res, new NotFoundError('Device configuration', id));
@@ -199,13 +204,27 @@ router.get(
         });
 
         // Determine the start time for incremental sync
-        // If fullSync=true, ignore lastSyncAt and fetch all records
+        // If fullSync=true, delete all existing records and fetch all records from device
         // If lastSyncAt exists and fullSync is not true, only fetch logs after that time
         // Otherwise, use provided startDate or fetch all
         let syncStartTime: Date | undefined;
+        let deletedRecordsCount = 0;
+        
         if (fullSync === true) {
-          // Force full sync - ignore lastSyncAt
-          console.log(`Full sync requested: fetching all logs from device`);
+          // Force full sync - delete all existing attendance records and fetch fresh from device
+          console.log(`Full sync requested: clearing attendance table and fetching all logs from device`);
+          
+          // Delete ALL attendance records for this gym (including manually created ones)
+          // This ensures a clean slate before re-syncing from device
+          const deleteResult = await prisma.attendanceRecord.deleteMany({
+            where: {
+              gymId,
+            },
+          });
+          
+          deletedRecordsCount = deleteResult.count;
+          console.log(`Deleted ${deletedRecordsCount} attendance records for full sync (all records for gym cleared)`);
+          
           if (startDate) {
             syncStartTime = parseDate(startDate);
             console.log(`Using provided startDate: ${syncStartTime.toISOString()}`);
@@ -223,7 +242,17 @@ router.get(
         const syncEndTime = endDate ? parseDate(endDate) : undefined;
 
         // Filter logs: only process new logs since last sync
-        let newLogs = logs.filter((log) => {
+        // Group logs by member and date to ensure one record per member per date
+        const logsByMemberAndDate = new Map<string, {
+          memberId: number;
+          date: Date;
+          checkIns: Date[];
+          checkOuts: Date[];
+          deviceUserId: string;
+          memberInfo: any;
+        }>();
+
+        for (const log of logs) {
           // Handle both timestamp formats
           let logDate: Date;
           if (log.recordTime) {
@@ -231,207 +260,353 @@ router.get(
           } else if (log.timestamp) {
             logDate = new Date(log.timestamp * 1000);
           } else {
-            return false; // Skip logs without timestamp
+            continue; // Skip logs without timestamp
           }
           
           // Validate date
           if (isNaN(logDate.getTime())) {
-            return false;
+            continue;
           }
           
           // If we have a sync start time, only include logs after it
           if (syncStartTime && logDate <= syncStartTime) {
-            return false;
+            continue;
           }
           
           // Filter by date range if provided
           if (syncEndTime && logDate > syncEndTime) {
-            return false;
+            continue;
           }
-          
-          return true;
-        });
 
-        console.log(`Found ${logs.length} total logs, ${newLogs.length} new logs since last sync`);
+          // Get device user ID
+          let deviceUserId: string | null = null;
+          if (log.deviceUserId !== undefined && log.deviceUserId !== null) {
+            deviceUserId = log.deviceUserId.toString();
+          } else if (log.id !== undefined && log.id !== null) {
+            deviceUserId = log.id.toString();
+          } else if (log.uid !== undefined && log.uid !== null) {
+            deviceUserId = log.uid.toString();
+          }
+
+          if (!deviceUserId) {
+            continue;
+          }
+
+          const memberId = deviceUserToMemberMap.get(deviceUserId);
+          if (!memberId) {
+            continue; // Skip unmapped users
+          }
+
+          // Determine if this is check-in or check-out first
+          let isCheckIn: boolean;
+          if (log.type !== undefined || log.state !== undefined) {
+            // Old format: type 0 = Check-in, type 1 = Check-out
+            isCheckIn = log.type === 0 || (log.type === undefined && log.state === 0);
+          } else {
+            // For new format, we'll determine this after grouping by checking existing logs
+            // For now, we'll group all logs together and determine check-in/check-out later
+            isCheckIn = true; // Temporary, will be adjusted during grouping
+          }
+
+          // The date field should be based on the check-in time's date (or check-out if no check-in)
+          // For now, use the log's date, but we'll recalculate based on actual check-in time later
+          const logYear = logDate.getFullYear();
+          const logMonth = logDate.getMonth();
+          const logDay = logDate.getDate();
+          
+          // Create a key for grouping: memberId + date of the log
+          // We'll adjust the date later based on the actual check-in time
+          const key = `${memberId}_${logYear}-${logMonth + 1}-${logDay}`;
+
+          if (!logsByMemberAndDate.has(key)) {
+            logsByMemberAndDate.set(key, {
+              memberId,
+              date: new Date(logYear, logMonth, logDay), // Will be recalculated based on check-in
+              checkIns: [],
+              checkOuts: [],
+              deviceUserId,
+              memberInfo: deviceUserToMemberInfoMap.get(deviceUserId),
+            });
+          }
+
+          const group = logsByMemberAndDate.get(key)!;
+          
+          // Re-determine check-in/check-out if format is new (no type/state)
+          if (log.type === undefined && log.state === undefined) {
+            if (group.checkIns.length === 0 && group.checkOuts.length === 0) {
+              // First log for this group - treat as check-in
+              isCheckIn = true;
+            } else if (group.checkIns.length === 0) {
+              // No check-in yet, but has check-out - this must be check-in
+              isCheckIn = true;
+            } else if (group.checkOuts.length === 0) {
+              // Has check-in but no check-out - this is check-out if later than check-in
+              isCheckIn = logDate <= group.checkIns[0];
+            } else {
+              // Has both - compare times: earlier is check-in, later is check-out
+              isCheckIn = logDate < group.checkIns[0];
+            }
+          }
+
+          if (isCheckIn) {
+            group.checkIns.push(logDate);
+          } else {
+            group.checkOuts.push(logDate);
+          }
+        }
+
+        // Convert grouped logs to array for processing
+        const groupedLogs = Array.from(logsByMemberAndDate.values());
+
+        console.log(`Found ${logs.length} total logs, grouped into ${groupedLogs.length} unique member-date combinations`);
 
         let synced = 0;
         let errors = 0;
         const formattedLogs: any[] = [];
 
-        // Process each new log entry and save to database
-        for (const log of newLogs) {
+        // Process each grouped log (one record per member per date)
+        for (const group of groupedLogs) {
           try {
-            // Get device user ID - handle different log formats
-            // New format: deviceUserId field directly
-            // Old format: id or uid field
-            let deviceUserId: string | null = null;
+            const { memberId, checkIns, checkOuts, deviceUserId, memberInfo } = group;
+
+            // Skip if there are no check-ins or check-outs - device sync should only create records with actual timestamps
+            if (checkIns.length === 0 && checkOuts.length === 0) {
+              console.warn(`Skipping group for member ${memberId}: no check-in or check-out timestamps`);
+              continue;
+            }
+
+            // Get earliest check-in and latest check-out for this date
+            const earliestCheckIn = checkIns.length > 0 ? new Date(Math.min(...checkIns.map(d => d.getTime()))) : null;
+            const latestCheckOut = checkOuts.length > 0 ? new Date(Math.max(...checkOuts.map(d => d.getTime()))) : null;
+
+            // The date field should be the calendar date of the check-in time (or check-out if no check-in)
+            // This ensures the date matches the actual attendance date
+            const attendanceDate = earliestCheckIn || latestCheckOut;
+            if (!attendanceDate) {
+              console.warn(`Skipping group for member ${memberId}: no valid attendance date`);
+              continue;
+            }
+
+            // Use the date of the check-in (or check-out if no check-in) for the record date
+            // Use UTC methods to ensure consistent date calculation regardless of server timezone
+            const year = attendanceDate.getUTCFullYear();
+            const month = attendanceDate.getUTCMonth();
+            const day = attendanceDate.getUTCDate();
             
-            if (log.deviceUserId !== undefined && log.deviceUserId !== null) {
-              // New format: deviceUserId is already a string
-              deviceUserId = log.deviceUserId.toString();
-            } else if (log.id !== undefined && log.id !== null) {
-              deviceUserId = log.id.toString();
-            } else if (log.uid !== undefined && log.uid !== null) {
-              deviceUserId = log.uid.toString();
-            }
-
-            if (!deviceUserId) {
-              console.warn(`Log entry missing device user ID:`, JSON.stringify(log));
-              errors++;
-              continue;
-            }
-
-            const memberId = deviceUserToMemberMap.get(deviceUserId);
-            const memberInfo = deviceUserToMemberInfoMap.get(deviceUserId);
-
-            if (!memberId) {
-              console.warn(`No member mapping found for device user ID: ${deviceUserId}`);
-              errors++;
-              continue;
-            }
-
-            // Handle timestamp - support both formats
-            // New format: recordTime as ISO string
-            // Old format: timestamp as number (Unix timestamp in seconds)
-            let logDate: Date;
+            // Normalize date to YYYY-MM-DD format for MySQL DATE field (UTC midnight)
+            const monthStr = String(month + 1).padStart(2, '0');
+            const dayStr = String(day).padStart(2, '0');
+            const dateOnly = new Date(`${year}-${monthStr}-${dayStr}T00:00:00.000Z`);
             
-            if (log.recordTime) {
-              // New format: ISO string
-              logDate = new Date(log.recordTime);
-            } else if (log.timestamp) {
-              // Old format: Unix timestamp
-              logDate = new Date(log.timestamp * 1000);
-            } else {
-              console.warn(`Log entry missing timestamp/recordTime:`, JSON.stringify(log));
-              errors++;
+            // For comparison purposes, create a local date object
+            const recordDate = new Date(year, month, day);
+
+            // Ensure we have at least one timestamp (check-in or check-out) before creating a record
+            if (!earliestCheckIn && !latestCheckOut) {
+              console.warn(`Skipping record creation for member ${memberId} on ${recordDate.toISOString().split('T')[0]}: no valid timestamps`);
               continue;
             }
 
-            // Validate date
-            if (isNaN(logDate.getTime())) {
-              console.warn(`Invalid date in log entry:`, JSON.stringify(log));
-              errors++;
-              continue;
-            }
-            const dateOnly = new Date(logDate.getFullYear(), logDate.getMonth(), logDate.getDate());
+            // Always check for and fix date mismatches before processing
+            // Find any records for this member where DATE(checkInTime) matches our target date
+            // but the date field is different (mismatch)
+            if (earliestCheckIn || latestCheckOut) {
+              // Get all records for this member to check for mismatches
+              const allMemberRecords = await prisma.attendanceRecord.findMany({
+                where: {
+                  gymId,
+                  memberId,
+                  OR: [
+                    { checkInTime: { not: null } },
+                    { checkOutTime: { not: null } },
+                  ],
+                },
+              });
 
-            // Find or create attendance record for this date
-            const existingRecord = await prisma.attendanceRecord.findUnique({
+              // Find and delete records with date mismatches
+              for (const record of allMemberRecords) {
+                let recordCheckInDate: Date | null = null;
+                
+                // Determine the correct date from check-in or check-out
+                if (record.checkInTime) {
+                  recordCheckInDate = new Date(record.checkInTime);
+                } else if (record.checkOutTime) {
+                  recordCheckInDate = new Date(record.checkOutTime);
+                }
+
+                if (recordCheckInDate) {
+                  // Use UTC methods for consistent date comparison
+                  const recordCheckInYear = recordCheckInDate.getUTCFullYear();
+                  const recordCheckInMonth = recordCheckInDate.getUTCMonth();
+                  const recordCheckInDay = recordCheckInDate.getUTCDate();
+                  
+                  // Check if this record's check-in/check-out date matches our target date
+                  if (recordCheckInYear === year && recordCheckInMonth === month && recordCheckInDay === day) {
+                    // But the date field is different - this is a mismatch
+                    const recordDate = new Date(record.date);
+                    const recordDateYear = recordDate.getUTCFullYear();
+                    const recordDateMonth = recordDate.getUTCMonth();
+                    const recordDateDay = recordDate.getUTCDate();
+                    
+                    if (recordDateYear !== year || recordDateMonth !== month || recordDateDay !== day) {
+                      // Date mismatch detected - delete the old record
+                      console.log(`Fixing date mismatch: record ${record.id} has date=${record.date.toISOString().split('T')[0]}, but check-in/check-out is on ${dateOnly.toISOString().split('T')[0]}. Deleting old record.`);
+                      await prisma.attendanceRecord.delete({
+                        where: { id: record.id },
+                      });
+                      deletedRecordsCount++; // Track deletions for mismatch fixes
+                    }
+                  }
+                }
+              }
+            }
+
+            // Now check for record with correct date (after cleaning up mismatches)
+            let existingRecord = await prisma.attendanceRecord.findUnique({
               where: {
                 gymId_memberId_date: {
                   gymId,
                   memberId,
-                  date: dateOnly,
+                  date: dateOnly, // Correct date based on check-in time
                 },
               },
             });
 
-            // Determine if this is check-in or check-out
-            // Old format: has type/state fields
-            // New format: infer from existing record or timing
-            let isCheckIn: boolean;
-            if (log.type !== undefined || log.state !== undefined) {
-              // Old format: type 0 = Check-in, type 1 = Check-out
-              isCheckIn = log.type === 0 || (log.type === undefined && log.state === 0);
-            } else {
-              // New format: Check existing record to determine
-              if (!existingRecord || !existingRecord.checkInTime) {
-                // No record or no check-in yet, treat as check-in
-                isCheckIn = true;
-              } else if (!existingRecord.checkOutTime) {
-                // Has check-in but no check-out, treat as check-out
-                isCheckIn = false;
-              } else {
-                // Has both, compare times - earlier is check-in, later is check-out
-                isCheckIn = logDate < existingRecord.checkInTime;
-              }
-            }
-            
-            const eventType = isCheckIn ? 'CHECK_IN' : 'CHECK_OUT';
-
             let wasUpdated = false;
+            let finalRecord;
+            let isNewRecord = false;
 
-            if (existingRecord) {
-              // Update existing record
-              let updateData: any = {
-                deviceUserId,
-                deviceSerialNumber: device.serialNumber || undefined,
-                status: 'PRESENT',
-              };
-
-              if (isCheckIn) {
-                // This is a check-in - update if we don't have one or this is earlier
-                if (!existingRecord.checkInTime || logDate < existingRecord.checkInTime) {
-                  updateData.checkInTime = logDate;
-                  wasUpdated = true;
+            try {
+              if (!existingRecord) {
+                // Only create new record if we have at least one timestamp from device
+                // Device sync should never create records without check-in or check-out times
+                if (!earliestCheckIn && !latestCheckOut) {
+                  console.warn(`Skipping record creation for member ${memberId} on ${recordDate.toISOString().split('T')[0]}: no device timestamps`);
+                  continue;
                 }
-              } else {
-                // This is a check-out - update if we don't have one or this is later
-                if (!existingRecord.checkOutTime || logDate > existingRecord.checkOutTime) {
-                  updateData.checkOutTime = logDate;
+
+                // Create new record with earliest check-in and latest check-out
+                try {
+                  finalRecord = await prisma.attendanceRecord.create({
+                    data: {
+                      gymId,
+                      memberId,
+                      date: dateOnly, // Correct date based on check-in time
+                      status: 'PRESENT',
+                      checkInTime: earliestCheckIn || undefined,
+                      checkOutTime: latestCheckOut || undefined,
+                      deviceUserId,
+                      deviceSerialNumber: device.serialNumber || undefined,
+                    },
+                  });
                   wasUpdated = true;
+                  isNewRecord = true;
+                  synced++;
+                } catch (createError: any) {
+                  // If create fails with unique constraint, fetch and update instead
+                  if (createError?.code === 'P2002') {
+                    existingRecord = await prisma.attendanceRecord.findUnique({
+                      where: {
+                        gymId_memberId_date: {
+                          gymId,
+                          memberId,
+                          date: dateOnly,
+                        },
+                      },
+                    });
+                  } else {
+                    throw createError;
+                  }
                 }
               }
 
-              // If we can't determine from type/state, use timing logic
-              if (log.type === undefined && log.state === undefined) {
-                if (!existingRecord.checkInTime) {
-                  updateData.checkInTime = logDate;
-                  wasUpdated = true;
-                } else if (!existingRecord.checkOutTime && logDate > existingRecord.checkInTime) {
-                  updateData.checkOutTime = logDate;
-                  wasUpdated = true;
-                } else if (logDate < existingRecord.checkInTime) {
-                  updateData.checkInTime = logDate;
-                  wasUpdated = true;
-                }
-              }
+              // Update existing record if needed
+              if (existingRecord) {
 
-              // Only update if we have changes
-              if (wasUpdated) {
-                await prisma.attendanceRecord.update({
-                  where: { id: existingRecord.id },
-                  data: updateData,
-                });
-                synced++;
-              }
-            } else {
-              // Create new record
-              await prisma.attendanceRecord.create({
-                data: {
-                  gymId,
-                  memberId,
-                  date: dateOnly,
-                  status: 'PRESENT',
-                  checkInTime: isCheckIn ? logDate : undefined,
-                  checkOutTime: !isCheckIn ? logDate : undefined,
+                const updateData: any = {
                   deviceUserId,
                   deviceSerialNumber: device.serialNumber || undefined,
-                },
-              });
-              synced++;
-              wasUpdated = true;
-            }
+                  status: 'PRESENT',
+                };
 
-            // Add to formatted logs for response
-            if (wasUpdated || !existingRecord) {
-              formattedLogs.push({
-                uid: log.uid ?? log.userSn ?? null,
-                deviceUserId: deviceUserId,
-                eventType: eventType,
-                timestamp: log.timestamp ?? (log.recordTime ? new Date(log.recordTime).getTime() / 1000 : null),
-                recordTime: log.recordTime ?? null,
-                dateTime: logDate.toISOString(),
-                date: logDate.toISOString().split('T')[0],
-                time: logDate.toTimeString().split(' ')[0],
-                type: log.type ?? null,
-                state: log.state ?? null,
-                member: memberInfo || null,
-              });
+                // Update check-in time: use earliest of existing or new check-ins
+                if (earliestCheckIn) {
+                  if (!existingRecord.checkInTime || earliestCheckIn < existingRecord.checkInTime) {
+                    updateData.checkInTime = earliestCheckIn;
+                    wasUpdated = true;
+                  } else {
+                    updateData.checkInTime = existingRecord.checkInTime;
+                  }
+                } else if (existingRecord.checkInTime) {
+                  updateData.checkInTime = existingRecord.checkInTime;
+                }
+
+                // Update check-out time: use latest of existing or new check-outs
+                if (latestCheckOut) {
+                  if (!existingRecord.checkOutTime || latestCheckOut > existingRecord.checkOutTime) {
+                    updateData.checkOutTime = latestCheckOut;
+                    wasUpdated = true;
+                  } else {
+                    updateData.checkOutTime = existingRecord.checkOutTime;
+                  }
+                } else if (existingRecord.checkOutTime) {
+                  updateData.checkOutTime = existingRecord.checkOutTime;
+                }
+
+                if (wasUpdated) {
+                  finalRecord = await prisma.attendanceRecord.update({
+                    where: { id: existingRecord.id },
+                    data: updateData,
+                  });
+                  synced++;
+                } else {
+                  finalRecord = existingRecord;
+                }
+              }
+
+              // Add formatted logs for response (one entry per check-in/check-out)
+              if (wasUpdated || isNewRecord) {
+                // Add check-in entry
+                if (earliestCheckIn) {
+                  formattedLogs.push({
+                    uid: null,
+                    deviceUserId: deviceUserId,
+                    eventType: 'CHECK_IN',
+                    timestamp: Math.floor(earliestCheckIn.getTime() / 1000),
+                    recordTime: earliestCheckIn.toISOString(),
+                    dateTime: earliestCheckIn.toISOString(),
+                    date: recordDate.toISOString().split('T')[0],
+                    time: earliestCheckIn.toTimeString().split(' ')[0],
+                    type: null,
+                    state: null,
+                    member: memberInfo || null,
+                  });
+                }
+
+                // Add check-out entry
+                if (latestCheckOut) {
+                  formattedLogs.push({
+                    uid: null,
+                    deviceUserId: deviceUserId,
+                    eventType: 'CHECK_OUT',
+                    timestamp: Math.floor(latestCheckOut.getTime() / 1000),
+                    recordTime: latestCheckOut.toISOString(),
+                    dateTime: latestCheckOut.toISOString(),
+                    date: recordDate.toISOString().split('T')[0],
+                    time: latestCheckOut.toTimeString().split(' ')[0],
+                    type: null,
+                    state: null,
+                    member: memberInfo || null,
+                  });
+                }
+              }
+            } catch (error: any) {
+              console.error(`Error processing attendance record for member ${memberId} on ${dateOnly.toISOString()}:`, error);
+              errors++;
+              continue;
             }
           } catch (error) {
-            console.error(`Error processing log entry:`, error);
-            console.error(`Log entry data:`, JSON.stringify(log, null, 2));
+            console.error(`Error processing grouped log entry:`, error);
             errors++;
           }
         }
@@ -456,6 +631,7 @@ router.get(
           checkOuts: checkOuts.length,
           synced,
           errors,
+          deleted: deletedRecordsCount, // Number of records deleted in full sync
           logs: formattedLogs.sort((a, b) => b.timestamp - a.timestamp),
           summary: {
             totalRecords: formattedLogs.length,
@@ -463,12 +639,14 @@ router.get(
             checkOutsCount: checkOuts.length,
             syncedCount: synced,
             errorCount: errors,
+            deletedCount: deletedRecordsCount,
             lastSyncAt: newLastSyncAt.toISOString(),
             previousSyncAt: device.lastSyncAt ? device.lastSyncAt.toISOString() : null,
             dateRange: {
               start: syncStartTime ? syncStartTime.toISOString().split('T')[0] : null,
               end: syncEndTime ? syncEndTime.toISOString().split('T')[0] : null,
             },
+            isFullSync: fullSync === true,
           },
         });
       } finally {

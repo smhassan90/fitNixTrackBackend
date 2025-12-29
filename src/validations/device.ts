@@ -14,7 +14,7 @@ export const createDeviceConfigSchema = z.object({
 
 export const updateDeviceConfigSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Device ID must be a number').transform((val) => parseInt(val, 10)),
   }),
   body: z.object({
     name: z.string().min(1).optional(),
@@ -30,25 +30,25 @@ export const updateDeviceConfigSchema = z.object({
 
 export const getDeviceConfigSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Device ID must be a number').transform((val) => parseInt(val, 10)),
   }),
 });
 
 export const deleteDeviceConfigSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Device ID must be a number').transform((val) => parseInt(val, 10)),
   }),
 });
 
 export const testDeviceConnectionSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Device ID must be a number').transform((val) => parseInt(val, 10)),
   }),
 });
 
 export const syncAttendanceSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Device ID must be a number').transform((val) => parseInt(val, 10)),
   }),
   query: z.object({
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').optional(),
@@ -58,13 +58,13 @@ export const syncAttendanceSchema = z.object({
 
 export const syncUsersSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Device ID must be a number').transform((val) => parseInt(val, 10)),
   }),
 });
 
 export const createUserMappingSchema = z.object({
   params: z.object({
-    id: z.string().min(1), // device config id
+    id: z.string().regex(/^\d+$/, 'Device ID must be a number').transform((val) => parseInt(val, 10)), // device config id
   }),
   body: z.object({
     memberId: z.number().int().positive(),
@@ -75,7 +75,7 @@ export const createUserMappingSchema = z.object({
 
 export const updateUserMappingSchema = z.object({
   params: z.object({
-    id: z.string().min(1), // mapping id
+    id: z.string().regex(/^\d+$/, 'Mapping ID must be a number').transform((val) => parseInt(val, 10)), // mapping id
   }),
   body: z.object({
     memberId: z.number().int().positive().optional(),
@@ -87,13 +87,13 @@ export const updateUserMappingSchema = z.object({
 
 export const deleteUserMappingSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Mapping ID must be a number').transform((val) => parseInt(val, 10)),
   }),
 });
 
 export const getUserMappingsSchema = z.object({
   params: z.object({
-    id: z.string().min(1), // device config id
+    id: z.string().regex(/^\d+$/, 'Device ID must be a number').transform((val) => parseInt(val, 10)), // device config id
   }),
   query: z.object({
     memberId: z.string().regex(/^\d+$/).optional().transform((val) => (val ? parseInt(val, 10) : undefined)),
@@ -103,7 +103,7 @@ export const getUserMappingsSchema = z.object({
 
 export const getDeviceAttendanceLogsSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Device ID must be a number').transform((val) => parseInt(val, 10)),
   }),
   query: z.object({
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').optional(),

@@ -12,7 +12,6 @@ import {
 } from '../validations/packages';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
-import { generateGymScopedId } from '../utils/idGenerator';
 
 const router = Router();
 
@@ -92,7 +91,6 @@ router.post(
       // Create package
       const packageData = await prisma.package.create({
         data: {
-          id: generateGymScopedId('package', gymId),
           gymId,
           name,
           price,

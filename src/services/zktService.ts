@@ -284,8 +284,8 @@ export class ZKTService {
  * Sync attendance from ZKTeco device to database
  */
 export async function syncAttendanceFromDevice(
-  deviceConfigId: string,
-  gymId: string,
+  deviceConfigId: number,
+  gymId: number,
   startDate?: Date,
   endDate?: Date
 ): Promise<{ synced: number; errors: number }> {
@@ -470,7 +470,15 @@ export async function syncAttendanceFromDevice(
             synced++;
           }
         } else {
-          // Create new record
+          // Only create new record if we have a valid timestamp
+          // Device sync should never create records without check-in or check-out times
+          if (!logDate || isNaN(logDate.getTime())) {
+            console.warn(`Skipping record creation: invalid timestamp for member ${memberId} on ${dateOnly.toISOString()}`);
+            errors++;
+            continue;
+          }
+
+          // Create new record with timestamp
           await prisma.attendanceRecord.create({
             data: {
               gymId,
@@ -514,7 +522,7 @@ export async function syncAttendanceFromDevice(
  * Sets checkout time to 1 hour after check-in time
  * Only processes records that are at least 1 day old to avoid interfering with recent syncs
  */
-export async function autoCheckoutIncompleteRecords(gymId: string): Promise<number> {
+export async function autoCheckoutIncompleteRecords(gymId: number): Promise<number> {
   try {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -573,8 +581,8 @@ export async function autoCheckoutIncompleteRecords(gymId: string): Promise<numb
  * Sync users from device and create mappings
  */
 export async function syncUsersFromDevice(
-  deviceConfigId: string,
-  gymId: string
+  deviceConfigId: number,
+  gymId: number
 ): Promise<{ users: DeviceUser[]; mapped: number }> {
   const deviceConfig = await prisma.deviceConfig.findUnique({
     where: { id: deviceConfigId },

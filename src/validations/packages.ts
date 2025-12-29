@@ -13,7 +13,7 @@ export const createPackageSchema = z.object({
 
 export const updatePackageSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Package ID must be a number').transform((val) => parseInt(val, 10)),
   }),
   body: z.object({
     name: z.string().min(1).max(255).optional(),
@@ -32,13 +32,13 @@ export const getPackagesSchema = z.object({
 
 export const getPackageSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Package ID must be a number').transform((val) => parseInt(val, 10)),
   }),
 });
 
 export const deletePackageSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Package ID must be a number').transform((val) => parseInt(val, 10)),
   }),
 });
 

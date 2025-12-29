@@ -13,7 +13,6 @@ import {
 } from '../validations/payments';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
-import { generateGymScopedId } from '../utils/idGenerator';
 import { parseDate } from '../utils/dateHelpers';
 import { markPaymentAsPaid, markOverduePayments } from '../services/paymentService';
 
@@ -169,7 +168,6 @@ router.post(
       // Create payment
       const payment = await prisma.payment.create({
         data: {
-          id: generateGymScopedId('payment', gymId),
           gymId,
           memberId,
           month,

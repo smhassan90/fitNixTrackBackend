@@ -15,10 +15,11 @@ export const createMemberSchema = z.object({
       .preprocess(
         (val) => {
           if (val === '' || val === null || val === undefined) return null;
+          if (typeof val === 'string') return parseInt(val, 10);
           return val;
         },
         z.union([
-          z.string().min(1, 'Package ID cannot be empty'),
+          z.number().int().positive('Package ID must be a positive integer'),
           z.null(),
         ])
       )
@@ -28,10 +29,15 @@ export const createMemberSchema = z.object({
       .preprocess(
         (val) => {
           if (!val || !Array.isArray(val)) return [];
-          // Filter out empty strings, null, and undefined
-          return val.filter((id) => id && id !== '' && id !== null);
+          // Convert strings to integers and filter out invalid values
+          return val
+            .map((id) => {
+              if (typeof id === 'string') return parseInt(id, 10);
+              return id;
+            })
+            .filter((id) => !isNaN(id) && id > 0);
         },
-        z.array(z.string().min(1, 'Trainer ID cannot be empty'))
+        z.array(z.number().int().positive('Trainer ID must be a positive integer'))
       )
       .optional()
       .default([]),
@@ -54,10 +60,11 @@ export const updateMemberSchema = z.object({
       .preprocess(
         (val) => {
           if (val === '' || val === null || val === undefined) return null;
+          if (typeof val === 'string') return parseInt(val, 10);
           return val;
         },
         z.union([
-          z.string().min(1, 'Package ID cannot be empty'),
+          z.number().int().positive('Package ID must be a positive integer'),
           z.null(),
         ])
       )
@@ -67,10 +74,15 @@ export const updateMemberSchema = z.object({
       .preprocess(
         (val) => {
           if (!val || !Array.isArray(val)) return [];
-          // Filter out empty strings, null, and undefined
-          return val.filter((id) => id && id !== '' && id !== null);
+          // Convert strings to integers and filter out invalid values
+          return val
+            .map((id) => {
+              if (typeof id === 'string') return parseInt(id, 10);
+              return id;
+            })
+            .filter((id) => !isNaN(id) && id > 0);
         },
-        z.array(z.string().min(1, 'Trainer ID cannot be empty'))
+        z.array(z.number().int().positive('Trainer ID must be a positive integer'))
       )
       .optional(),
   }),

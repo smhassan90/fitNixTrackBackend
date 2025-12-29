@@ -13,7 +13,7 @@ export const createPaymentSchema = z.object({
 
 export const updatePaymentSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Payment ID must be a number').transform((val) => parseInt(val, 10)),
   }),
   body: z.object({
     month: z.string().regex(monthRegex).optional(),
@@ -38,19 +38,19 @@ export const getPaymentsSchema = z.object({
 
 export const getPaymentSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Payment ID must be a number').transform((val) => parseInt(val, 10)),
   }),
 });
 
 export const markPaidSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Payment ID must be a number').transform((val) => parseInt(val, 10)),
   }),
 });
 
 export const deletePaymentSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Payment ID must be a number').transform((val) => parseInt(val, 10)),
   }),
 });
 

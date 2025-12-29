@@ -12,7 +12,6 @@ import {
 } from '../validations/trainers';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
-import { generateGymScopedId } from '../utils/idGenerator';
 import { parseDate } from '../utils/dateHelpers';
 
 const router = Router();
@@ -141,7 +140,6 @@ router.post(
       // Create trainer
       const trainer = await prisma.trainer.create({
         data: {
-          id: generateGymScopedId('trainer', gymId),
           gymId,
           name,
           gender: gender || null,

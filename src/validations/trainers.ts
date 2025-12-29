@@ -16,7 +16,7 @@ export const createTrainerSchema = z.object({
 
 export const updateTrainerSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Trainer ID must be a number').transform((val) => parseInt(val, 10)),
   }),
   body: z.object({
     name: z.string().min(1).max(255).optional(),
@@ -41,13 +41,13 @@ export const getTrainersSchema = z.object({
 
 export const getTrainerSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Trainer ID must be a number').transform((val) => parseInt(val, 10)),
   }),
 });
 
 export const deleteTrainerSchema = z.object({
   params: z.object({
-    id: z.string().min(1),
+    id: z.string().regex(/^\d+$/, 'Trainer ID must be a number').transform((val) => parseInt(val, 10)),
   }),
 });
 

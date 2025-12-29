@@ -11,7 +11,7 @@ datasource db {
 }
 
 model Gym {
-  id        String   @id @default(cuid())
+  id        Int      @id @default(autoincrement())
   name      String
   address   String?
   phone     String?
@@ -31,12 +31,12 @@ model Gym {
 }
 
 model User {
-  id        String   @id @default(cuid())
+  id        Int      @id @default(autoincrement())
   name      String
   email     String   @unique
   password  String
   role      UserRole @default(STAFF)
-  gymId     String
+  gymId     Int
   gymName   String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -53,7 +53,7 @@ enum UserRole {
 
 model Member {
   id              Int       @id @default(autoincrement())
-  gymId           String
+  gymId           Int
   name            String
   phone           String?
   email           String?
@@ -61,7 +61,7 @@ model Member {
   dateOfBirth     DateTime?
   cnic            String?   @db.VarChar(13)
   comments        String?   @db.Text
-  packageId       String?
+  packageId       Int?
   discount        Float?
   membershipStart DateTime?
   membershipEnd   DateTime?
@@ -86,8 +86,8 @@ model Member {
 }
 
 model Trainer {
-  id             String    @id @default(cuid())
-  gymId          String
+  id             Int       @id @default(autoincrement())
+  gymId          Int
   name           String
   gender         String?
   dateOfBirth    DateTime?
@@ -106,8 +106,8 @@ model Trainer {
 }
 
 model Package {
-  id        String   @id @default(cuid())
-  gymId     String
+  id        Int      @id @default(autoincrement())
+  gymId     Int
   name      String
   price     Float
   duration  String // '1 month', '3 months', '6 months', '12 months'
@@ -123,8 +123,8 @@ model Package {
 }
 
 model Payment {
-  id        String        @id @default(cuid())
-  gymId     String
+  id        Int           @id @default(autoincrement())
+  gymId     Int
   memberId  Int
   month     String        @db.VarChar(7) // Format: 'YYYY-MM'
   amount    Float
@@ -151,8 +151,8 @@ enum PaymentStatus {
 }
 
 model AttendanceRecord {
-  id                 String           @id @default(cuid())
-  gymId              String
+  id                 Int              @id @default(autoincrement())
+  gymId              Int
   memberId           Int
   date               DateTime         @db.Date // Date only (no time)
   status             AttendanceStatus @default(PRESENT)
@@ -183,7 +183,7 @@ enum AttendanceStatus {
 
 model MemberTrainer {
   memberId  Int
-  trainerId String
+  trainerId Int
   createdAt DateTime @default(now())
 
   member  Member  @relation(fields: [memberId], references: [id], onDelete: Cascade)
@@ -196,8 +196,8 @@ model MemberTrainer {
 }
 
 model DeviceConfig {
-  id             String    @id @default(cuid())
-  gymId          String
+  id             Int       @id @default(autoincrement())
+  gymId          Int
   name           String // Device name/identifier
   ipAddress      String // Device IP address
   port           Int       @default(4370) // Default ZKTeco port
@@ -220,8 +220,8 @@ model DeviceConfig {
 }
 
 model DeviceUserMapping {
-  id             String   @id @default(cuid())
-  deviceConfigId String
+  id             Int      @id @default(autoincrement())
+  deviceConfigId Int
   memberId       Int
   deviceUserId   String // User ID on the ZKTeco device
   deviceUserName String? // Name on the device
