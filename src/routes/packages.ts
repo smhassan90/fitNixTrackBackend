@@ -144,14 +144,37 @@ router.post(
       }
 
       // Add features separately if provided
+      let featuresAssigned = false;
+      let featureError: string | null = null;
+      
       if (featureIds && Array.isArray(featureIds) && featureIds.length > 0) {
-        await (prisma as any).packageFeature.createMany({
-          data: featureIds.map((featureId: number) => ({
-            packageId: createdPackageId,
-            featureId,
-          })),
-          skipDuplicates: true,
-        });
+        try {
+          // Validate that all feature IDs exist
+          const existingFeatures = await (prisma as any).feature.findMany({
+            where: {
+              id: { in: featureIds },
+            },
+          });
+
+          if (existingFeatures.length !== featureIds.length) {
+            const existingIds = existingFeatures.map((f: any) => f.id);
+            const missingIds = featureIds.filter((id: number) => !existingIds.includes(id));
+            throw new Error(`Features with IDs ${missingIds.join(', ')} do not exist`);
+          }
+
+          await (prisma as any).packageFeature.createMany({
+            data: featureIds.map((featureId: number) => ({
+              packageId: createdPackageId,
+              featureId,
+            })),
+            skipDuplicates: true,
+          });
+          featuresAssigned = true;
+        } catch (error) {
+          // Log error but don't fail the entire request
+          console.error('Error assigning features to package:', error);
+          featureError = error instanceof Error ? error.message : String(error);
+        }
       }
 
       // Fetch the package with features
@@ -170,40 +193,28 @@ router.post(
         throw new Error('Failed to fetch created package');
       }
 
-      // Add features separately if provided
-      if (featureIds && Array.isArray(featureIds) && featureIds.length > 0) {
-        await (prisma as any).packageFeature.createMany({
-          data: featureIds.map((featureId: number) => ({
-            packageId: packageData.id,
-            featureId,
-          })),
-          skipDuplicates: true,
-        });
-
-        // Fetch the package again with features
-        const updatedPackage = await (prisma.package.findFirst({
-          where: { id: packageData.id },
-          include: {
-            features: {
-              include: {
-                feature: true,
-              },
-            },
-          } as any,
-        }) as any);
-
-        if (updatedPackage) {
-          packageData.features = updatedPackage.features;
-        }
-      }
-
       // Transform features to array of feature names
       const packageWithFeatures = {
         ...packageData,
         features: (packageData.features || []).map((pf: { feature: { name: string } }) => pf.feature.name),
       };
 
-      sendSuccess(res, packageWithFeatures, 'Package created successfully', 201);
+      // Return success with warning if features failed to assign
+      if (featureIds && Array.isArray(featureIds) && featureIds.length > 0 && !featuresAssigned) {
+        // Include error details in response for debugging
+        const responseData = {
+          ...packageWithFeatures,
+          warning: featureError || 'Features could not be assigned',
+        };
+        sendSuccess(
+          res, 
+          responseData, 
+          'Package created successfully, but features could not be assigned. Please edit the package to add features manually.',
+          201
+        );
+      } else {
+        sendSuccess(res, packageWithFeatures, 'Package created successfully', 201);
+      }
     } catch (error) {
       sendError(res, error as Error);
     }
