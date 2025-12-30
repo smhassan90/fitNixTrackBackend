@@ -7,7 +7,7 @@ export const createPackageSchema = z.object({
     duration: z.enum(['1 month', '3 months', '6 months', '12 months'], {
       errorMap: () => ({ message: 'Duration must be one of: 1 month, 3 months, 6 months, 12 months' }),
     }),
-    features: z.array(z.string()).min(1, 'At least one feature is required'),
+    featureIds: z.array(z.number().int().positive()).min(1, 'At least one feature is required').optional(),
   }),
 });
 
@@ -19,7 +19,7 @@ export const updatePackageSchema = z.object({
     name: z.string().min(1).max(255).optional(),
     price: z.number().min(0).optional(),
     duration: z.enum(['1 month', '3 months', '6 months', '12 months']).optional(),
-    features: z.array(z.string()).optional(),
+    featureIds: z.array(z.number().int().positive()).optional(),
   }),
 });
 

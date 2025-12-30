@@ -19,6 +19,21 @@ const router = Router();
 router.use(authenticateToken);
 router.use(requireGymId);
 
+// GET /api/packages/features - Get all available features from database
+// Returns only features that exist in the 'features' table
+router.get('/features', async (req: AuthRequest, res: Response) => {
+  try {
+    // Query database - returns only what's in the features table
+    const features = await prisma.feature.findMany({
+      orderBy: { name: 'asc' },
+    });
+
+    sendSuccess(res, { features });
+  } catch (error) {
+    sendError(res, error as Error);
+  }
+});
+
 // GET /api/packages
 router.get(
   '/',
@@ -31,6 +46,11 @@ router.get(
       const packages = await prisma.package.findMany({
         where: { gymId },
         include: {
+          features: {
+            include: {
+              feature: true,
+            },
+          },
           _count: {
             select: {
               members: true,
@@ -40,7 +60,13 @@ router.get(
         orderBy: { [sortBy]: sortOrder },
       });
 
-      sendSuccess(res, { packages });
+      // Transform features to array of feature names
+      const packagesWithFeatures = packages.map((pkg) => ({
+        ...pkg,
+        features: pkg.features.map((pf) => pf.feature.name),
+      }));
+
+      sendSuccess(res, { packages: packagesWithFeatures });
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -59,6 +85,11 @@ router.get(
       const packageData = await prisma.package.findFirst({
         where: { id, gymId },
         include: {
+          features: {
+            include: {
+              feature: true,
+            },
+          },
           _count: {
             select: {
               members: true,
@@ -72,7 +103,13 @@ router.get(
         return;
       }
 
-      sendSuccess(res, packageData);
+      // Transform features to array of feature names
+      const packageWithFeatures = {
+        ...packageData,
+        features: packageData.features.map((pf) => pf.feature.name),
+      };
+
+      sendSuccess(res, packageWithFeatures);
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -86,7 +123,7 @@ router.post(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { name, price, duration, features } = req.body;
+      const { name, price, duration, featureIds } = req.body;
 
       // Create package
       const packageData = await prisma.package.create({
@@ -95,11 +132,28 @@ router.post(
           name,
           price,
           duration,
-          features,
+          features: {
+            create: (featureIds || []).map((featureId: number) => ({
+              featureId,
+            })),
+          },
+        },
+        include: {
+          features: {
+            include: {
+              feature: true,
+            },
+          },
         },
       });
 
-      sendSuccess(res, packageData, 'Package created successfully', 201);
+      // Transform features to array of feature names
+      const packageWithFeatures = {
+        ...packageData,
+        features: packageData.features.map((pf) => pf.feature.name),
+      };
+
+      sendSuccess(res, packageWithFeatures, 'Package created successfully', 201);
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -114,7 +168,7 @@ router.put(
     try {
       const gymId = req.gymId!;
       const { id } = req.params;
-      const { name, price, duration, features } = req.body;
+      const { name, price, duration, featureIds } = req.body;
 
       // Check if package exists
       const existingPackage = await prisma.package.findFirst({
@@ -131,14 +185,41 @@ router.put(
       if (name !== undefined) updateData.name = name;
       if (price !== undefined) updateData.price = price;
       if (duration !== undefined) updateData.duration = duration;
-      if (features !== undefined) updateData.features = features;
+
+      // Update features if provided
+      if (featureIds !== undefined) {
+        // Delete existing features
+        await prisma.packageFeature.deleteMany({
+          where: { packageId: id },
+        });
+
+        // Add new features
+        updateData.features = {
+          create: featureIds.map((featureId: number) => ({
+            featureId,
+          })),
+        };
+      }
 
       const packageData = await prisma.package.update({
         where: { id },
         data: updateData,
+        include: {
+          features: {
+            include: {
+              feature: true,
+            },
+          },
+        },
       });
 
-      sendSuccess(res, packageData, 'Package updated successfully');
+      // Transform features to array of feature names
+      const packageWithFeatures = {
+        ...packageData,
+        features: packageData.features.map((pf) => pf.feature.name),
+      };
+
+      sendSuccess(res, packageWithFeatures, 'Package updated successfully');
     } catch (error) {
       sendError(res, error as Error);
     }

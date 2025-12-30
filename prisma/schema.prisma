@@ -111,15 +111,40 @@ model Package {
   name      String
   price     Float
   duration  String // '1 month', '3 months', '6 months', '12 months'
-  features  Json // Array of feature strings (stored as JSON in MySQL)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  gym     Gym      @relation(fields: [gymId], references: [id], onDelete: Cascade)
-  members Member[]
+  gym      Gym            @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  members  Member[]
+  features PackageFeature[]
 
   @@index([gymId])
   @@map("packages")
+}
+
+model Feature {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  packages PackageFeature[]
+
+  @@map("features")
+}
+
+model PackageFeature {
+  packageId Int
+  featureId Int
+  createdAt DateTime @default(now())
+
+  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  feature Feature @relation(fields: [featureId], references: [id], onDelete: Cascade)
+
+  @@id([packageId, featureId])
+  @@index([packageId])
+  @@index([featureId])
+  @@map("package_features")
 }
 
 model Payment {
