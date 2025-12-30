@@ -112,3 +112,42 @@ export const getDeviceAttendanceLogsSchema = z.object({
   }),
 });
 
+export const syncUsersOfflineSchema = z.object({
+  params: z.object({
+    id: z.string().regex(/^\d+$/, 'Device ID must be a number').transform((val) => parseInt(val, 10)),
+  }),
+  body: z.object({
+    users: z.array(z.object({
+      uid: z.number(),
+      name: z.string(),
+      privilege: z.number(),
+      password: z.string(),
+      groupId: z.string(),
+      userId: z.string(),
+      card: z.number(),
+    })),
+    apiKey: z.string().min(1, 'API key is required'),
+  }),
+});
+
+export const syncAttendanceOfflineSchema = z.object({
+  params: z.object({
+    id: z.string().regex(/^\d+$/, 'Device ID must be a number').transform((val) => parseInt(val, 10)),
+  }),
+  body: z.object({
+    logs: z.array(z.object({
+      uid: z.number().optional(),
+      id: z.number().optional(),
+      state: z.number().optional(),
+      timestamp: z.number().optional(),
+      type: z.number().optional(),
+      userSn: z.number().optional(),
+      deviceUserId: z.string().optional(),
+      recordTime: z.string().optional(),
+      ip: z.string().optional(),
+    })),
+    lastSyncAt: z.string().optional(),
+    apiKey: z.string().min(1, 'API key is required'),
+  }),
+});
+

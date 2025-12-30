@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { prisma, retryDatabaseOperation } from '../lib/prisma';
 import { validate } from '../middleware/validation';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { authenticateApiKey, ApiKeyAuthRequest } from '../middleware/apiKeyAuth';
 import { requireGymId } from '../middleware/multiTenant';
 import {
   createDeviceConfigSchema,
@@ -16,6 +17,8 @@ import {
   deleteUserMappingSchema,
   getUserMappingsSchema,
   getDeviceAttendanceLogsSchema,
+  syncUsersOfflineSchema,
+  syncAttendanceOfflineSchema,
 } from '../validations/device';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, BadRequestError } from '../utils/errors';
@@ -24,7 +27,341 @@ import { parseDate } from '../utils/dateHelpers';
 
 const router = Router();
 
-// All routes require authentication and gymId
+// ============ Offline Sync Endpoints (API Key Auth) ============
+// These endpoints are for offline sync scripts and use API key authentication
+// They must be defined BEFORE the JWT middleware
+
+// POST /api/device/:id/sync-users-offline - Sync users from offline script
+router.post(
+  '/:id/sync-users-offline',
+  validate(syncUsersOfflineSchema),
+  authenticateApiKey,
+  async (req: ApiKeyAuthRequest, res: Response) => {
+    try {
+      const deviceId = req.deviceId!;
+      const gymId = req.gymId!;
+      const { users } = req.body;
+
+      const device = await prisma.deviceConfig.findFirst({
+        where: { id: deviceId, gymId },
+      });
+
+      if (!device) {
+        sendError(res, new NotFoundError('Device configuration', deviceId));
+        return;
+      }
+
+      // Map device users to members by member ID (userId field from device)
+      let mapped = 0;
+      for (const deviceUser of users) {
+        const memberId = parseInt(deviceUser.userId, 10);
+        
+        if (isNaN(memberId)) {
+          continue;
+        }
+
+        const member = await prisma.member.findFirst({
+          where: { id: memberId, gymId },
+          select: { id: true },
+        });
+
+        if (member) {
+          await prisma.deviceUserMapping.upsert({
+            where: {
+              deviceConfigId_deviceUserId: {
+                deviceConfigId: deviceId,
+                deviceUserId: deviceUser.uid.toString(),
+              },
+            },
+            create: {
+              deviceConfigId: deviceId,
+              memberId: member.id,
+              deviceUserId: deviceUser.uid.toString(),
+              deviceUserName: null,
+              isActive: true,
+            },
+            update: { isActive: true },
+          });
+          mapped++;
+        }
+      }
+
+      sendSuccess(res, {
+        users: users,
+        mapped,
+        message: `Synced ${users.length} users. Mapped ${mapped} users to members.`,
+      });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// POST /api/device/:id/sync-attendance-offline - Sync attendance from offline script
+router.post(
+  '/:id/sync-attendance-offline',
+  validate(syncAttendanceOfflineSchema),
+  authenticateApiKey,
+  async (req: ApiKeyAuthRequest, res: Response) => {
+    try {
+      const deviceId = req.deviceId!;
+      const gymId = req.gymId!;
+      const { logs } = req.body;
+
+      const device = await prisma.deviceConfig.findFirst({
+        where: { id: deviceId, gymId },
+        include: {
+          userMappings: {
+            where: { isActive: true },
+          },
+        },
+      });
+
+      if (!device) {
+        sendError(res, new NotFoundError('Device configuration', deviceId));
+        return;
+      }
+
+      // Create device user to member map
+      const deviceUserToMemberMap = new Map<string, number>();
+      (device.userMappings || []).forEach((mapping: any) => {
+        deviceUserToMemberMap.set(mapping.deviceUserId, mapping.memberId);
+      });
+
+      // Process logs (same logic as syncAttendanceFromDevice)
+      interface ProcessedLog {
+        deviceUserId: string;
+        memberId: number;
+        date: Date;
+        logDate: Date;
+        isCheckIn: boolean | null;
+      }
+
+      const processedLogs: ProcessedLog[] = [];
+
+      for (const log of logs) {
+        try {
+          let deviceUserId: string | null = null;
+          if (log.deviceUserId !== undefined && log.deviceUserId !== null) {
+            deviceUserId = log.deviceUserId.toString();
+          } else if (log.id !== undefined && log.id !== null) {
+            deviceUserId = log.id.toString();
+          } else if (log.uid !== undefined && log.uid !== null) {
+            deviceUserId = log.uid.toString();
+          }
+
+          if (!deviceUserId) continue;
+
+          let logDate: Date;
+          if (log.recordTime) {
+            logDate = new Date(log.recordTime);
+          } else if (log.timestamp) {
+            logDate = new Date(log.timestamp * 1000);
+          } else {
+            continue;
+          }
+
+          if (isNaN(logDate.getTime())) continue;
+
+          const memberId = deviceUserToMemberMap.get(deviceUserId);
+          if (!memberId) continue;
+
+          const dateOnly = new Date(logDate.getFullYear(), logDate.getMonth(), logDate.getDate());
+
+          let isCheckIn: boolean | null = null;
+          if (log.type !== undefined) {
+            isCheckIn = log.type === 0;
+          } else if (log.state !== undefined) {
+            isCheckIn = log.state === 0;
+          }
+
+          processedLogs.push({
+            deviceUserId,
+            memberId,
+            date: dateOnly,
+            logDate,
+            isCheckIn,
+          });
+        } catch (error) {
+          continue;
+        }
+      }
+
+      // Group by member and date
+      const logsByMemberAndDate = new Map<string, ProcessedLog[]>();
+      for (const log of processedLogs) {
+        const key = `${log.memberId}_${log.date.toISOString()}`;
+        if (!logsByMemberAndDate.has(key)) {
+          logsByMemberAndDate.set(key, []);
+        }
+        logsByMemberAndDate.get(key)!.push(log);
+      }
+
+      let synced = 0;
+      let errors = 0;
+
+      for (const [key, groupLogs] of logsByMemberAndDate.entries()) {
+        try {
+          if (groupLogs.length === 0) continue;
+
+          const firstLog = groupLogs[0];
+          const memberId = firstLog.memberId;
+          const dateOnly = firstLog.date;
+          const deviceUserId = firstLog.deviceUserId;
+
+          const checkIns: Date[] = [];
+          const checkOuts: Date[] = [];
+          const unknownLogs: Date[] = [];
+
+          for (const log of groupLogs) {
+            if (log.isCheckIn === true) {
+              checkIns.push(log.logDate);
+            } else if (log.isCheckIn === false) {
+              checkOuts.push(log.logDate);
+            } else {
+              unknownLogs.push(log.logDate);
+            }
+          }
+
+          const allLogsSorted = [...groupLogs].sort((a, b) => a.logDate.getTime() - b.logDate.getTime());
+
+          for (const unknownLog of unknownLogs) {
+            const earliestKnownCheckIn = checkIns.length > 0 ? checkIns[0] : null;
+            const latestKnownCheckOut = checkOuts.length > 0 ? checkOuts[checkOuts.length - 1] : null;
+
+            if (earliestKnownCheckIn && unknownLog < earliestKnownCheckIn) {
+              checkIns.push(unknownLog);
+            } else if (latestKnownCheckOut && unknownLog > latestKnownCheckOut) {
+              checkOuts.push(unknownLog);
+            } else if (earliestKnownCheckIn && latestKnownCheckOut) {
+              const distToCheckIn = Math.abs(unknownLog.getTime() - earliestKnownCheckIn.getTime());
+              const distToCheckOut = Math.abs(unknownLog.getTime() - latestKnownCheckOut.getTime());
+              if (distToCheckIn < distToCheckOut) {
+                checkIns.push(unknownLog);
+              } else {
+                checkOuts.push(unknownLog);
+              }
+            } else if (earliestKnownCheckIn) {
+              const latestCheckIn = checkIns[checkIns.length - 1];
+              if (unknownLog > latestCheckIn) {
+                checkOuts.push(unknownLog);
+              } else {
+                checkIns.push(unknownLog);
+              }
+            } else if (latestKnownCheckOut) {
+              const sortedCheckOuts = [...checkOuts].sort((a, b) => a.getTime() - b.getTime());
+              const earliestCheckOut = sortedCheckOuts[0];
+              if (unknownLog < earliestCheckOut) {
+                checkIns.push(unknownLog);
+              } else {
+                checkOuts.push(unknownLog);
+              }
+            } else {
+              const earliestLog = allLogsSorted[0].logDate;
+              const latestLog = allLogsSorted[allLogsSorted.length - 1].logDate;
+              if (unknownLog.getTime() === earliestLog.getTime()) {
+                checkIns.push(unknownLog);
+              } else if (unknownLog.getTime() === latestLog.getTime() && allLogsSorted.length > 1) {
+                checkOuts.push(unknownLog);
+              } else {
+                checkIns.push(unknownLog);
+              }
+            }
+          }
+
+          checkIns.sort((a, b) => a.getTime() - b.getTime());
+          checkOuts.sort((a, b) => a.getTime() - b.getTime());
+
+          let finalCheckIn: Date | null = checkIns.length > 0 ? checkIns[0] : null;
+          let finalCheckOut: Date | null = checkOuts.length > 0 ? checkOuts[checkOuts.length - 1] : null;
+
+          if (finalCheckIn && !finalCheckOut) {
+            finalCheckOut = new Date(finalCheckIn);
+            finalCheckOut.setHours(finalCheckOut.getHours() + 1);
+          }
+
+          if (finalCheckOut && !finalCheckIn) {
+            finalCheckIn = new Date(finalCheckOut);
+            finalCheckIn.setHours(finalCheckIn.getHours() - 1);
+          }
+
+          if (!finalCheckIn && !finalCheckOut) {
+            errors++;
+            continue;
+          }
+
+          if (finalCheckIn && isNaN(finalCheckIn.getTime())) {
+            errors++;
+            continue;
+          }
+          if (finalCheckOut && isNaN(finalCheckOut.getTime())) {
+            errors++;
+            continue;
+          }
+
+          if (finalCheckIn && finalCheckOut && finalCheckOut <= finalCheckIn) {
+            finalCheckOut = new Date(finalCheckIn);
+            finalCheckOut.setHours(finalCheckOut.getHours() + 1);
+          }
+
+          const existingRecord = await prisma.attendanceRecord.findUnique({
+            where: {
+              gymId_memberId_date: {
+                gymId,
+                memberId,
+                date: dateOnly,
+              },
+            },
+          });
+
+          const updateData: any = {
+            deviceUserId,
+            deviceSerialNumber: device.serialNumber || undefined,
+            status: 'PRESENT',
+            checkInTime: finalCheckIn,
+            checkOutTime: finalCheckOut,
+          };
+
+          if (existingRecord) {
+            await prisma.attendanceRecord.update({
+              where: { id: existingRecord.id },
+              data: updateData,
+            });
+          } else {
+            await prisma.attendanceRecord.create({
+              data: {
+                gymId,
+                memberId,
+                date: dateOnly,
+                ...updateData,
+              },
+            });
+          }
+          synced++;
+        } catch (error) {
+          errors++;
+        }
+      }
+
+      await prisma.deviceConfig.update({
+        where: { id: deviceId },
+        data: { lastSyncAt: new Date() },
+      });
+
+      await autoCheckoutIncompleteRecords(gymId);
+
+      sendSuccess(res, {
+        synced,
+        errors,
+        message: `Synced ${synced} attendance records. ${errors} errors encountered.`,
+      });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// All routes below require JWT authentication and gymId
 router.use(authenticateToken);
 router.use(requireGymId);
 
@@ -265,7 +602,7 @@ router.get(
               if (log.timestamp) return new Date(log.timestamp * 1000);
               return null;
             })
-            .filter((d: Date | null) => d !== null && !isNaN(d.getTime()))
+            .filter((d: Date | null): d is Date => d !== null && !isNaN(d.getTime()))
             .map((d: Date) => d.toISOString().split('T')[0]);
           if (dates.length > 0) {
           const uniqueDates = [...new Set(dates)].sort();
