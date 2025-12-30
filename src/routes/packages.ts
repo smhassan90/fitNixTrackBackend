@@ -296,24 +296,26 @@ router.delete(
       const gymId = req.gymId!;
       const id = parseInt(req.params.id, 10);
 
-      const packageData = await (prisma.package.findFirst({
-        where: { id: id as any, gymId: gymId as any },
-        include: {
-          _count: {
-            select: {
-              members: true,
-            },
-          },
-        },
-      }) as any);
+      // Check if package exists and get member count using raw SQL
+      const packageCheck = await prisma.$queryRaw<Array<{ id: number; memberCount: number }>>`
+        SELECT 
+          p.id,
+          COUNT(m.id) as memberCount
+        FROM packages p
+        LEFT JOIN members m ON m.packageId = p.id
+        WHERE p.id = ${id} AND p.gymId = ${gymId}
+        GROUP BY p.id
+      `;
 
-      if (!packageData) {
+      if (!packageCheck || packageCheck.length === 0) {
         sendError(res, new NotFoundError('Package', id));
         return;
       }
 
+      const memberCount = Number(packageCheck[0].memberCount) || 0;
+
       // Check if package is assigned to members
-      if (packageData._count?.members > 0) {
+      if (memberCount > 0) {
         sendError(
           res,
           new ValidationError('Cannot delete package assigned to members')
@@ -321,10 +323,15 @@ router.delete(
         return;
       }
 
-      // Delete package
-      await prisma.package.delete({
-        where: { id: id as any },
+      // Delete package features first (cascade should handle this, but being explicit)
+      await (prisma as any).packageFeature.deleteMany({
+        where: { packageId: id },
       });
+
+      // Delete package using raw SQL to avoid Prisma Client type issues
+      await prisma.$executeRaw`
+        DELETE FROM packages WHERE id = ${id} AND gymId = ${gymId}
+      `;
 
       sendSuccess(res, { message: 'Package deleted successfully' });
     } catch (error) {
