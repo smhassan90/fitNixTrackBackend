@@ -125,11 +125,11 @@ router.post(
       const gymId = req.gymId!;
       const { name, price, duration, featureIds } = req.body;
 
-      // Use raw SQL to create package without features field
-      // This bypasses Prisma Client's old schema expectations
+      // Use raw SQL to create package
+      // Note: Database still has old 'features' JSON column, so we provide empty array
       await prisma.$executeRaw`
-        INSERT INTO packages (gymId, name, price, duration, createdAt, updatedAt)
-        VALUES (${gymId}, ${name}, ${price}, ${duration}, NOW(), NOW())
+        INSERT INTO packages (gymId, name, price, duration, features, createdAt, updatedAt)
+        VALUES (${gymId}, ${name}, ${price}, ${duration}, JSON_ARRAY(), NOW(), NOW())
       `;
 
       // Get the created package ID
