@@ -125,19 +125,26 @@ router.post(
       const gymId = req.gymId!;
       const { name, price, duration, featureIds } = req.body;
 
+      // Build create data - only include features if featureIds is provided and not empty
+      const createData: any = {
+        gymId: gymId as any,
+        name,
+        price,
+        duration,
+      };
+
+      // Only add features if featureIds is provided and has items
+      if (featureIds && Array.isArray(featureIds) && featureIds.length > 0) {
+        createData.features = {
+          create: featureIds.map((featureId: number) => ({
+            featureId,
+          })),
+        };
+      }
+
       // Create package
       const packageData = await (prisma.package.create({
-        data: {
-          gymId: gymId as any,
-          name,
-          price,
-          duration,
-          features: {
-            create: (featureIds || []).map((featureId: number) => ({
-              featureId,
-            })),
-          },
-        },
+        data: createData,
         include: {
           features: {
             include: {
