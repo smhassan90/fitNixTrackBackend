@@ -108,10 +108,10 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
 
       const payment = await prisma.payment.findFirst({
-        where: { id, gymId },
+        where: { id: id as any, gymId: gymId as any },
         include: {
           member: true,
         },
@@ -201,12 +201,12 @@ router.put(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
       const { month, amount, dueDate, status } = req.body;
 
       // Check if payment exists
       const existingPayment = await prisma.payment.findFirst({
-        where: { id, gymId },
+        where: { id: id as any, gymId: gymId as any },
       });
 
       if (!existingPayment) {
@@ -222,7 +222,7 @@ router.put(
       if (status !== undefined) updateData.status = status;
 
       const payment = await prisma.payment.update({
-        where: { id },
+        where: { id: id as any },
         data: updateData,
         include: {
           member: {
@@ -250,12 +250,12 @@ router.patch(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
 
       await markPaymentAsPaid(id, gymId);
 
       const payment = await prisma.payment.findFirst({
-        where: { id, gymId },
+        where: { id: id as any, gymId: gymId as any },
         include: {
           member: {
             select: {
@@ -282,15 +282,15 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
 
-      const payment = await prisma.payment.findFirst({
-        where: { id, gymId },
+      const payment = await (prisma.payment.findFirst({
+        where: { id: id as any, gymId: gymId as any },
         include: {
           member: true,
           gym: true,
         },
-      });
+      }) as any);
 
       if (!payment) {
         sendError(res, new NotFoundError('Payment', id));
@@ -302,14 +302,14 @@ router.get(
         receiptNumber: payment.id,
         date: payment.paidDate || payment.createdAt,
         member: {
-          name: payment.member.name,
-          email: payment.member.email,
-          phone: payment.member.phone,
+          name: payment.member?.name || '',
+          email: payment.member?.email || '',
+          phone: payment.member?.phone || '',
         },
         gym: {
-          name: payment.gym.name,
-          address: payment.gym.address,
-          phone: payment.gym.phone,
+          name: payment.gym?.name || '',
+          address: payment.gym?.address || '',
+          phone: payment.gym?.phone || '',
         },
         payment: {
           month: payment.month,
@@ -334,10 +334,10 @@ router.delete(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
 
       const payment = await prisma.payment.findFirst({
-        where: { id, gymId },
+        where: { id: id as any, gymId: gymId as any },
       });
 
       if (!payment) {
@@ -346,7 +346,7 @@ router.delete(
       }
 
       await prisma.payment.delete({
-        where: { id },
+        where: { id: id as any },
       });
 
       sendSuccess(res, { message: 'Payment deleted successfully' });

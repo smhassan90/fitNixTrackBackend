@@ -84,10 +84,10 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
 
-      const trainer = await prisma.trainer.findFirst({
-        where: { id, gymId },
+      const trainer = await (prisma.trainer.findFirst({
+        where: { id: id as any, gymId: gymId as any },
         include: {
           _count: {
             select: {
@@ -100,7 +100,7 @@ router.get(
             },
           },
         },
-      });
+      }) as any);
 
       if (!trainer) {
         sendError(res, new NotFoundError('Trainer', id));
@@ -109,7 +109,7 @@ router.get(
 
       sendSuccess(res, {
         ...trainer,
-        members: trainer.members.map((mt) => mt.member),
+        members: (trainer.members || []).map((mt: any) => mt.member),
       });
     } catch (error) {
       sendError(res, error as Error);
@@ -185,7 +185,7 @@ router.put(
 
       // Check if trainer exists
       const existingTrainer = await prisma.trainer.findFirst({
-        where: { id, gymId },
+        where: { id: id as any, gymId: gymId as any },
       });
 
       if (!existingTrainer) {
@@ -207,7 +207,7 @@ router.put(
       if (endTime !== undefined) updateData.endTime = endTime;
 
       const trainer = await prisma.trainer.update({
-        where: { id },
+        where: { id: id as any },
         data: updateData,
         include: {
           _count: {
@@ -232,10 +232,10 @@ router.delete(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
 
-      const trainer = await prisma.trainer.findFirst({
-        where: { id, gymId },
+      const trainer = await (prisma.trainer.findFirst({
+        where: { id: id as any, gymId: gymId as any },
         include: {
           _count: {
             select: {
@@ -243,7 +243,7 @@ router.delete(
             },
           },
         },
-      });
+      }) as any);
 
       if (!trainer) {
         sendError(res, new NotFoundError('Trainer', id));
@@ -251,7 +251,7 @@ router.delete(
       }
 
       // Check if trainer has members
-      if (trainer._count.members > 0) {
+      if (trainer._count?.members > 0) {
         sendError(
           res,
           new ValidationError('Cannot delete trainer with assigned members')
@@ -261,7 +261,7 @@ router.delete(
 
       // Delete trainer
       await prisma.trainer.delete({
-        where: { id },
+        where: { id: id as any },
       });
 
       sendSuccess(res, { message: 'Trainer deleted successfully' });
