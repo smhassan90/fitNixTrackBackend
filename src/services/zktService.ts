@@ -113,39 +113,89 @@ export class ZKTService {
 
   /**
    * Get all attendance logs from the device
+   * Retries on timeout errors
    */
-  async getAttendanceLogs(): Promise<AttendanceLog[]> {
+  async getAttendanceLogs(retries: number = 3): Promise<AttendanceLog[]> {
     if (!this.device) {
       throw new Error('Device not connected. Call connect() first.');
     }
 
-    try {
-      const result = await this.device.getAttendances();
-      
-      // The library returns { data: [...], err: ... } structure
-      if (!result) {
-        return [];
-      }
-      
-      // Check if result has a data property (library format)
-      if (result && typeof result === 'object' && 'data' in result) {
-        const logs = result.data;
-        if (Array.isArray(logs)) {
-          return logs;
+    let lastError: any = null;
+    
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        console.log(`Fetching attendance logs (attempt ${attempt}/${retries})...`);
+        
+        // Set a longer timeout for getAttendances if device has many logs
+        const result = await Promise.race([
+          this.device.getAttendances(),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Request timeout after 30 seconds')), 30000)
+          )
+        ]) as any;
+        
+        // The library returns { data: [...], err: ... } structure
+        if (!result) {
+          return [];
         }
+        
+        // Check if result has an error
+        if (result.err) {
+          const error = result.err;
+          // Check if it's a timeout error
+          if (error.message && error.message.includes('TIMEOUT')) {
+            console.warn(`Timeout error on attempt ${attempt}. ${attempt < retries ? 'Retrying...' : 'Max retries reached.'}`);
+            lastError = error;
+            if (attempt < retries) {
+              // Wait before retrying (exponential backoff)
+              await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+              continue;
+            }
+          }
+          throw error;
+        }
+        
+        // Check if result has a data property (library format)
+        if (result && typeof result === 'object' && 'data' in result) {
+          const logs = result.data;
+          if (Array.isArray(logs)) {
+            console.log(`Successfully fetched ${logs.length} attendance logs`);
+            return logs;
+          }
+          return [];
+        }
+        
+        // If it's already an array, return it
+        if (Array.isArray(result)) {
+          console.log(`Successfully fetched ${result.length} attendance logs`);
+          return result;
+        }
+        
         return [];
+      } catch (error: any) {
+        lastError = error;
+        const errorMessage = error?.message || error?.toString() || 'Unknown error';
+        
+        // Check if it's a timeout error
+        if (errorMessage.includes('TIMEOUT') || errorMessage.includes('timeout')) {
+          console.warn(`Timeout error on attempt ${attempt}/${retries}: ${errorMessage}`);
+          if (attempt < retries) {
+            // Wait before retrying (exponential backoff)
+            await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+            continue;
+          }
+        }
+        
+        // If it's the last attempt or not a timeout, throw the error
+        if (attempt === retries) {
+          console.error(`Error fetching attendance logs after ${retries} attempts:`, error);
+          throw new Error(`Failed to fetch attendance logs: ${errorMessage}. Device may have too many logs or network issues.`);
+        }
       }
-      
-      // If it's already an array, return it
-      if (Array.isArray(result)) {
-        return result;
-      }
-      
-      return [];
-    } catch (error) {
-      console.error('Error fetching attendance logs:', error);
-      throw error;
     }
+    
+    // Should not reach here, but just in case
+    throw lastError || new Error('Failed to fetch attendance logs after retries');
   }
 
   /**

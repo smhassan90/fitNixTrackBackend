@@ -98,6 +98,58 @@ router.post(
 
 // POST /api/device/:id/test - Test device connection
 // NOTE: More specific routes must come before /:id route
+
+// DELETE /api/device/:id/attendance-logs - Clear all attendance logs from device
+router.delete(
+  '/:id/attendance-logs',
+  validate(testDeviceConnectionSchema), // Reuse test connection schema for device ID validation
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const id = parseInt(req.params.id, 10);
+
+      const device = await prisma.deviceConfig.findFirst({
+        where: { id: id as any, gymId: gymId as any },
+      });
+
+      if (!device) {
+        sendError(res, new NotFoundError('Device configuration', id));
+        return;
+      }
+
+      const zktService = new ZKTService({
+        ip: device.ipAddress,
+        port: device.port,
+      });
+
+      // Connect to device
+      const connected = await zktService.connect();
+      if (!connected) {
+        sendError(res, new Error('Failed to connect to device'));
+        return;
+      }
+
+      try {
+        // Clear all attendance logs from device
+        const cleared = await zktService.clearAttendanceLogs();
+        
+        if (cleared) {
+          sendSuccess(res, {
+            cleared: true,
+            message: 'All attendance logs cleared from device successfully',
+          });
+        } else {
+          sendError(res, new Error('Failed to clear attendance logs from device'));
+        }
+      } finally {
+        await zktService.disconnect();
+      }
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
 router.post(
   '/:id/test',
   validate(testDeviceConnectionSchema),
@@ -188,7 +240,42 @@ router.get(
 
       try {
         // Get attendance logs from device
-        const logs = await zktService.getAttendanceLogs();
+        // Retry up to 3 times with exponential backoff for timeout errors
+        let logs: any[] = [];
+        try {
+          logs = await zktService.getAttendanceLogs(3);
+        } catch (error: any) {
+          // Handle timeout and null response errors gracefully
+          const errorMessage = error?.message || error?.toString() || 'Unknown error';
+          if (errorMessage.includes('TIMEOUT') || errorMessage.includes('timeout') || errorMessage.includes('null')) {
+            console.error('Device timeout or null response error:', errorMessage);
+            sendError(res, new Error(`Device timeout: The device took too long to respond or returned invalid data. This may happen if the device has too many logs. Try clearing device logs first or check device connectivity.`));
+            return;
+          }
+          throw error; // Re-throw if it's a different error
+        }
+        
+        console.log(`Fetched ${logs.length} raw logs from device`);
+        if (logs.length > 0) {
+          console.log(`Sample log entry:`, JSON.stringify(logs[0], null, 2));
+          // Show date range of logs
+          const dates = logs
+            .map((log: any) => {
+              if (log.recordTime) return new Date(log.recordTime);
+              if (log.timestamp) return new Date(log.timestamp * 1000);
+              return null;
+            })
+            .filter((d: Date | null) => d !== null && !isNaN(d.getTime()))
+            .map((d: Date) => d.toISOString().split('T')[0]);
+          if (dates.length > 0) {
+          const uniqueDates = [...new Set(dates)].sort();
+          console.log(`Log date range: ${uniqueDates[0]} to ${uniqueDates[uniqueDates.length - 1]}`);
+          console.log(`Today's date: ${new Date().toISOString().split('T')[0]}`);
+          const todayDate = new Date().toISOString().split('T')[0];
+          const todayLogs = dates.filter((d: string | null) => d !== null && d === todayDate);
+          console.log(`Logs from today: ${todayLogs.length}`);
+          }
+        }
 
         // Create a map of device user ID to member ID
         const deviceUserToMemberMap = new Map<string, number>();
@@ -202,6 +289,16 @@ router.get(
             memberPhone: mapping.member.phone,
           });
         });
+        
+        console.log(`User mappings: ${deviceUserToMemberMap.size} mappings found`);
+        console.log(`Mapped device user IDs:`, Array.from(deviceUserToMemberMap.keys()));
+        if (device.userMappings && device.userMappings.length > 0) {
+          console.log(`Mapping details:`, (device.userMappings as any[]).map((m: any) => ({
+            deviceUserId: m.deviceUserId,
+            memberId: m.member.id,
+            memberName: m.member.name
+          })));
+        }
 
         // Determine the start time for incremental sync
         // If fullSync=true, delete all existing records and fetch all records from device
@@ -252,6 +349,12 @@ router.get(
           memberInfo: any;
         }>();
 
+        let processedLogs = 0;
+        let skippedNoTimestamp = 0;
+        let skippedDateFilter = 0;
+        let skippedNoUserId = 0;
+        let skippedUnmapped = 0;
+
         for (const log of logs) {
           // Handle both timestamp formats
           let logDate: Date;
@@ -260,25 +363,33 @@ router.get(
           } else if (log.timestamp) {
             logDate = new Date(log.timestamp * 1000);
           } else {
+            skippedNoTimestamp++;
             continue; // Skip logs without timestamp
           }
           
           // Validate date
           if (isNaN(logDate.getTime())) {
+            skippedNoTimestamp++;
             continue;
           }
           
           // If we have a sync start time, only include logs after it
+          // For fullSync, syncStartTime might be set from startDate query param
+          // If fullSync=true and no startDate, syncStartTime is undefined (fetch all)
           if (syncStartTime && logDate <= syncStartTime) {
+            skippedDateFilter++;
+            console.log(`Skipping log from ${logDate.toISOString()} (before sync start time ${syncStartTime.toISOString()})`);
             continue;
           }
           
           // Filter by date range if provided
           if (syncEndTime && logDate > syncEndTime) {
+            skippedDateFilter++;
             continue;
           }
 
-          // Get device user ID
+          // Get device user ID - try multiple fields and formats
+          // Priority: deviceUserId > id > uid > userId > userSn
           let deviceUserId: string | null = null;
           if (log.deviceUserId !== undefined && log.deviceUserId !== null) {
             deviceUserId = log.deviceUserId.toString();
@@ -286,16 +397,31 @@ router.get(
             deviceUserId = log.id.toString();
           } else if (log.uid !== undefined && log.uid !== null) {
             deviceUserId = log.uid.toString();
+          } else if ((log as any).userId !== undefined && (log as any).userId !== null) {
+            // Some devices use userId field
+            deviceUserId = (log as any).userId.toString();
+          } else if ((log as any).userSn !== undefined && (log as any).userSn !== null) {
+            // Some devices use userSn field (user serial number)
+            deviceUserId = (log as any).userSn.toString();
           }
 
           if (!deviceUserId) {
+            skippedNoUserId++;
+            console.warn(`Log entry missing device user ID:`, JSON.stringify(log));
             continue;
           }
 
           const memberId = deviceUserToMemberMap.get(deviceUserId);
           if (!memberId) {
+            skippedUnmapped++;
+            // Log unmapped users for debugging (but limit to first 5 to avoid spam)
+            if (skippedUnmapped <= 5) {
+              console.warn(`No mapping found for device user ID: ${deviceUserId}. Log date: ${logDate.toISOString()}. Available mappings:`, Array.from(deviceUserToMemberMap.keys()));
+            }
             continue; // Skip unmapped users
           }
+
+          processedLogs++;
 
           // Determine if this is check-in or check-out first
           let isCheckIn: boolean;
@@ -610,6 +736,18 @@ router.get(
             errors++;
           }
         }
+
+        // Log processing summary
+        console.log(`\n=== Sync Summary ===`);
+        console.log(`Total logs fetched: ${logs.length}`);
+        console.log(`Logs processed: ${processedLogs}`);
+        console.log(`Skipped - no timestamp: ${skippedNoTimestamp}`);
+        console.log(`Skipped - date filter: ${skippedDateFilter}`);
+        console.log(`Skipped - no user ID: ${skippedNoUserId}`);
+        console.log(`Skipped - unmapped user: ${skippedUnmapped}`);
+        console.log(`Records synced: ${synced}`);
+        console.log(`Errors: ${errors}`);
+        console.log(`===================\n`);
 
         // Update last sync time to current time
         const newLastSyncAt = new Date();
