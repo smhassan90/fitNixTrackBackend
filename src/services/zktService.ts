@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma';
 
 // Import node-zklib - it's a constructor function
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const ZKLibConstructor = require('node-zklib');
 
 export interface ZKTDeviceConfig {
@@ -346,7 +347,7 @@ export async function syncAttendanceFromDevice(
 
     // Create a map of device user ID to member ID
     const deviceUserToMemberMap = new Map<string, number>();
-    deviceConfig.userMappings.forEach((mapping) => {
+    (deviceConfig.userMappings || []).forEach((mapping: any) => {
       deviceUserToMemberMap.set(mapping.deviceUserId, mapping.memberId);
     });
 
@@ -431,7 +432,7 @@ export async function syncAttendanceFromDevice(
           // If we have check-in time but not check-out, and this is later, treat as check-out
           // If we have check-out but this is earlier check-in, update check-in
           // Otherwise, use type/state to determine
-          let updateData: any = {
+          const updateData: any = {
             deviceUserId,
             deviceSerialNumber: deviceConfig.serialNumber || undefined,
             status: 'PRESENT',

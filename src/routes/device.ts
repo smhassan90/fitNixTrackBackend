@@ -104,7 +104,7 @@ router.post(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
 
       const device = await prisma.deviceConfig.findFirst({
         where: { id, gymId },
@@ -141,7 +141,7 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
       const { startDate, endDate, fullSync } = req.query as any;
 
       // Use retry logic for database connection issues
@@ -193,7 +193,7 @@ router.get(
         // Create a map of device user ID to member ID
         const deviceUserToMemberMap = new Map<string, number>();
         const deviceUserToMemberInfoMap = new Map<string, any>();
-        device.userMappings.forEach((mapping) => {
+        (device.userMappings || []).forEach((mapping: any) => {
           deviceUserToMemberMap.set(mapping.deviceUserId, mapping.member.id);
           deviceUserToMemberInfoMap.set(mapping.deviceUserId, {
             memberId: mapping.member.id,
@@ -665,7 +665,7 @@ router.post(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
       const { startDate, endDate } = req.query as any;
 
       const device = await prisma.deviceConfig.findFirst({
@@ -699,7 +699,7 @@ router.post(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
 
       const device = await prisma.deviceConfig.findFirst({
         where: { id, gymId },
@@ -751,7 +751,7 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
 
       const device = await prisma.deviceConfig.findFirst({
         where: { id, gymId },
@@ -781,7 +781,7 @@ router.put(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
       const updateData = req.body;
 
       const device = await prisma.deviceConfig.findFirst({
@@ -833,7 +833,7 @@ router.delete(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
 
       const device = await prisma.deviceConfig.findFirst({
         where: { id, gymId },
@@ -864,7 +864,7 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
 
       // Verify device belongs to gym
       const device = await prisma.deviceConfig.findFirst({
@@ -922,7 +922,7 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
       const { memberId, isActive } = req.query as any;
 
       // Verify device belongs to gym
@@ -972,7 +972,7 @@ router.post(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
       const { memberId, deviceUserId, deviceUserName } = req.body;
 
       // Verify device belongs to gym
@@ -1043,7 +1043,7 @@ router.put(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
       const updateData = req.body;
 
       const mapping = await prisma.deviceUserMapping.findFirst({
@@ -1104,7 +1104,7 @@ router.delete(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
 
       const mapping = await prisma.deviceUserMapping.findFirst({
         where: { id },
