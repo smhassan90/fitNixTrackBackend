@@ -125,26 +125,38 @@ router.post(
       const gymId = req.gymId!;
       const { name, price, duration, featureIds } = req.body;
 
-      // Build create data - only include features if featureIds is provided and not empty
-      const createData: any = {
-        gymId: gymId as any,
-        name,
-        price,
-        duration,
-      };
+      // Use raw SQL to create package without features field
+      // This bypasses Prisma Client's old schema expectations
+      await prisma.$executeRaw`
+        INSERT INTO packages (gymId, name, price, duration, createdAt, updatedAt)
+        VALUES (${gymId}, ${name}, ${price}, ${duration}, NOW(), NOW())
+      `;
 
-      // Only add features if featureIds is provided and has items
-      if (featureIds && Array.isArray(featureIds) && featureIds.length > 0) {
-        createData.features = {
-          create: featureIds.map((featureId: number) => ({
-            featureId,
-          })),
-        };
+      // Get the created package ID
+      const result = await prisma.$queryRaw<Array<{ id: number }>>`
+        SELECT LAST_INSERT_ID() as id
+      `;
+
+      const createdPackageId = result[0]?.id;
+
+      if (!createdPackageId) {
+        throw new Error('Failed to create package');
       }
 
-      // Create package
-      const packageData = await (prisma.package.create({
-        data: createData,
+      // Add features separately if provided
+      if (featureIds && Array.isArray(featureIds) && featureIds.length > 0) {
+        await (prisma as any).packageFeature.createMany({
+          data: featureIds.map((featureId: number) => ({
+            packageId: createdPackageId,
+            featureId,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      // Fetch the package with features
+      const packageData = await (prisma.package.findFirst({
+        where: { id: createdPackageId as any },
         include: {
           features: {
             include: {
@@ -153,6 +165,37 @@ router.post(
           },
         } as any,
       }) as any);
+
+      if (!packageData) {
+        throw new Error('Failed to fetch created package');
+      }
+
+      // Add features separately if provided
+      if (featureIds && Array.isArray(featureIds) && featureIds.length > 0) {
+        await (prisma as any).packageFeature.createMany({
+          data: featureIds.map((featureId: number) => ({
+            packageId: packageData.id,
+            featureId,
+          })),
+          skipDuplicates: true,
+        });
+
+        // Fetch the package again with features
+        const updatedPackage = await (prisma.package.findFirst({
+          where: { id: packageData.id },
+          include: {
+            features: {
+              include: {
+                feature: true,
+              },
+            },
+          } as any,
+        }) as any);
+
+        if (updatedPackage) {
+          packageData.features = updatedPackage.features;
+        }
+      }
 
       // Transform features to array of feature names
       const packageWithFeatures = {
