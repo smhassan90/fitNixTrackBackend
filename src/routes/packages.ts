@@ -24,7 +24,7 @@ router.use(requireGymId);
 router.get('/features', async (req: AuthRequest, res: Response) => {
   try {
     // Query database - returns only what's in the features table
-    const features = await prisma.feature.findMany({
+    const features = await (prisma as any).feature.findMany({
       orderBy: { name: 'asc' },
     });
 
@@ -43,8 +43,8 @@ router.get(
       const gymId = req.gymId!;
       const { sortBy = 'createdAt', sortOrder = 'desc' } = req.query as any;
 
-      const packages = await prisma.package.findMany({
-        where: { gymId },
+      const packages = await (prisma.package.findMany({
+        where: { gymId: gymId as any },
         include: {
           features: {
             include: {
@@ -56,14 +56,14 @@ router.get(
               members: true,
             },
           },
-        },
+        } as any,
         orderBy: { [sortBy]: sortOrder },
-      });
+      }) as any);
 
       // Transform features to array of feature names
-      const packagesWithFeatures = packages.map((pkg) => ({
+      const packagesWithFeatures = packages.map((pkg: any) => ({
         ...pkg,
-        features: pkg.features.map((pf) => pf.feature.name),
+        features: (pkg.features || []).map((pf: { feature: { name: string } }) => pf.feature.name),
       }));
 
       sendSuccess(res, { packages: packagesWithFeatures });
@@ -80,10 +80,10 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
 
-      const packageData = await prisma.package.findFirst({
-        where: { id, gymId },
+      const packageData = await (prisma.package.findFirst({
+        where: { id: id as any, gymId: gymId as any },
         include: {
           features: {
             include: {
@@ -95,8 +95,8 @@ router.get(
               members: true,
             },
           },
-        },
-      });
+        } as any,
+      }) as any);
 
       if (!packageData) {
         sendError(res, new NotFoundError('Package', id));
@@ -106,7 +106,7 @@ router.get(
       // Transform features to array of feature names
       const packageWithFeatures = {
         ...packageData,
-        features: packageData.features.map((pf) => pf.feature.name),
+        features: (packageData.features || []).map((pf: { feature: { name: string } }) => pf.feature.name),
       };
 
       sendSuccess(res, packageWithFeatures);
@@ -126,9 +126,9 @@ router.post(
       const { name, price, duration, featureIds } = req.body;
 
       // Create package
-      const packageData = await prisma.package.create({
+      const packageData = await (prisma.package.create({
         data: {
-          gymId,
+          gymId: gymId as any,
           name,
           price,
           duration,
@@ -144,13 +144,13 @@ router.post(
               feature: true,
             },
           },
-        },
-      });
+        } as any,
+      }) as any);
 
       // Transform features to array of feature names
       const packageWithFeatures = {
         ...packageData,
-        features: packageData.features.map((pf) => pf.feature.name),
+        features: (packageData.features || []).map((pf: { feature: { name: string } }) => pf.feature.name),
       };
 
       sendSuccess(res, packageWithFeatures, 'Package created successfully', 201);
@@ -167,13 +167,13 @@ router.put(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
       const { name, price, duration, featureIds } = req.body;
 
       // Check if package exists
-      const existingPackage = await prisma.package.findFirst({
-        where: { id, gymId },
-      });
+      const existingPackage = await (prisma.package.findFirst({
+        where: { id: id as any, gymId: gymId as any },
+      }) as any);
 
       if (!existingPackage) {
         sendError(res, new NotFoundError('Package', id));
@@ -189,7 +189,7 @@ router.put(
       // Update features if provided
       if (featureIds !== undefined) {
         // Delete existing features
-        await prisma.packageFeature.deleteMany({
+        await (prisma as any).packageFeature.deleteMany({
           where: { packageId: id },
         });
 
@@ -201,8 +201,8 @@ router.put(
         };
       }
 
-      const packageData = await prisma.package.update({
-        where: { id },
+      const packageData = await (prisma.package.update({
+        where: { id: id as any },
         data: updateData,
         include: {
           features: {
@@ -210,13 +210,13 @@ router.put(
               feature: true,
             },
           },
-        },
-      });
+        } as any,
+      }) as any);
 
       // Transform features to array of feature names
       const packageWithFeatures = {
         ...packageData,
-        features: packageData.features.map((pf) => pf.feature.name),
+        features: (packageData.features || []).map((pf: { feature: { name: string } }) => pf.feature.name),
       };
 
       sendSuccess(res, packageWithFeatures, 'Package updated successfully');
@@ -233,10 +233,10 @@ router.delete(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
+      const id = parseInt(req.params.id, 10);
 
-      const packageData = await prisma.package.findFirst({
-        where: { id, gymId },
+      const packageData = await (prisma.package.findFirst({
+        where: { id: id as any, gymId: gymId as any },
         include: {
           _count: {
             select: {
@@ -244,7 +244,7 @@ router.delete(
             },
           },
         },
-      });
+      }) as any);
 
       if (!packageData) {
         sendError(res, new NotFoundError('Package', id));
@@ -252,7 +252,7 @@ router.delete(
       }
 
       // Check if package is assigned to members
-      if (packageData._count.members > 0) {
+      if (packageData._count?.members > 0) {
         sendError(
           res,
           new ValidationError('Cannot delete package assigned to members')
@@ -262,7 +262,7 @@ router.delete(
 
       // Delete package
       await prisma.package.delete({
-        where: { id },
+        where: { id: id as any },
       });
 
       sendSuccess(res, { message: 'Package deleted successfully' });
