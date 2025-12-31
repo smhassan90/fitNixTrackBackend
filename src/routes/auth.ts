@@ -18,22 +18,42 @@ router.post(
     try {
       const { email, password } = req.body;
 
-      // Find user
-      const user = await prisma.user.findUnique({
-        where: { email },
+      // Normalize email (lowercase, trim) and password (trim)
+      const normalizedEmail = email?.toLowerCase().trim();
+      const normalizedPassword = password?.trim();
+
+      if (!normalizedEmail || !normalizedPassword) {
+        sendError(res, new UnauthorizedError('Email and password are required'));
+        return;
+      }
+
+      // Find user (email is already normalized to lowercase)
+      let user = await prisma.user.findUnique({
+        where: { email: normalizedEmail },
         include: { gym: true },
       });
+
+      // Fallback: If not found, search all users and match case-insensitively
+      // This handles cases where email in DB has different casing
+      if (!user) {
+        const allUsers = await prisma.user.findMany({
+          include: { gym: true },
+        });
+        user = allUsers.find(u => u.email.toLowerCase().trim() === normalizedEmail) || null;
+      }
 
       if (!user) {
         sendError(res, new UnauthorizedError('Invalid email or password'));
         return;
       }
 
-      // Verify password
+      // Verify password - trim both for comparison
       // TEMPORARY: Using plain text comparison for development
       // TODO: Re-enable bcrypt hashing before production
-      // const isValidPassword = await bcrypt.compare(password, user.password);
-      const isValidPassword = password === user.password;
+      // const isValidPassword = await bcrypt.compare(normalizedPassword, user.password);
+      const userPassword = user.password?.trim() || '';
+      const isValidPassword = normalizedPassword === userPassword;
+      
       if (!isValidPassword) {
         sendError(res, new UnauthorizedError('Invalid email or password'));
         return;
