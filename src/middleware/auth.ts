@@ -77,19 +77,23 @@ export function authenticateToken(
       gymId = decoded.gymId;
     }
     
+    // Explicitly construct user object to ensure all fields are set correctly
     req.user = {
-      ...decoded,
-      id: userId, // Ensure it's always a number
-      gymId, // Ensure it's always a number
-      role: decoded.role, // Ensure role is explicitly set
-    };
-    
-    // Debug logging
-    console.log('[authenticateToken] User authenticated:', {
       id: userId,
       email: decoded.email,
-      role: decoded.role,
-      gymId: gymId
+      name: decoded.name,
+      role: decoded.role || 'STAFF', // Default to STAFF if role is missing
+      gymId: gymId,
+      gymName: decoded.gymName,
+    };
+    
+    // Debug logging - always log to help debug Vercel issues
+    console.log('[authenticateToken] User authenticated:', {
+      id: req.user.id,
+      email: req.user.email,
+      role: req.user.role,
+      roleType: typeof req.user.role,
+      gymId: req.user.gymId
     });
     
     next();
@@ -104,28 +108,45 @@ export function authenticateToken(
 export function requireRole(...allowedRoles: string[]) {
   return (req: AuthRequest, res: Response, next: NextFunction): void => {
     if (!req.user) {
+      console.error('[requireRole] No user found in request');
       sendError(res, new UnauthorizedError('Authentication required'));
       return;
     }
 
     const userRole = req.user.role;
     
-    // Debug logging (only in development)
-    if (process.env.NODE_ENV === 'development') {
-      console.log('[requireRole] User role:', userRole, 'Type:', typeof userRole);
-      console.log('[requireRole] Allowed roles:', allowedRoles);
-      console.log('[requireRole] Match:', allowedRoles.includes(userRole));
-    }
+    // Always log for debugging (can be removed later)
+    console.log('[requireRole] Checking access:', {
+      userRole: userRole,
+      userRoleType: typeof userRole,
+      allowedRoles: allowedRoles,
+      userEmail: req.user.email,
+      userId: req.user.id
+    });
     
     // Check if user role matches any of the allowed roles
-    if (!userRole || !allowedRoles.includes(userRole)) {
-      if (process.env.NODE_ENV === 'development') {
-        console.log('[requireRole] Access denied - User role:', userRole, 'not in allowed roles:', allowedRoles);
-      }
+    if (!userRole) {
+      console.error('[requireRole] No role found for user:', req.user.email);
+      sendError(res, new ForbiddenError('Unauthorized. Admin access required.'));
+      return;
+    }
+    
+    // Normalize role to uppercase for comparison (in case of case sensitivity issues)
+    const normalizedUserRole = String(userRole).toUpperCase();
+    const normalizedAllowedRoles = allowedRoles.map(r => String(r).toUpperCase());
+    
+    if (!normalizedAllowedRoles.includes(normalizedUserRole)) {
+      console.error('[requireRole] Access denied:', {
+        userRole: userRole,
+        normalizedUserRole: normalizedUserRole,
+        allowedRoles: allowedRoles,
+        normalizedAllowedRoles: normalizedAllowedRoles
+      });
       sendError(res, new ForbiddenError('Unauthorized. Admin access required.'));
       return;
     }
 
+    console.log('[requireRole] Access granted for role:', userRole);
     next();
   };
 }
