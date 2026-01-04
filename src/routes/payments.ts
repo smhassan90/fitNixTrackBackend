@@ -105,6 +105,11 @@ router.get(
         const memberNextPayments = new Map<number, typeof allPayments[0]>();
         
         for (const payment of allPayments) {
+          // Ensure we only process payments with the correct status
+          if (payment.status !== normalizedStatus) {
+            continue;
+          }
+          
           const existing = memberNextPayments.get(payment.memberId);
           // If no payment for this member yet, or this one has an earlier due date, use this one
           if (!existing || payment.dueDate < existing.dueDate) {
