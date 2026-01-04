@@ -45,9 +45,6 @@ router.get('/stats', async (req: AuthRequest, res: Response) => {
     ]);
 
     // Calculate payment stats - only count next upcoming payment per member
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-
     // Group payments by member and get only the next upcoming payment for each
     const memberNextPayments = new Map<number, typeof allPayments[0]>();
     
@@ -117,10 +114,8 @@ router.get('/stats', async (req: AuthRequest, res: Response) => {
     const workoutStats = present;
 
     // Calculate currently in gym (members with attendance today)
-    const todayStart = new Date(today);
-    todayStart.setUTCHours(0, 0, 0, 0);
-    const todayEnd = new Date(today);
-    todayEnd.setUTCHours(23, 59, 59, 999);
+    const todayStart = getStartOfDay(today);
+    const todayEnd = getEndOfDay(today);
 
     const todayAttendance = await prisma.attendanceRecord.count({
       where: {
