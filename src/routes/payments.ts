@@ -65,26 +65,78 @@ router.get(
         ];
       }
 
-      // Get total count
-      const total = await prisma.payment.count({ where });
+      // If filtering by PENDING or OVERDUE, only show next payment per member
+      let payments: any[] = [];
+      let total = 0;
 
-      // Get payments
-      const payments = await prisma.payment.findMany({
-        where,
-        include: {
-          member: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              phone: true,
+      if (status === 'PENDING' || status === 'OVERDUE') {
+        // Get all payments matching the status
+        const allPayments = await prisma.payment.findMany({
+          where,
+          include: {
+            member: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                phone: true,
+              },
             },
           },
-        },
-        orderBy: { [sortBy]: sortOrder },
-        skip: (pageNum - 1) * limitNum,
-        take: limitNum,
-      });
+          orderBy: {
+            dueDate: 'asc',
+          },
+        });
+
+        // Group by member and get only the next upcoming payment for each
+        const memberNextPayments = new Map<number, typeof allPayments[0]>();
+        
+        for (const payment of allPayments) {
+          const existing = memberNextPayments.get(payment.memberId);
+          // If no payment for this member yet, or this one is earlier, use this one
+          if (!existing || payment.dueDate < existing.dueDate) {
+            memberNextPayments.set(payment.memberId, payment);
+          }
+        }
+
+        // Convert to array and apply sorting, pagination
+        payments = Array.from(memberNextPayments.values());
+        total = payments.length;
+
+        // Apply sorting
+        payments.sort((a, b) => {
+          const aVal = (a as any)[sortBy];
+          const bVal = (b as any)[sortBy];
+          if (sortOrder === 'asc') {
+            return aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
+          } else {
+            return aVal < bVal ? 1 : aVal > bVal ? -1 : 0;
+          }
+        });
+
+        // Apply pagination
+        payments = payments.slice((pageNum - 1) * limitNum, pageNum * limitNum);
+      } else {
+        // For other statuses (PAID) or no status filter, show all payments
+        total = await prisma.payment.count({ where });
+
+        payments = await prisma.payment.findMany({
+          where,
+          include: {
+            member: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                phone: true,
+              },
+            },
+          },
+          orderBy: { [sortBy]: sortOrder },
+          skip: (pageNum - 1) * limitNum,
+          take: limitNum,
+        });
+      }
 
       sendSuccess(res, {
         payments,
