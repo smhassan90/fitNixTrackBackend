@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { UnauthorizedError } from '../utils/errors';
+import { UnauthorizedError, ForbiddenError } from '../utils/errors';
 import { sendError } from '../utils/response';
 
 export interface AuthRequest extends Request {
@@ -99,7 +99,7 @@ export function requireRole(...allowedRoles: string[]) {
     }
 
     if (!allowedRoles.includes(req.user.role)) {
-      sendError(res, new UnauthorizedError('Insufficient permissions'));
+      sendError(res, new ForbiddenError('Unauthorized. Admin access required.'));
       return;
     }
 

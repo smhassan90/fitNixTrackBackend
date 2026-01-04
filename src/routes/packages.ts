@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { validate } from '../middleware/validation';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { authenticateToken, AuthRequest, requireRole } from '../middleware/auth';
 import { requireGymId } from '../middleware/multiTenant';
 import {
   createPackageSchema,
@@ -11,7 +11,7 @@ import {
   deletePackageSchema,
 } from '../validations/packages';
 import { sendSuccess, sendError } from '../utils/response';
-import { NotFoundError, ValidationError } from '../utils/errors';
+import { NotFoundError, ValidationError, ForbiddenError } from '../utils/errors';
 
 const router = Router();
 
@@ -116,10 +116,11 @@ router.get(
   }
 );
 
-// POST /api/packages
+// POST /api/packages - Requires GYM_ADMIN role
 router.post(
   '/',
   validate(createPackageSchema),
+  requireRole('GYM_ADMIN'),
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
@@ -222,15 +223,13 @@ router.post(
   }
 );
 
-// PUT /api/packages/:id
+// PUT /api/packages/:id - Requires GYM_ADMIN role
 router.put(
   '/:id',
   validate(updatePackageSchema),
+  requireRole('GYM_ADMIN'),
   async (req: AuthRequest, res: Response) => {
     try {
-      // Debug: Log user info to verify authentication
-      console.log('[Package Update] User:', req.user?.email, 'Role:', req.user?.role, 'GymId:', req.gymId);
-      
       const gymId = req.gymId!;
       const id = parseInt(req.params.id, 10);
       const { name, price, discount, duration, featureIds } = req.body;
@@ -292,10 +291,11 @@ router.put(
   }
 );
 
-// DELETE /api/packages/:id
+// DELETE /api/packages/:id - Requires GYM_ADMIN role
 router.delete(
   '/:id',
   validate(deletePackageSchema),
+  requireRole('GYM_ADMIN'),
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
