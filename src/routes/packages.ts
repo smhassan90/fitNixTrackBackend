@@ -54,7 +54,17 @@ router.get(
       const take = limit ? parseInt(String(limit), 10) : undefined;
       const skip = page && take ? (parseInt(String(page), 10) - 1) * take : undefined;
 
-      // Fetch packages from database filtered by gymId
+      // Log query details for debugging
+      console.log('[GET Packages] Fetching from database:', {
+        gymId,
+        where,
+        sortBy,
+        sortOrder,
+        take,
+        skip,
+      });
+
+      // ALWAYS fetch from database - no hardcoded data
       const [packages, total] = await Promise.all([
         prisma.package.findMany({
           where,
@@ -76,6 +86,13 @@ router.get(
         }),
         prisma.package.count({ where }),
       ]);
+
+      // Log results from database
+      console.log('[GET Packages] Fetched from database:', {
+        count: packages.length,
+        total,
+        packageIds: packages.map((p: any) => p.id),
+      });
 
       // Transform features to array of feature names
       const packagesWithFeatures = packages.map((pkg: any) => ({
