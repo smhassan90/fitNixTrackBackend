@@ -82,8 +82,14 @@ router.get(
       const gymId = req.gymId!;
       const id = parseInt(req.params.id, 10);
 
+      // Debug logging to help diagnose issues
+      console.log('[GET Package] Looking for package:', { id, gymId, idType: typeof id, gymIdType: typeof gymId });
+
       const packageData = await (prisma.package.findFirst({
-        where: { id: id as any, gymId: gymId as any },
+        where: { 
+          id: id,
+          gymId: gymId,
+        },
         include: {
           features: {
             include: {
@@ -99,6 +105,22 @@ router.get(
       }) as any);
 
       if (!packageData) {
+        // Additional debug: Check if package exists at all (regardless of gym)
+        const anyPackage = await (prisma.package.findFirst({
+          where: { id: id },
+          select: { id: true, gymId: true, name: true },
+        }) as any);
+        
+        if (anyPackage) {
+          console.log('[GET Package] Package exists but belongs to different gym:', {
+            packageGymId: anyPackage.gymId,
+            userGymId: gymId,
+            packageName: anyPackage.name
+          });
+        } else {
+          console.log('[GET Package] Package does not exist with id:', id);
+        }
+        
         sendError(res, new NotFoundError('Package', id));
         return;
       }
