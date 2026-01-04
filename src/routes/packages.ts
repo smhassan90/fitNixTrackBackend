@@ -228,6 +228,9 @@ router.put(
   validate(updatePackageSchema),
   async (req: AuthRequest, res: Response) => {
     try {
+      // Debug: Log user info to verify authentication
+      console.log('[Package Update] User:', req.user?.email, 'Role:', req.user?.role, 'GymId:', req.gymId);
+      
       const gymId = req.gymId!;
       const id = parseInt(req.params.id, 10);
       const { name, price, discount, duration, featureIds } = req.body;
