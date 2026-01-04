@@ -110,6 +110,7 @@ model Package {
   gymId     Int
   name      String
   price     Float
+  discount  Float?   @default(0) // Discount amount (optional, defaults to 0)
   duration  String // '1 month', '3 months', '6 months', '12 months'
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

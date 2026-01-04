@@ -123,13 +123,14 @@ router.post(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { name, price, duration, featureIds } = req.body;
+      const { name, price, discount, duration, featureIds } = req.body;
 
       // Use raw SQL to create package
       // Note: Database still has old 'features' JSON column, so we provide empty array
+      const discountValue = discount ?? 0;
       await prisma.$executeRaw`
-        INSERT INTO packages (gymId, name, price, duration, features, createdAt, updatedAt)
-        VALUES (${gymId}, ${name}, ${price}, ${duration}, JSON_ARRAY(), NOW(), NOW())
+        INSERT INTO packages (gymId, name, price, discount, duration, features, createdAt, updatedAt)
+        VALUES (${gymId}, ${name}, ${price}, ${discountValue}, ${duration}, JSON_ARRAY(), NOW(), NOW())
       `;
 
       // Get the created package ID
@@ -229,7 +230,7 @@ router.put(
     try {
       const gymId = req.gymId!;
       const id = parseInt(req.params.id, 10);
-      const { name, price, duration, featureIds } = req.body;
+      const { name, price, discount, duration, featureIds } = req.body;
 
       // Check if package exists
       const existingPackage = await (prisma.package.findFirst({
@@ -245,6 +246,7 @@ router.put(
       const updateData: any = {};
       if (name !== undefined) updateData.name = name;
       if (price !== undefined) updateData.price = price;
+      if (discount !== undefined) updateData.discount = discount;
       if (duration !== undefined) updateData.duration = duration;
 
       // Update features if provided

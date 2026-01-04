@@ -64,9 +64,10 @@ router.get(
                 id: true,
                 name: true,
                 price: true,
+                discount: true,
                 duration: true,
                 features: true,
-              },
+              } as any,
             },
             trainers: {
               include: {
