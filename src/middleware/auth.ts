@@ -81,7 +81,17 @@ export function authenticateToken(
       ...decoded,
       id: userId, // Ensure it's always a number
       gymId, // Ensure it's always a number
+      role: decoded.role, // Ensure role is explicitly set
     };
+    
+    // Debug logging
+    console.log('[authenticateToken] User authenticated:', {
+      id: userId,
+      email: decoded.email,
+      role: decoded.role,
+      gymId: gymId
+    });
+    
     next();
   } catch (error) {
     sendError(res, new UnauthorizedError('Invalid or expired token'));
@@ -98,7 +108,20 @@ export function requireRole(...allowedRoles: string[]) {
       return;
     }
 
-    if (!allowedRoles.includes(req.user.role)) {
+    const userRole = req.user.role;
+    
+    // Debug logging (only in development)
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[requireRole] User role:', userRole, 'Type:', typeof userRole);
+      console.log('[requireRole] Allowed roles:', allowedRoles);
+      console.log('[requireRole] Match:', allowedRoles.includes(userRole));
+    }
+    
+    // Check if user role matches any of the allowed roles
+    if (!userRole || !allowedRoles.includes(userRole)) {
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[requireRole] Access denied - User role:', userRole, 'not in allowed roles:', allowedRoles);
+      }
       sendError(res, new ForbiddenError('Unauthorized. Admin access required.'));
       return;
     }
