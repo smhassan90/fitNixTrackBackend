@@ -55,7 +55,9 @@ router.get(
           where.memberId = memberIdNum;
         }
       }
-      if (status) where.status = status;
+      // Normalize status to ensure consistent comparison
+      const normalizedStatus = status ? String(status).toUpperCase() : null;
+      if (normalizedStatus) where.status = normalizedStatus as 'PENDING' | 'PAID' | 'OVERDUE';
       if (month) where.month = month;
 
       // Search filter
@@ -73,8 +75,9 @@ router.get(
 
       // Check if we should filter to next payment per member
       // This applies when filtering by PENDING or OVERDUE status
-      // The status comes from validated query, so it should be 'PENDING', 'PAID', or 'OVERDUE'
-      const isPendingOrOverdue = status === 'PENDING' || status === 'OVERDUE';
+      const isPendingOrOverdue = normalizedStatus === 'PENDING' || normalizedStatus === 'OVERDUE';
+
+      console.log(`[Payments API] Status: "${status}", Normalized: "${normalizedStatus}", Should filter next payment: ${isPendingOrOverdue}`);
 
       if (isPendingOrOverdue) {
         // Get all payments matching the status (and other filters like memberId, search, etc.)
