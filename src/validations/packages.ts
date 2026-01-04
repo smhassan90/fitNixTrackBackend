@@ -29,6 +29,8 @@ export const getPackagesSchema = z.object({
   query: z.object({
     sortBy: z.string().optional(),
     sortOrder: z.enum(['asc', 'desc']).optional().default('asc'),
+    limit: z.string().regex(/^\d+$/).optional().transform((val) => (val ? parseInt(val, 10) : undefined)),
+    page: z.string().regex(/^\d+$/).optional().transform((val) => (val ? parseInt(val, 10) : undefined)),
   }),
 });
 

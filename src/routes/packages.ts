@@ -41,27 +41,41 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { sortBy = 'createdAt', sortOrder = 'desc' } = req.query as any;
+      const query = req.query as any;
+      const { 
+        sortBy = 'createdAt', 
+        sortOrder = 'desc',
+        limit,
+        page,
+      } = query;
+
+      // Build query options
+      const where = { gymId: gymId };
+      const take = limit ? parseInt(String(limit), 10) : undefined;
+      const skip = page && take ? (parseInt(String(page), 10) - 1) * take : undefined;
 
       // Fetch packages from database filtered by gymId
-      const packages = await prisma.package.findMany({
-        where: { 
-          gymId: gymId,
-        },
-        include: {
-          features: {
-            include: {
-              feature: true,
+      const [packages, total] = await Promise.all([
+        prisma.package.findMany({
+          where,
+          include: {
+            features: {
+              include: {
+                feature: true,
+              },
+            },
+            _count: {
+              select: {
+                members: true,
+              },
             },
           },
-          _count: {
-            select: {
-              members: true,
-            },
-          },
-        },
-        orderBy: { [sortBy]: sortOrder },
-      });
+          orderBy: { [sortBy]: sortOrder },
+          ...(take && { take }),
+          ...(skip !== undefined && { skip }),
+        }),
+        prisma.package.count({ where }),
+      ]);
 
       // Transform features to array of feature names
       const packagesWithFeatures = packages.map((pkg: any) => ({
@@ -77,9 +91,13 @@ router.get(
         updatedAt: pkg.updatedAt,
       }));
 
-      sendSuccess(res, { packages: packagesWithFeatures });
+      // Return packages with total count
+      sendSuccess(res, { 
+        packages: packagesWithFeatures,
+        total: total,
+      });
     } catch (error) {
-      console.error('[GET Packages] Error fetching packages:', error);
+      console.error('[GET Packages] Error fetching packages from database:', error);
       sendError(res, error as Error);
     }
   }
