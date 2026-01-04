@@ -43,34 +43,40 @@ export async function generatePaymentsForMember(
     },
   });
 
-  // Generate payments for each month
-  const payments = [];
-  let currentDate = new Date(membershipStart);
-  let paymentNumber = 1;
-
-  while (currentDate < membershipEnd) {
-    const dueDate = addMonths(membershipStart, paymentNumber);
-    const month = formatMonth(currentDate);
+  // Only generate the NEXT payment (next month, same date as registration)
+  // The next payment will be generated when this one is paid (via markPaymentAsPaid)
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  
+  // Calculate next payment due date (next month, same day as membership start)
+  const nextDueDate = addMonths(membershipStart, 1);
+  
+  // Only create payment if it's in the future and before membership end
+  if (nextDueDate <= membershipEnd) {
+    const nextMonth = formatMonth(nextDueDate);
     const amount = packageData.price;
 
-    payments.push({
-      gymId,
-      memberId,
-      month,
-      amount,
-      status: 'PENDING' as const,
-      dueDate,
+    // Check if payment already exists (shouldn't, but just in case)
+    const existingPayment = await prisma.payment.findFirst({
+      where: {
+        memberId,
+        gymId,
+        month: nextMonth,
+      },
     });
 
-    currentDate = addMonths(currentDate, 1);
-    paymentNumber++;
-  }
-
-  // Create all payments
-  if (payments.length > 0) {
-    await prisma.payment.createMany({
-      data: payments,
-    });
+    if (!existingPayment) {
+      await prisma.payment.create({
+        data: {
+          gymId,
+          memberId,
+          month: nextMonth,
+          amount,
+          status: 'PENDING',
+          dueDate: nextDueDate,
+        },
+      });
+    }
   }
 
   // Update member's membership end date

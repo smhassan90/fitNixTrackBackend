@@ -17,16 +17,22 @@ router.get('/stats', async (req: AuthRequest, res: Response) => {
     const gymId = req.gymId!;
 
     // Get basic counts
-    const [totalMembers, totalTrainers, payments, attendanceRecords] = await Promise.all([
+    const [totalMembers, totalTrainers, allPayments, attendanceRecords] = await Promise.all([
       prisma.member.count({ where: { gymId } }),
       prisma.trainer.count({ where: { gymId } }),
       prisma.payment.findMany({
         where: { gymId },
         select: {
+          id: true,
+          memberId: true,
           status: true,
           amount: true,
           month: true,
+          dueDate: true,
           paidDate: true,
+        },
+        orderBy: {
+          dueDate: 'asc',
         },
       }),
       prisma.attendanceRecord.findMany({
@@ -38,9 +44,30 @@ router.get('/stats', async (req: AuthRequest, res: Response) => {
       }),
     ]);
 
-    // Calculate payment stats
-    const pendingPayments = payments.filter((p) => p.status === 'PENDING').length;
-    const overduePayments = payments.filter((p) => p.status === 'OVERDUE').length;
+    // Calculate payment stats - only count next upcoming payment per member
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+
+    // Group payments by member and get only the next upcoming payment for each
+    const memberNextPayments = new Map<number, typeof allPayments[0]>();
+    
+    for (const payment of allPayments) {
+      // Only consider pending or overdue payments
+      if (payment.status === 'PENDING' || payment.status === 'OVERDUE') {
+        const existing = memberNextPayments.get(payment.memberId);
+        // If no payment for this member yet, or this one is earlier, use this one
+        if (!existing || payment.dueDate < existing.dueDate) {
+          memberNextPayments.set(payment.memberId, payment);
+        }
+      }
+    }
+
+    // Count pending and overdue from next payments only
+    const pendingPayments = Array.from(memberNextPayments.values()).filter((p) => p.status === 'PENDING').length;
+    const overduePayments = Array.from(memberNextPayments.values()).filter((p) => p.status === 'OVERDUE').length;
+    
+    // For revenue calculation, use all payments
+    const payments = allPayments;
 
     // Calculate attendance summary
     const present = attendanceRecords.filter((r) => r.status === 'PRESENT').length;
