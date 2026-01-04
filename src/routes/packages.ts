@@ -34,7 +34,7 @@ router.get('/features', async (req: AuthRequest, res: Response) => {
   }
 });
 
-// GET /api/packages
+// GET /api/packages - Get all packages from database for the authenticated gym
 router.get(
   '/',
   validate(getPackagesSchema),
@@ -43,8 +43,11 @@ router.get(
       const gymId = req.gymId!;
       const { sortBy = 'createdAt', sortOrder = 'desc' } = req.query as any;
 
-      const packages = await (prisma.package.findMany({
-        where: { gymId: gymId as any },
+      // Fetch packages from database filtered by gymId
+      const packages = await prisma.package.findMany({
+        where: { 
+          gymId: gymId,
+        },
         include: {
           features: {
             include: {
@@ -56,18 +59,27 @@ router.get(
               members: true,
             },
           },
-        } as any,
+        },
         orderBy: { [sortBy]: sortOrder },
-      }) as any);
+      });
 
       // Transform features to array of feature names
       const packagesWithFeatures = packages.map((pkg: any) => ({
-        ...pkg,
-        features: (pkg.features || []).map((pf: { feature: { name: string } }) => pf.feature.name),
+        id: pkg.id,
+        gymId: pkg.gymId,
+        name: pkg.name,
+        price: pkg.price,
+        discount: pkg.discount ?? 0, // Include discount field (defaults to 0)
+        duration: pkg.duration,
+        features: (pkg.features || []).map((pf: any) => pf.feature.name),
+        _count: pkg._count,
+        createdAt: pkg.createdAt,
+        updatedAt: pkg.updatedAt,
       }));
 
       sendSuccess(res, { packages: packagesWithFeatures });
     } catch (error) {
+      console.error('[GET Packages] Error fetching packages:', error);
       sendError(res, error as Error);
     }
   }
