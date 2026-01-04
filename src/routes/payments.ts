@@ -29,6 +29,8 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
+      // Get validated query parameters (validation middleware transforms them)
+      const query = req.query as any;
       const {
         memberId,
         status,
@@ -38,7 +40,7 @@ router.get(
         sortOrder = 'desc',
         page,
         limit,
-      } = req.query as any;
+      } = query;
 
       // Ensure page and limit are numbers
       const pageNum = typeof page === 'number' ? page : parseInt(page as string, 10) || 1;
@@ -69,8 +71,13 @@ router.get(
       let payments: any[] = [];
       let total = 0;
 
-      if (status === 'PENDING' || status === 'OVERDUE') {
-        // Get all payments matching the status
+      // Check if we should filter to next payment per member
+      // This applies when filtering by PENDING or OVERDUE status
+      // The status comes from validated query, so it should be 'PENDING', 'PAID', or 'OVERDUE'
+      const isPendingOrOverdue = status === 'PENDING' || status === 'OVERDUE';
+
+      if (isPendingOrOverdue) {
+        // Get all payments matching the status (and other filters like memberId, search, etc.)
         const allPayments = await prisma.payment.findMany({
           where,
           include: {
@@ -88,12 +95,15 @@ router.get(
           },
         });
 
+        console.log(`[Payments API] Status: ${status}, Found ${allPayments.length} payments before filtering`);
+
         // Group by member and get only the next upcoming payment for each
+        // This ensures we only show 1 pending/overdue payment per member (the next one)
         const memberNextPayments = new Map<number, typeof allPayments[0]>();
         
         for (const payment of allPayments) {
           const existing = memberNextPayments.get(payment.memberId);
-          // If no payment for this member yet, or this one is earlier, use this one
+          // If no payment for this member yet, or this one has an earlier due date, use this one
           if (!existing || payment.dueDate < existing.dueDate) {
             memberNextPayments.set(payment.memberId, payment);
           }
@@ -102,6 +112,8 @@ router.get(
         // Convert to array and apply sorting, pagination
         payments = Array.from(memberNextPayments.values());
         total = payments.length;
+
+        console.log(`[Payments API] After filtering to next payment per member: ${total} payments`);
 
         // Apply sorting
         payments.sort((a, b) => {
