@@ -446,5 +446,135 @@ router.post(
   }
 );
 
+// PATCH /api/payments/one-time/:id/mark-paid - Mark one-time payment as paid
+router.patch(
+  '/one-time/:id/mark-paid',
+  validate(getPaymentSchema), // Reuse existing schema for ID validation
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const id = parseInt(req.params.id, 10);
+
+      // Find one-time payment
+      const oneTimePayment = await prisma.oneTimePayment.findFirst({
+        where: { id, gymId },
+        include: {
+          member: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
+            },
+          },
+        },
+      });
+
+      if (!oneTimePayment) {
+        sendError(res, new NotFoundError('One-time payment', id));
+        return;
+      }
+
+      // Update one-time payment status
+      const updated = await prisma.oneTimePayment.update({
+        where: { id },
+        data: {
+          status: 'PAID',
+          paidDate: new Date(),
+        },
+        include: {
+          member: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
+            },
+          },
+        },
+      });
+
+      // Update member's one-time payment status
+      await prisma.member.update({
+        where: { id: oneTimePayment.memberId },
+        data: {
+          oneTimePaymentPaid: true,
+        },
+      });
+
+      sendSuccess(res, updated, 'One-time payment marked as paid');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// GET /api/payments/one-time - Get all one-time payments
+router.get(
+  '/one-time',
+  validate(getPaymentsSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const query = req.query as any;
+      const {
+        memberId,
+        status,
+        sortBy = 'createdAt',
+        sortOrder = 'desc',
+        page,
+        limit,
+      } = query;
+
+      const pageNum = typeof page === 'number' ? page : parseInt(page as string, 10) || 1;
+      const limitNum = typeof limit === 'number' ? limit : parseInt(limit as string, 10) || 50;
+
+      const where: any = { gymId };
+
+      if (memberId) {
+        const memberIdNum = typeof memberId === 'number' ? memberId : parseInt(memberId as string, 10);
+        if (!isNaN(memberIdNum)) {
+          where.memberId = memberIdNum;
+        }
+      }
+
+      const normalizedStatus = status ? String(status).toUpperCase() : null;
+      if (normalizedStatus) where.status = normalizedStatus as 'PENDING' | 'PAID' | 'OVERDUE';
+
+      const [total, oneTimePayments] = await Promise.all([
+        prisma.oneTimePayment.count({ where }),
+        prisma.oneTimePayment.findMany({
+          where,
+          include: {
+            member: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                phone: true,
+              },
+            },
+          },
+          orderBy: { [sortBy]: sortOrder },
+          skip: (pageNum - 1) * limitNum,
+          take: limitNum,
+        }),
+      ]);
+
+      sendSuccess(res, {
+        oneTimePayments,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages: Math.ceil(total / limitNum),
+        },
+      });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
 export default router;
 

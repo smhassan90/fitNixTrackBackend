@@ -51,12 +51,13 @@ export async function generatePaymentsForMember(
   // Calculate next payment due date (next month, same day as membership start)
   const nextDueDate = addMonths(membershipStart, 1);
   
+  // Calculate amount with discount (price - discount, minimum 0)
+  const discount = packageData.discount ?? 0;
+  const amount = Math.max(0, packageData.price - discount);
+  
   // Only create payment if it's in the future and before membership end
   if (nextDueDate <= membershipEnd) {
     const nextMonth = formatMonth(nextDueDate);
-    // Calculate amount with discount (price - discount, minimum 0)
-    const discount = packageData.discount ?? 0;
-    const amount = Math.max(0, packageData.price - discount);
 
     // Check if payment already exists (shouldn't, but just in case)
     const existingPayment = await prisma.payment.findFirst({
@@ -81,10 +82,13 @@ export async function generatePaymentsForMember(
     }
   }
 
-  // Update member's membership end date
+  // Update member's membership end date and monthly payment amount
   await prisma.member.update({
     where: { id: memberId },
-    data: { membershipEnd },
+    data: { 
+      membershipEnd,
+      monthlyPaymentAmount: amount, // Save monthly payment amount for income calculation
+    },
   });
 }
 

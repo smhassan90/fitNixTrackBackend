@@ -25,6 +25,7 @@ export const createMemberSchema = z.object({
       )
       .optional(),
     discount: z.number().min(0).max(100).optional().nullable(),
+    admissionFeeWaived: z.boolean().optional().default(false), // Whether admission fee is waived
     trainerIds: z
       .preprocess(
         (val) => {
@@ -107,6 +108,18 @@ export const getMemberSchema = z.object({
 export const deleteMemberSchema = z.object({
   params: z.object({
     id: z.string().regex(/^\d+$/, 'Member ID must be a number').transform((val) => parseInt(val, 10)),
+  }),
+});
+
+export const getMemberPaymentsSchema = z.object({
+  params: z.object({
+    id: z.string().regex(/^\d+$/, 'Member ID must be a number').transform((val) => parseInt(val, 10)),
+  }),
+  query: z.object({
+    status: z.enum(['PENDING', 'PAID', 'OVERDUE']).optional(),
+    type: z.enum(['monthly', 'one-time', 'all']).optional().default('all'),
+    page: z.string().regex(/^\d+$/).optional().transform((val) => (val ? parseInt(val, 10) : 1)),
+    limit: z.string().regex(/^\d+$/).optional().transform((val) => (val ? parseInt(val, 10) : 50)),
   }),
 });
 

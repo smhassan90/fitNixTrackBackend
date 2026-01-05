@@ -15,6 +15,7 @@ import attendanceRoutes from './routes/attendance';
 import dashboardRoutes from './routes/dashboard';
 import reportRoutes from './routes/reports';
 import deviceRoutes from './routes/device';
+import settingsRoutes from './routes/settings';
 
 // Load environment variables
 dotenv.config();
@@ -101,6 +102,7 @@ app.use('/api/attendance', attendanceRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/device', deviceRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // 404 handler
 app.use((req, res) => {

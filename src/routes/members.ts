@@ -9,6 +9,7 @@ import {
   getMembersSchema,
   getMemberSchema,
   deleteMemberSchema,
+  getMemberPaymentsSchema,
 } from '../validations/members';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError } from '../utils/errors';
@@ -89,10 +90,17 @@ router.get(
         }),
       ]);
 
-      // Format response
+      // Format response with payment summary
       const formattedMembers = members.map((member) => ({
         ...member,
         trainers: member.trainers.map((mt) => mt.trainer),
+        paymentSummary: {
+          admissionFeeWaived: member.admissionFeeWaived,
+          admissionFeePaid: member.admissionFeePaid ?? 0,
+          oneTimePaymentAmount: member.oneTimePaymentAmount ?? 0,
+          oneTimePaymentPaid: member.oneTimePaymentPaid,
+          monthlyPaymentAmount: member.monthlyPaymentAmount ?? 0,
+        },
       }));
 
       sendSuccess(res, {
@@ -150,6 +158,12 @@ router.get(
         return;
       }
 
+      // Get one-time payment if exists
+      const oneTimePayment = await prisma.oneTimePayment.findFirst({
+        where: { memberId: member.id, gymId },
+        orderBy: { createdAt: 'desc' },
+      });
+
       sendSuccess(res, {
         ...member,
         trainers: member.trainers.map((mt) => mt.trainer),
@@ -159,6 +173,14 @@ router.get(
           deviceUserName: mapping.deviceUserName,
           deviceConfig: mapping.deviceConfig,
         })),
+        oneTimePayment: oneTimePayment || null,
+        paymentSummary: {
+          admissionFeeWaived: member.admissionFeeWaived,
+          admissionFeePaid: member.admissionFeePaid ?? 0,
+          oneTimePaymentAmount: member.oneTimePaymentAmount ?? 0,
+          oneTimePaymentPaid: member.oneTimePaymentPaid,
+          monthlyPaymentAmount: member.monthlyPaymentAmount ?? 0,
+        },
       });
     } catch (error) {
       sendError(res, error as Error);
@@ -183,23 +205,39 @@ router.post(
         comments,
         packageId,
         discount,
+        admissionFeeWaived = false,
         trainerIds = [],
       } = req.body;
 
+      // Get gym settings (admission fee)
+      const gym = await prisma.gym.findUnique({
+        where: { id: gymId },
+        select: { admissionFee: true },
+      });
+
+      if (!gym) {
+        sendError(res, new NotFoundError('Gym', gymId));
+        return;
+      }
+
+      const admissionFee = gym.admissionFee ?? 0;
+
       // Validate package exists if provided
+      let packageData = null;
       if (packageId) {
-        const packageExists = await prisma.package.findFirst({
+        packageData = await prisma.package.findFirst({
           where: { id: packageId, gymId },
         });
-        if (!packageExists) {
+        if (!packageData) {
           sendError(res, new NotFoundError('Package', packageId));
           return;
         }
       }
 
       // Validate trainers exist if provided
+      let trainers = [];
       if (trainerIds.length > 0) {
-        const trainers = await prisma.trainer.findMany({
+        trainers = await prisma.trainer.findMany({
           where: { id: { in: trainerIds }, gymId },
         });
         if (trainers.length !== trainerIds.length) {
@@ -211,6 +249,22 @@ router.post(
       // Parse date of birth
       const dob = dateOfBirth ? parseDate(dateOfBirth) : null;
       const membershipStart = new Date();
+
+      // Calculate payment amounts
+      const admissionFeePaid = admissionFeeWaived ? 0 : admissionFee;
+      
+      // Package fee (after discount)
+      const packageDiscount = discount ?? packageData?.discount ?? 0;
+      const packageFee = packageData ? Math.max(0, packageData.price - packageDiscount) : 0;
+      
+      // Trainer fees (sum of all trainer charges)
+      const trainerFee = trainers.reduce((sum, trainer) => sum + (trainer.charges ?? 0), 0);
+      
+      // Total one-time payment
+      const oneTimePaymentAmount = admissionFeePaid + packageFee + trainerFee;
+      
+      // Monthly payment amount (package fee only, for recurring payments)
+      const monthlyPaymentAmount = packageFee;
 
       // Create member (ID will be auto-generated)
       const member = await prisma.member.create({
@@ -226,6 +280,10 @@ router.post(
           packageId: packageId || null,
           discount: discount || null,
           membershipStart,
+          admissionFeeWaived,
+          admissionFeePaid,
+          oneTimePaymentAmount,
+          monthlyPaymentAmount,
           trainers: {
             create: trainerIds.map((trainerId: string) => ({
               trainerId,
@@ -242,16 +300,45 @@ router.post(
         },
       });
 
-      // Generate payments if package is assigned
+      // Create one-time payment record
+      if (oneTimePaymentAmount > 0) {
+        await prisma.oneTimePayment.create({
+          data: {
+            gymId,
+            memberId: member.id,
+            admissionFee: admissionFeePaid,
+            packageFee,
+            trainerFee,
+            totalAmount: oneTimePaymentAmount,
+            status: 'PENDING',
+          },
+        });
+      }
+
+      // Generate monthly payments if package is assigned
       if (packageId) {
         await generatePaymentsForMember(member.id, gymId, packageId, membershipStart);
       }
+
+      // Get one-time payment record
+      const oneTimePayment = await prisma.oneTimePayment.findFirst({
+        where: { memberId: member.id, gymId },
+        orderBy: { createdAt: 'desc' },
+      });
 
       sendSuccess(
         res,
         {
           ...member,
           trainers: member.trainers.map((mt) => mt.trainer),
+          oneTimePayment: oneTimePayment || null,
+          paymentSummary: {
+            admissionFeeWaived: member.admissionFeeWaived,
+            admissionFeePaid: member.admissionFeePaid ?? 0,
+            oneTimePaymentAmount: member.oneTimePaymentAmount ?? 0,
+            oneTimePaymentPaid: member.oneTimePaymentPaid,
+            monthlyPaymentAmount: member.monthlyPaymentAmount ?? 0,
+          },
         },
         'Member created successfully',
         201
@@ -369,14 +456,164 @@ router.put(
         await generatePaymentsForMember(member.id, gymId, packageId, membershipStart);
       }
 
+      // Get one-time payment record
+      const oneTimePayment = await prisma.oneTimePayment.findFirst({
+        where: { memberId: member.id, gymId },
+        orderBy: { createdAt: 'desc' },
+      });
+
       sendSuccess(
         res,
         {
           ...member,
           trainers: member.trainers.map((mt) => mt.trainer),
+          oneTimePayment: oneTimePayment || null,
+          paymentSummary: {
+            admissionFeeWaived: member.admissionFeeWaived,
+            admissionFeePaid: member.admissionFeePaid ?? 0,
+            oneTimePaymentAmount: member.oneTimePaymentAmount ?? 0,
+            oneTimePaymentPaid: member.oneTimePaymentPaid,
+            monthlyPaymentAmount: member.monthlyPaymentAmount ?? 0,
+          },
         },
         'Member updated successfully'
       );
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// GET /api/members/:id/payments - Get all payment history for a member
+router.get(
+  '/:id/payments',
+  validate(getMemberPaymentsSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { id } = req.params;
+      const query = req.query as any;
+      const {
+        status,
+        type = 'all',
+        page = 1,
+        limit = 50,
+      } = query;
+
+      const memberId = typeof id === 'number' ? id : parseInt(id as string, 10);
+      const pageNum = typeof page === 'number' ? page : parseInt(page as string, 10) || 1;
+      const limitNum = typeof limit === 'number' ? limit : parseInt(limit as string, 10) || 50;
+
+      // Verify member exists and belongs to gym
+      const member = await prisma.member.findFirst({
+        where: { id: memberId, gymId },
+        select: { id: true, name: true },
+      });
+
+      if (!member) {
+        sendError(res, new NotFoundError('Member', String(memberId)));
+        return;
+      }
+
+      const normalizedStatus = status ? String(status).toUpperCase() : null;
+      const whereMonthly: any = { gymId, memberId };
+      const whereOneTime: any = { gymId, memberId };
+
+      if (normalizedStatus) {
+        whereMonthly.status = normalizedStatus as 'PENDING' | 'PAID' | 'OVERDUE';
+        whereOneTime.status = normalizedStatus as 'PENDING' | 'PAID' | 'OVERDUE';
+      }
+
+      // Fetch payments based on type
+      let monthlyPayments: any[] = [];
+      let oneTimePayments: any[] = [];
+      let monthlyTotal = 0;
+      let oneTimeTotal = 0;
+
+      if (type === 'all' || type === 'monthly') {
+        [monthlyTotal, monthlyPayments] = await Promise.all([
+          prisma.payment.count({ where: whereMonthly }),
+          prisma.payment.findMany({
+            where: whereMonthly,
+            orderBy: { dueDate: 'desc' },
+            skip: (pageNum - 1) * limitNum,
+            take: limitNum,
+          }),
+        ]);
+      }
+
+      if (type === 'all' || type === 'one-time') {
+        [oneTimeTotal, oneTimePayments] = await Promise.all([
+          prisma.oneTimePayment.count({ where: whereOneTime }),
+          prisma.oneTimePayment.findMany({
+            where: whereOneTime,
+            orderBy: { createdAt: 'desc' },
+            skip: (pageNum - 1) * limitNum,
+            take: limitNum,
+          }),
+        ]);
+      }
+
+      // Format monthly payments
+      const formattedMonthlyPayments = monthlyPayments.map((payment) => ({
+        id: payment.id,
+        type: 'monthly',
+        month: payment.month,
+        amount: payment.amount,
+        status: payment.status,
+        dueDate: payment.dueDate,
+        paidDate: payment.paidDate,
+        createdAt: payment.createdAt,
+        updatedAt: payment.updatedAt,
+      }));
+
+      // Format one-time payments
+      const formattedOneTimePayments = oneTimePayments.map((payment) => ({
+        id: payment.id,
+        type: 'one-time',
+        admissionFee: payment.admissionFee,
+        packageFee: payment.packageFee,
+        trainerFee: payment.trainerFee,
+        totalAmount: payment.totalAmount,
+        status: payment.status,
+        paidDate: payment.paidDate,
+        createdAt: payment.createdAt,
+        updatedAt: payment.updatedAt,
+      }));
+
+      // Combine and sort by date (most recent first)
+      const allPayments = [...formattedMonthlyPayments, ...formattedOneTimePayments].sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+
+      const totalPayments = monthlyTotal + oneTimeTotal;
+
+      sendSuccess(res, {
+        member: {
+          id: member.id,
+          name: member.name,
+        },
+        payments: allPayments,
+        summary: {
+          monthly: {
+            total: monthlyTotal,
+            paid: monthlyPayments.filter((p) => p.status === 'PAID').length,
+            pending: monthlyPayments.filter((p) => p.status === 'PENDING').length,
+            overdue: monthlyPayments.filter((p) => p.status === 'OVERDUE').length,
+          },
+          oneTime: {
+            total: oneTimeTotal,
+            paid: oneTimePayments.filter((p) => p.status === 'PAID').length,
+            pending: oneTimePayments.filter((p) => p.status === 'PENDING').length,
+          },
+        },
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total: totalPayments,
+          totalPages: Math.ceil(totalPayments / limitNum),
+        },
+      });
     } catch (error) {
       sendError(res, error as Error);
     }

@@ -11,13 +11,14 @@ datasource db {
 }
 
 model Gym {
-  id        Int      @id @default(autoincrement())
-  name      String
-  address   String?
-  phone     String?
-  email     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          Int      @id @default(autoincrement())
+  name        String
+  address     String?
+  phone       String?
+  email       String?
+  admissionFee Float?  @default(0) // Admission fee configured in settings
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   users             User[]
   members           Member[]
@@ -26,6 +27,7 @@ model Gym {
   payments          Payment[]
   attendanceRecords AttendanceRecord[]
   deviceConfigs     DeviceConfig[]
+  oneTimePayments   OneTimePayment[]
 
   @@map("gyms")
 }
@@ -52,21 +54,26 @@ enum UserRole {
 }
 
 model Member {
-  id              Int       @id @default(autoincrement())
-  gymId           Int
-  name            String
-  phone           String?
-  email           String?
-  gender          String?
-  dateOfBirth     DateTime?
-  cnic            String?   @db.VarChar(13)
-  comments        String?   @db.Text
-  packageId       Int?
-  discount        Float?
-  membershipStart DateTime?
-  membershipEnd   DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id                    Int       @id @default(autoincrement())
+  gymId                 Int
+  name                  String
+  phone                 String?
+  email                 String?
+  gender                String?
+  dateOfBirth           DateTime?
+  cnic                  String?   @db.VarChar(13)
+  comments              String?   @db.Text
+  packageId             Int?
+  discount              Float?
+  membershipStart       DateTime?
+  membershipEnd         DateTime?
+  admissionFeeWaived    Boolean   @default(false) // Whether admission fee was waived
+  admissionFeePaid      Float?    @default(0) // Actual admission fee paid (0 if waived)
+  oneTimePaymentAmount  Float?    // Total one-time payment (admission + package + trainer fees)
+  oneTimePaymentPaid    Boolean   @default(false) // Whether one-time payment was completed
+  monthlyPaymentAmount  Float?    // Monthly recurring payment amount (for income calculation)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   gym                Gym                 @relation(fields: [gymId], references: [id], onDelete: Cascade)
   package            Package?            @relation(fields: [packageId], references: [id], onDelete: SetNull)
@@ -74,6 +81,7 @@ model Member {
   payments           Payment[]
   attendanceRecords  AttendanceRecord[]
   deviceUserMappings DeviceUserMapping[]
+  oneTimePayments    OneTimePayment[]
 
   @@index([gymId])
   @@index([packageId])
@@ -174,6 +182,28 @@ enum PaymentStatus {
   PENDING
   PAID
   OVERDUE
+}
+
+model OneTimePayment {
+  id                Int       @id @default(autoincrement())
+  gymId             Int
+  memberId          Int
+  admissionFee      Float     @default(0) // Admission fee amount
+  packageFee        Float     @default(0) // Package fee (after discount)
+  trainerFee        Float     @default(0) // Total trainer fees
+  totalAmount       Float     // Total one-time payment
+  status            PaymentStatus @default(PENDING)
+  paidDate          DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  gym    Gym    @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([gymId])
+  @@index([memberId])
+  @@index([status])
+  @@map("one_time_payments")
 }
 
 model AttendanceRecord {
