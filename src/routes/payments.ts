@@ -29,6 +29,10 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
+      
+      // Automatically mark overdue payments before fetching
+      await markOverduePayments(gymId);
+      
       // Get validated query parameters (validation middleware transforms them)
       const query = req.query as any;
       const {

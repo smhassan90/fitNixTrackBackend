@@ -43,42 +43,56 @@ export async function generatePaymentsForMember(
     },
   });
 
-  // Only generate the NEXT payment (next month, same date as registration)
-  // The next payment will be generated when this one is paid (via markPaymentAsPaid)
+  // Generate the CURRENT month's payment (same month as membership start, same day)
+  // If the due date has passed, mark it as OVERDUE
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
   
-  // Calculate next payment due date (next month, same day as membership start)
-  const nextDueDate = addMonths(membershipStart, 1);
+  // Calculate current month payment due date (same month as membership start, same day)
+  // Use the membership start date as the due date for the current month
+  const currentDueDate = new Date(membershipStart);
+  currentDueDate.setUTCHours(0, 0, 0, 0);
   
   // Calculate amount with discount (price - discount, minimum 0)
   const discount = packageData.discount ?? 0;
   const amount = Math.max(0, packageData.price - discount);
   
-  // Only create payment if it's in the future and before membership end
-  if (nextDueDate <= membershipEnd) {
-    const nextMonth = formatMonth(nextDueDate);
+  // Only create payment if it's before or equal to membership end
+  if (currentDueDate <= membershipEnd) {
+    const currentMonth = formatMonth(currentDueDate);
 
     // Check if payment already exists (shouldn't, but just in case)
     const existingPayment = await prisma.payment.findFirst({
       where: {
         memberId,
         gymId,
-        month: nextMonth,
+        month: currentMonth,
       },
     });
 
     if (!existingPayment) {
+      // Determine status: OVERDUE if due date has passed, otherwise PENDING
+      // Compare dates: if due date is before today, it's overdue
+      const status = currentDueDate < today ? 'OVERDUE' : 'PENDING';
+
       await prisma.payment.create({
         data: {
           gymId,
           memberId,
-          month: nextMonth,
+          month: currentMonth,
           amount,
-          status: 'PENDING',
-          dueDate: nextDueDate,
+          status,
+          dueDate: currentDueDate,
         },
       });
+    } else {
+      // If payment exists, update its status if it's overdue
+      if (existingPayment.status === 'PENDING' && currentDueDate < today) {
+        await prisma.payment.update({
+          where: { id: existingPayment.id },
+          data: { status: 'OVERDUE' },
+        });
+      }
     }
   }
 
@@ -136,6 +150,11 @@ export async function markPaymentAsPaid(
       const packagePrice = payment.member.package?.price || payment.amount;
       const discount = payment.member.package?.discount ?? 0;
       const amount = Math.max(0, packagePrice - discount);
+      
+      // Check if due date has passed
+      const today = new Date();
+      today.setUTCHours(0, 0, 0, 0);
+      const status = nextDueDate < today ? 'OVERDUE' : 'PENDING';
 
       await prisma.payment.create({
         data: {
@@ -143,7 +162,7 @@ export async function markPaymentAsPaid(
           memberId: payment.memberId,
           month: nextMonth,
           amount,
-          status: 'PENDING',
+          status,
           dueDate: nextDueDate,
         },
       });
