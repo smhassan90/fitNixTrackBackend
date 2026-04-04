@@ -14,7 +14,7 @@ import {
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError } from '../utils/errors';
 import { parseDate } from '../utils/dateHelpers';
-import { generatePaymentsForMember } from '../services/paymentService';
+import { generatePaymentsForMember, markOverduePayments } from '../services/paymentService';
 
 const router = Router();
 
@@ -515,6 +515,8 @@ router.get(
         return;
       }
 
+      await markOverduePayments(gymId);
+
       const normalizedStatus = status ? String(status).toUpperCase() : null;
       const whereMonthly: any = { gymId, memberId };
       const whereOneTime: any = { gymId, memberId };
@@ -524,15 +526,24 @@ router.get(
         whereOneTime.status = normalizedStatus as 'PENDING' | 'PAID' | 'OVERDUE';
       }
 
-      // Fetch payments based on type
+      let allMonthlyForTimeline: any[] = [];
       let monthlyPayments: any[] = [];
       let oneTimePayments: any[] = [];
       let monthlyTotal = 0;
       let oneTimeTotal = 0;
 
       if (type === 'all' || type === 'monthly') {
-        [monthlyTotal, monthlyPayments] = await Promise.all([
+        const whereTimeline = { gymId, memberId };
+        if (normalizedStatus) {
+          (whereTimeline as any).status = normalizedStatus;
+        }
+
+        [monthlyTotal, allMonthlyForTimeline, monthlyPayments] = await Promise.all([
           prisma.payment.count({ where: whereMonthly }),
+          prisma.payment.findMany({
+            where: whereTimeline,
+            orderBy: { dueDate: 'asc' },
+          }),
           prisma.payment.findMany({
             where: whereMonthly,
             orderBy: { dueDate: 'desc' },
@@ -554,10 +565,9 @@ router.get(
         ]);
       }
 
-      // Format monthly payments
-      const formattedMonthlyPayments = monthlyPayments.map((payment) => ({
+      const formatMonthly = (payment: (typeof allMonthlyForTimeline)[0]) => ({
         id: payment.id,
-        type: 'monthly',
+        type: 'monthly' as const,
         month: payment.month,
         amount: payment.amount,
         status: payment.status,
@@ -565,12 +575,21 @@ router.get(
         paidDate: payment.paidDate,
         createdAt: payment.createdAt,
         updatedAt: payment.updatedAt,
-      }));
+      });
 
-      // Format one-time payments
+      const formattedMonthlyTimeline = allMonthlyForTimeline.map(formatMonthly);
+
+      const monthlyGrouped = {
+        paid: formattedMonthlyTimeline.filter((p) => p.status === 'PAID'),
+        pending: formattedMonthlyTimeline.filter((p) => p.status === 'PENDING'),
+        overdue: formattedMonthlyTimeline.filter((p) => p.status === 'OVERDUE'),
+      };
+
+      const formattedMonthlyPayments = monthlyPayments.map(formatMonthly);
+
       const formattedOneTimePayments = oneTimePayments.map((payment) => ({
         id: payment.id,
-        type: 'one-time',
+        type: 'one-time' as const,
         admissionFee: payment.admissionFee,
         packageFee: payment.packageFee,
         trainerFee: payment.trainerFee,
@@ -581,7 +600,6 @@ router.get(
         updatedAt: payment.updatedAt,
       }));
 
-      // Combine and sort by date (most recent first)
       const allPayments = [...formattedMonthlyPayments, ...formattedOneTimePayments].sort(
         (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       );
@@ -593,13 +611,15 @@ router.get(
           id: member.id,
           name: member.name,
         },
+        monthlyInstallments: formattedMonthlyTimeline,
+        monthlyGrouped,
         payments: allPayments,
         summary: {
           monthly: {
-            total: monthlyTotal,
-            paid: monthlyPayments.filter((p) => p.status === 'PAID').length,
-            pending: monthlyPayments.filter((p) => p.status === 'PENDING').length,
-            overdue: monthlyPayments.filter((p) => p.status === 'OVERDUE').length,
+            total: allMonthlyForTimeline.length,
+            paid: allMonthlyForTimeline.filter((p) => p.status === 'PAID').length,
+            pending: allMonthlyForTimeline.filter((p) => p.status === 'PENDING').length,
+            overdue: allMonthlyForTimeline.filter((p) => p.status === 'OVERDUE').length,
           },
           oneTime: {
             total: oneTimeTotal,

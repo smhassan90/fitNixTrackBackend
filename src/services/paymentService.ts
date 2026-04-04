@@ -1,10 +1,72 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { parseDurationToMonths, addMonths, formatMonth } from '../utils/dateHelpers';
-import { parseDate } from '../utils/dateHelpers';
-import { NotFoundError } from '../utils/errors';
+import { NotFoundError, ValidationError } from '../utils/errors';
+
+type Tx = Prisma.TransactionClient;
+
+type MemberWithPackage = {
+  packageId: number | null;
+  membershipEnd: Date | null;
+  package: { price: number; discount: number | null } | null;
+};
 
 /**
- * Generate payments for a member based on their package
+ * After a monthly installment is marked paid, create the following month's row if within membership.
+ */
+export async function createNextInstallmentIfNeeded(
+  db: Tx,
+  gymId: number,
+  paidPayment: {
+    memberId: number;
+    dueDate: Date;
+    amount: number;
+    member: MemberWithPackage;
+  }
+): Promise<void> {
+  const { member } = paidPayment;
+  if (!member.packageId || !member.membershipEnd) {
+    return;
+  }
+
+  const nextDueDate = addMonths(paidPayment.dueDate, 1);
+  const nextMonth = formatMonth(nextDueDate);
+
+  const existingPayment = await db.payment.findFirst({
+    where: {
+      memberId: paidPayment.memberId,
+      gymId,
+      month: nextMonth,
+    },
+  });
+
+  if (existingPayment || nextDueDate > member.membershipEnd) {
+    return;
+  }
+
+  const packagePrice = member.package?.price ?? paidPayment.amount;
+  const discount = member.package?.discount ?? 0;
+  const amount = Math.max(0, packagePrice - discount);
+
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const status = nextDueDate < today ? 'OVERDUE' : 'PENDING';
+
+  await db.payment.create({
+    data: {
+      gymId,
+      memberId: paidPayment.memberId,
+      month: nextMonth,
+      amount,
+      status,
+      dueDate: nextDueDate,
+    },
+  });
+}
+
+/**
+ * Generate payments for a member based on their package.
+ * Clears all unpaid installments (pending + overdue), then creates the first one from membership start.
  */
 export async function generatePaymentsForMember(
   memberId: number,
@@ -16,7 +78,6 @@ export async function generatePaymentsForMember(
     return;
   }
 
-  // Get package details
   const packageData = await prisma.package.findFirst({
     where: { id: packageId, gymId },
   });
@@ -25,43 +86,33 @@ export async function generatePaymentsForMember(
     return;
   }
 
-  // Calculate duration in months
   const durationMonths = parseDurationToMonths(packageData.duration);
   if (durationMonths === 0) {
     return;
   }
 
-  // Calculate membership end date
   const membershipEnd = addMonths(membershipStart, durationMonths);
 
-  // Delete existing pending payments for this member
   await prisma.payment.deleteMany({
     where: {
       memberId,
       gymId,
-      status: 'PENDING',
+      status: { in: ['PENDING', 'OVERDUE'] },
     },
   });
 
-  // Generate the CURRENT month's payment (same month as membership start, same day)
-  // If the due date has passed, mark it as OVERDUE
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
-  
-  // Calculate current month payment due date (same month as membership start, same day)
-  // Use the membership start date as the due date for the current month
+
   const currentDueDate = new Date(membershipStart);
   currentDueDate.setUTCHours(0, 0, 0, 0);
-  
-  // Calculate amount with discount (price - discount, minimum 0)
+
   const discount = packageData.discount ?? 0;
   const amount = Math.max(0, packageData.price - discount);
-  
-  // Only create payment if it's before or equal to membership end
+
   if (currentDueDate <= membershipEnd) {
     const currentMonth = formatMonth(currentDueDate);
 
-    // Check if payment already exists (shouldn't, but just in case)
     const existingPayment = await prisma.payment.findFirst({
       where: {
         memberId,
@@ -71,8 +122,6 @@ export async function generatePaymentsForMember(
     });
 
     if (!existingPayment) {
-      // Determine status: OVERDUE if due date has passed, otherwise PENDING
-      // Compare dates: if due date is before today, it's overdue
       const status = currentDueDate < today ? 'OVERDUE' : 'PENDING';
 
       await prisma.payment.create({
@@ -85,23 +134,19 @@ export async function generatePaymentsForMember(
           dueDate: currentDueDate,
         },
       });
-    } else {
-      // If payment exists, update its status if it's overdue
-      if (existingPayment.status === 'PENDING' && currentDueDate < today) {
-        await prisma.payment.update({
-          where: { id: existingPayment.id },
-          data: { status: 'OVERDUE' },
-        });
-      }
+    } else if (existingPayment.status === 'PENDING' && currentDueDate < today) {
+      await prisma.payment.update({
+        where: { id: existingPayment.id },
+        data: { status: 'OVERDUE' },
+      });
     }
   }
 
-  // Update member's membership end date and monthly payment amount
   await prisma.member.update({
     where: { id: memberId },
-    data: { 
+    data: {
       membershipEnd,
-      monthlyPaymentAmount: amount, // Save monthly payment amount for income calculation
+      monthlyPaymentAmount: amount,
     },
   });
 }
@@ -109,10 +154,7 @@ export async function generatePaymentsForMember(
 /**
  * Mark payment as paid and generate next payment if applicable
  */
-export async function markPaymentAsPaid(
-  paymentId: number,
-  gymId: number
-): Promise<void> {
+export async function markPaymentAsPaid(paymentId: number, gymId: number): Promise<void> {
   const payment = await prisma.payment.findFirst({
     where: { id: paymentId, gymId },
     include: { member: { include: { package: true } } },
@@ -122,52 +164,97 @@ export async function markPaymentAsPaid(
     throw new NotFoundError('Payment', paymentId);
   }
 
-  // Update payment status
-  await prisma.payment.update({
-    where: { id: paymentId },
-    data: {
-      status: 'PAID',
-      paidDate: new Date(),
-    },
-  });
+  const paidDate = new Date();
+  paidDate.setUTCHours(0, 0, 0, 0);
 
-  // Generate next payment if member has active package
-  if (payment.member.packageId && payment.member.membershipEnd) {
-    const nextDueDate = addMonths(payment.dueDate, 1);
-    const nextMonth = formatMonth(nextDueDate);
-
-    // Check if next payment already exists
-    const existingPayment = await prisma.payment.findFirst({
-      where: {
-        memberId: payment.memberId,
-        gymId,
-        month: nextMonth,
+  await prisma.$transaction(async (tx) => {
+    await tx.payment.update({
+      where: { id: paymentId },
+      data: {
+        status: 'PAID',
+        paidDate,
       },
     });
 
-    if (!existingPayment && nextDueDate <= payment.member.membershipEnd) {
-      // Calculate amount with discount (price - discount, minimum 0)
-      const packagePrice = payment.member.package?.price || payment.amount;
-      const discount = payment.member.package?.discount ?? 0;
-      const amount = Math.max(0, packagePrice - discount);
-      
-      // Check if due date has passed
-      const today = new Date();
-      today.setUTCHours(0, 0, 0, 0);
-      const status = nextDueDate < today ? 'OVERDUE' : 'PENDING';
+    await createNextInstallmentIfNeeded(
+      tx,
+      gymId,
+      {
+        memberId: payment.memberId,
+        dueDate: payment.dueDate,
+        amount: payment.amount,
+        member: {
+          packageId: payment.member.packageId,
+          membershipEnd: payment.member.membershipEnd,
+          package: payment.member.package,
+        },
+      }
+    );
+  });
+}
 
-      await prisma.payment.create({
-        data: {
-          gymId,
-          memberId: payment.memberId,
-          month: nextMonth,
-          amount,
-          status,
-          dueDate: nextDueDate,
+/**
+ * Mark multiple monthly installments paid in one action (same member, chronological order).
+ * paidDate is set to start of today (UTC) for all.
+ */
+export async function markPaymentsAsPaidBulk(
+  paymentIds: number[],
+  gymId: number
+): Promise<{ paidIds: number[] }> {
+  const uniqueIds = [...new Set(paymentIds)];
+  if (uniqueIds.length === 0) {
+    throw new ValidationError('At least one payment ID is required');
+  }
+
+  const payments = await prisma.payment.findMany({
+    where: { id: { in: uniqueIds }, gymId },
+    include: { member: { include: { package: true } } },
+  });
+
+  if (payments.length !== uniqueIds.length) {
+    throw new ValidationError('One or more payments were not found for this gym');
+  }
+
+  const memberIds = new Set(payments.map((p) => p.memberId));
+  if (memberIds.size !== 1) {
+    throw new ValidationError('All selected payments must belong to the same member');
+  }
+
+  for (const p of payments) {
+    if (p.status === 'PAID') {
+      throw new ValidationError(`Payment ${p.id} is already paid`);
+    }
+    if (p.status !== 'PENDING' && p.status !== 'OVERDUE') {
+      throw new ValidationError(`Payment ${p.id} cannot be marked paid from status ${p.status}`);
+    }
+  }
+
+  const sorted = [...payments].sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
+
+  const paidDate = new Date();
+  paidDate.setUTCHours(0, 0, 0, 0);
+
+  await prisma.$transaction(async (tx) => {
+    for (const p of sorted) {
+      await tx.payment.update({
+        where: { id: p.id },
+        data: { status: 'PAID', paidDate },
+      });
+
+      await createNextInstallmentIfNeeded(tx, gymId, {
+        memberId: p.memberId,
+        dueDate: p.dueDate,
+        amount: p.amount,
+        member: {
+          packageId: p.member.packageId,
+          membershipEnd: p.member.membershipEnd,
+          package: p.member.package,
         },
       });
     }
-  }
+  });
+
+  return { paidIds: sorted.map((p) => p.id) };
 }
 
 /**
@@ -193,3 +280,146 @@ export async function markOverduePayments(gymId: number): Promise<number> {
   return result.count;
 }
 
+export type MemberPaymentSummaryRow = {
+  member: {
+    id: number;
+    name: string;
+    email: string | null;
+    phone: string | null;
+    packageId: number | null;
+    membershipStart: Date | null;
+    membershipEnd: Date | null;
+    monthlyPaymentAmount: number | null;
+  };
+  nextUnpaid: null | {
+    paymentId: number;
+    amount: number;
+    dueDate: Date;
+    month: string;
+    status: 'PENDING' | 'OVERDUE';
+    isOverdue: boolean;
+  };
+  overdueMonthCount: number;
+};
+
+/**
+ * Build one-row-per-member summaries for the main payment screen.
+ */
+export async function getMemberPaymentSummaries(
+  gymId: number,
+  options: {
+    search?: string;
+    onlyWithOpenInstallments?: boolean;
+    page: number;
+    limit: number;
+    sortBy: 'name' | 'nextDueDate' | 'overdueCount';
+    sortOrder: 'asc' | 'desc';
+  }
+): Promise<{ rows: MemberPaymentSummaryRow[]; total: number }> {
+  await markOverduePayments(gymId);
+
+  const { search, onlyWithOpenInstallments, page, limit, sortBy, sortOrder } = options;
+
+  const memberWhere: Prisma.MemberWhereInput = { gymId };
+  if (search?.trim()) {
+    const s = search.trim();
+    const searchNum = parseInt(s, 10);
+    memberWhere.OR = [
+      { name: { contains: s } },
+      { email: { contains: s } },
+      { phone: { contains: s } },
+      ...(isNaN(searchNum) ? [] : [{ id: searchNum }]),
+    ];
+  }
+
+  const members = await prisma.member.findMany({
+    where: memberWhere,
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      phone: true,
+      packageId: true,
+      membershipStart: true,
+      membershipEnd: true,
+      monthlyPaymentAmount: true,
+    },
+    orderBy: { name: 'asc' },
+  });
+
+  const memberIds = members.map((m) => m.id);
+  if (memberIds.length === 0) {
+    return { rows: [], total: 0 };
+  }
+
+  const unpaidPayments = await prisma.payment.findMany({
+    where: {
+      gymId,
+      memberId: { in: memberIds },
+      status: { in: ['PENDING', 'OVERDUE'] },
+    },
+    orderBy: { dueDate: 'asc' },
+  });
+
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+
+  const unpaidByMember = new Map<number, typeof unpaidPayments>();
+  for (const p of unpaidPayments) {
+    const list = unpaidByMember.get(p.memberId) ?? [];
+    list.push(p);
+    unpaidByMember.set(p.memberId, list);
+  }
+
+  let rows: MemberPaymentSummaryRow[] = members.map((member) => {
+    const list = unpaidByMember.get(member.id) ?? [];
+    const next = list[0];
+    const overdueMonthCount = list.filter((p) => p.dueDate < today).length;
+
+    return {
+      member,
+      nextUnpaid: next
+        ? {
+            paymentId: next.id,
+            amount: next.amount,
+            dueDate: next.dueDate,
+            month: next.month,
+            status: next.status as 'PENDING' | 'OVERDUE',
+            isOverdue: next.status === 'OVERDUE' || next.dueDate < today,
+          }
+        : null,
+      overdueMonthCount,
+    };
+  });
+
+  if (onlyWithOpenInstallments) {
+    rows = rows.filter((r) => r.nextUnpaid !== null);
+  }
+
+  const collator = sortOrder === 'asc' ? 1 : -1;
+
+  rows.sort((a, b) => {
+    if (sortBy === 'name') {
+      return collator * a.member.name.localeCompare(b.member.name);
+    }
+    if (sortBy === 'overdueCount') {
+      const diff = a.overdueMonthCount - b.overdueMonthCount;
+      if (diff !== 0) {
+        return collator * diff;
+      }
+      return a.member.name.localeCompare(b.member.name);
+    }
+    // nextDueDate
+    const aTime = a.nextUnpaid?.dueDate.getTime() ?? Number.POSITIVE_INFINITY;
+    const bTime = b.nextUnpaid?.dueDate.getTime() ?? Number.POSITIVE_INFINITY;
+    if (aTime !== bTime) {
+      return collator * (aTime - bTime);
+    }
+    return a.member.name.localeCompare(b.member.name);
+  });
+
+  const total = rows.length;
+  const paged = rows.slice((page - 1) * limit, page * limit);
+
+  return { rows: paged, total };
+}

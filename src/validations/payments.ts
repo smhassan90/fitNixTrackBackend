@@ -54,3 +54,25 @@ export const deletePaymentSchema = z.object({
   }),
 });
 
+export const getMemberPaymentSummariesSchema = z.object({
+  query: z.object({
+    search: z.string().optional(),
+    onlyWithOpenInstallments: z
+      .enum(['true', 'false'])
+      .optional()
+      .transform((val) => val === 'true'),
+    sortBy: z.enum(['name', 'nextDueDate', 'overdueCount']).optional().default('nextDueDate'),
+    sortOrder: z.enum(['asc', 'desc']).optional().default('asc'),
+    page: z.string().regex(/^\d+$/).optional().transform((val) => (val ? parseInt(val, 10) : 1)),
+    limit: z.string().regex(/^\d+$/).optional().transform((val) => (val ? parseInt(val, 10) : 50)),
+  }),
+});
+
+export const bulkMarkPaidSchema = z.object({
+  body: z.object({
+    paymentIds: z
+      .array(z.number().int().positive())
+      .min(1, 'At least one payment ID is required'),
+  }),
+});
+

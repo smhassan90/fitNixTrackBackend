@@ -10,11 +10,18 @@ import {
   getPaymentSchema,
   markPaidSchema,
   deletePaymentSchema,
+  getMemberPaymentSummariesSchema,
+  bulkMarkPaidSchema,
 } from '../validations/payments';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import { parseDate } from '../utils/dateHelpers';
-import { markPaymentAsPaid, markOverduePayments } from '../services/paymentService';
+import {
+  markPaymentAsPaid,
+  markOverduePayments,
+  getMemberPaymentSummaries,
+  markPaymentsAsPaidBulk,
+} from '../services/paymentService';
 
 const router = Router();
 
@@ -81,8 +88,6 @@ router.get(
       // This applies when filtering by PENDING or OVERDUE status
       const isPendingOrOverdue = normalizedStatus === 'PENDING' || normalizedStatus === 'OVERDUE';
 
-      console.log(`[Payments API] Status: "${status}", Normalized: "${normalizedStatus}", Should filter next payment: ${isPendingOrOverdue}`);
-
       if (isPendingOrOverdue) {
         // Get all payments matching the status (and other filters like memberId, search, etc.)
         const allPayments = await prisma.payment.findMany({
@@ -101,8 +106,6 @@ router.get(
             dueDate: 'asc',
           },
         });
-
-        console.log(`[Payments API] Status: ${status}, Found ${allPayments.length} payments before filtering`);
 
         // Group by member and get only the next upcoming payment for each
         // This ensures we only show 1 pending/overdue payment per member (the next one)
@@ -124,8 +127,6 @@ router.get(
         // Convert to array and apply sorting, pagination
         payments = Array.from(memberNextPayments.values());
         total = payments.length;
-
-        console.log(`[Payments API] After filtering to next payment per member: ${total} payments`);
 
         // Apply sorting
         payments.sort((a, b) => {
@@ -171,6 +172,208 @@ router.get(
           totalPages: Math.ceil(total / limitNum),
         },
       });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// GET /api/payments/member-summaries — one entry per member (main payment screen)
+router.get(
+  '/member-summaries',
+  validate(getMemberPaymentSummariesSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const q = req.query as any;
+      const pageNum = typeof q.page === 'number' ? q.page : parseInt(q.page as string, 10) || 1;
+      const limitNum = typeof q.limit === 'number' ? q.limit : parseInt(q.limit as string, 10) || 50;
+
+      const { rows, total } = await getMemberPaymentSummaries(gymId, {
+        search: q.search,
+        onlyWithOpenInstallments: q.onlyWithOpenInstallments === true,
+        page: pageNum,
+        limit: limitNum,
+        sortBy: q.sortBy ?? 'nextDueDate',
+        sortOrder: q.sortOrder ?? 'asc',
+      });
+
+      sendSuccess(res, {
+        members: rows,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages: Math.ceil(total / limitNum),
+        },
+      });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// POST /api/payments/bulk-mark-paid — pay multiple monthly installments at once (same member)
+router.post(
+  '/bulk-mark-paid',
+  validate(bulkMarkPaidSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      await markOverduePayments(gymId);
+      const { paymentIds } = req.body;
+      const result = await markPaymentsAsPaidBulk(paymentIds, gymId);
+
+      const updated = await prisma.payment.findMany({
+        where: { id: { in: result.paidIds }, gymId },
+        include: {
+          member: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
+            },
+          },
+        },
+        orderBy: { dueDate: 'asc' },
+      });
+
+      sendSuccess(res, { payments: updated, paidIds: result.paidIds }, 'Payments marked as paid');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// POST /api/payments/generate-overdue
+router.post('/generate-overdue', async (req: AuthRequest, res: Response) => {
+  try {
+    const gymId = req.gymId!;
+    const count = await markOverduePayments(gymId);
+    sendSuccess(res, { markedOverdue: count }, `Marked ${count} payments as overdue`);
+  } catch (error) {
+    sendError(res, error as Error);
+  }
+});
+
+// GET /api/payments/one-time - Get all one-time payments
+router.get('/one-time', validate(getPaymentsSchema), async (req: AuthRequest, res: Response) => {
+  try {
+    const gymId = req.gymId!;
+    const query = req.query as any;
+    const {
+      memberId,
+      status,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
+      page,
+      limit,
+    } = query;
+
+    const pageNum = typeof page === 'number' ? page : parseInt(page as string, 10) || 1;
+    const limitNum = typeof limit === 'number' ? limit : parseInt(limit as string, 10) || 50;
+
+    const where: any = { gymId };
+
+    if (memberId) {
+      const memberIdNum = typeof memberId === 'number' ? memberId : parseInt(memberId as string, 10);
+      if (!isNaN(memberIdNum)) {
+        where.memberId = memberIdNum;
+      }
+    }
+
+    const normalizedStatus = status ? String(status).toUpperCase() : null;
+    if (normalizedStatus) where.status = normalizedStatus as 'PENDING' | 'PAID' | 'OVERDUE';
+
+    const [total, oneTimePayments] = await Promise.all([
+      prisma.oneTimePayment.count({ where }),
+      prisma.oneTimePayment.findMany({
+        where,
+        include: {
+          member: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
+            },
+          },
+        },
+        orderBy: { [sortBy]: sortOrder },
+        skip: (pageNum - 1) * limitNum,
+        take: limitNum,
+      }),
+    ]);
+
+    sendSuccess(res, {
+      oneTimePayments,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum),
+      },
+    });
+  } catch (error) {
+    sendError(res, error as Error);
+  }
+});
+
+// PATCH /api/payments/one-time/:id/mark-paid - Mark one-time payment as paid
+router.patch(
+  '/one-time/:id/mark-paid',
+  validate(getPaymentSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const id = parseInt(req.params.id, 10);
+
+      const oneTimePayment = await prisma.oneTimePayment.findFirst({
+        where: { id, gymId },
+        include: {
+          member: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
+            },
+          },
+        },
+      });
+
+      if (!oneTimePayment) {
+        sendError(res, new NotFoundError('One-time payment', id));
+        return;
+      }
+
+      const updated = await prisma.oneTimePayment.update({
+        where: { id },
+        data: {
+          status: 'PAID',
+          paidDate: new Date(),
+        },
+        include: {
+          member: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
+            },
+          },
+        },
+      });
+
+      await prisma.member.update({
+        where: { id: oneTimePayment.memberId },
+        data: {
+          oneTimePaymentPaid: true,
+        },
+      });
+
+      sendSuccess(res, updated, 'One-time payment marked as paid');
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -426,154 +629,6 @@ router.delete(
       });
 
       sendSuccess(res, { message: 'Payment deleted successfully' });
-    } catch (error) {
-      sendError(res, error as Error);
-    }
-  }
-);
-
-// POST /api/payments/generate-overdue
-router.post(
-  '/generate-overdue',
-  authenticateToken,
-  requireGymId,
-  async (req: AuthRequest, res: Response) => {
-    try {
-      const gymId = req.gymId!;
-
-      const count = await markOverduePayments(gymId);
-
-      sendSuccess(res, { markedOverdue: count }, `Marked ${count} payments as overdue`);
-    } catch (error) {
-      sendError(res, error as Error);
-    }
-  }
-);
-
-// PATCH /api/payments/one-time/:id/mark-paid - Mark one-time payment as paid
-router.patch(
-  '/one-time/:id/mark-paid',
-  validate(getPaymentSchema), // Reuse existing schema for ID validation
-  async (req: AuthRequest, res: Response) => {
-    try {
-      const gymId = req.gymId!;
-      const id = parseInt(req.params.id, 10);
-
-      // Find one-time payment
-      const oneTimePayment = await prisma.oneTimePayment.findFirst({
-        where: { id, gymId },
-        include: {
-          member: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              phone: true,
-            },
-          },
-        },
-      });
-
-      if (!oneTimePayment) {
-        sendError(res, new NotFoundError('One-time payment', id));
-        return;
-      }
-
-      // Update one-time payment status
-      const updated = await prisma.oneTimePayment.update({
-        where: { id },
-        data: {
-          status: 'PAID',
-          paidDate: new Date(),
-        },
-        include: {
-          member: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              phone: true,
-            },
-          },
-        },
-      });
-
-      // Update member's one-time payment status
-      await prisma.member.update({
-        where: { id: oneTimePayment.memberId },
-        data: {
-          oneTimePaymentPaid: true,
-        },
-      });
-
-      sendSuccess(res, updated, 'One-time payment marked as paid');
-    } catch (error) {
-      sendError(res, error as Error);
-    }
-  }
-);
-
-// GET /api/payments/one-time - Get all one-time payments
-router.get(
-  '/one-time',
-  validate(getPaymentsSchema),
-  async (req: AuthRequest, res: Response) => {
-    try {
-      const gymId = req.gymId!;
-      const query = req.query as any;
-      const {
-        memberId,
-        status,
-        sortBy = 'createdAt',
-        sortOrder = 'desc',
-        page,
-        limit,
-      } = query;
-
-      const pageNum = typeof page === 'number' ? page : parseInt(page as string, 10) || 1;
-      const limitNum = typeof limit === 'number' ? limit : parseInt(limit as string, 10) || 50;
-
-      const where: any = { gymId };
-
-      if (memberId) {
-        const memberIdNum = typeof memberId === 'number' ? memberId : parseInt(memberId as string, 10);
-        if (!isNaN(memberIdNum)) {
-          where.memberId = memberIdNum;
-        }
-      }
-
-      const normalizedStatus = status ? String(status).toUpperCase() : null;
-      if (normalizedStatus) where.status = normalizedStatus as 'PENDING' | 'PAID' | 'OVERDUE';
-
-      const [total, oneTimePayments] = await Promise.all([
-        prisma.oneTimePayment.count({ where }),
-        prisma.oneTimePayment.findMany({
-          where,
-          include: {
-            member: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                phone: true,
-              },
-            },
-          },
-          orderBy: { [sortBy]: sortOrder },
-          skip: (pageNum - 1) * limitNum,
-          take: limitNum,
-        }),
-      ]);
-
-      sendSuccess(res, {
-        oneTimePayments,
-        pagination: {
-          page: pageNum,
-          limit: limitNum,
-          total,
-          totalPages: Math.ceil(total / limitNum),
-        },
-      });
     } catch (error) {
       sendError(res, error as Error);
     }
