@@ -1,6 +1,13 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
-import { parseDurationToMonths, addMonths, formatMonth } from '../utils/dateHelpers';
+import {
+  parseDurationToMonths,
+  addMonths,
+  formatMonth,
+  nextBillingDueDate,
+  getBillingAnchorDayUTC,
+  startOfNextCalendarMonthUTC,
+} from '../utils/dateHelpers';
 import { NotFoundError, ValidationError } from '../utils/errors';
 
 type Tx = Prisma.TransactionClient;
@@ -8,6 +15,7 @@ type Tx = Prisma.TransactionClient;
 type MemberWithPackage = {
   packageId: number | null;
   membershipEnd: Date | null;
+  membershipStart: Date | null;
   package: { price: number; discount: number | null } | null;
 };
 
@@ -29,7 +37,10 @@ export async function createNextInstallmentIfNeeded(
     return;
   }
 
-  const nextDueDate = addMonths(paidPayment.dueDate, 1);
+  const anchorDay = member.membershipStart
+    ? getBillingAnchorDayUTC(member.membershipStart)
+    : getBillingAnchorDayUTC(paidPayment.dueDate);
+  const nextDueDate = nextBillingDueDate(paidPayment.dueDate, anchorDay);
   const nextMonth = formatMonth(nextDueDate);
 
   const existingPayment = await db.payment.findFirst({
@@ -40,7 +51,10 @@ export async function createNextInstallmentIfNeeded(
     },
   });
 
-  if (existingPayment || nextDueDate > member.membershipEnd) {
+  const membershipEndDay = new Date(member.membershipEnd);
+  membershipEndDay.setUTCHours(0, 0, 0, 0);
+
+  if (existingPayment || nextDueDate > membershipEndDay) {
     return;
   }
 
@@ -178,6 +192,16 @@ async function ensureOpenMonthlyInstallmentExists(params: {
     return;
   }
 
+  const member = await prisma.member.findFirst({
+    where: { id: memberId, gymId },
+    select: { membershipStart: true },
+  });
+  if (!member?.membershipStart) {
+    return;
+  }
+
+  const anchorDay = getBillingAnchorDayUTC(member.membershipStart);
+
   const open = await prisma.payment.findFirst({
     where: {
       memberId,
@@ -194,21 +218,13 @@ async function ensureOpenMonthlyInstallmentExists(params: {
     orderBy: { dueDate: 'desc' },
   });
 
-  const member = await prisma.member.findFirst({
-    where: { id: memberId, gymId },
-    select: { membershipStart: true },
-  });
-  if (!member?.membershipStart) {
-    return;
-  }
-
   let nextDueDate: Date;
   if (lastPaid) {
-    nextDueDate = addMonths(lastPaid.dueDate, 1);
+    nextDueDate = nextBillingDueDate(lastPaid.dueDate, anchorDay);
   } else {
     nextDueDate = new Date(member.membershipStart);
+    nextDueDate.setUTCHours(0, 0, 0, 0);
   }
-  nextDueDate.setUTCHours(0, 0, 0, 0);
 
   const maxSteps = 120;
   for (let step = 0; step < maxSteps; step++) {
@@ -240,8 +256,7 @@ async function ensureOpenMonthlyInstallmentExists(params: {
       return;
     }
 
-    nextDueDate = addMonths(existing.dueDate, 1);
-    nextDueDate.setUTCHours(0, 0, 0, 0);
+    nextDueDate = nextBillingDueDate(existing.dueDate, anchorDay);
   }
 }
 
@@ -280,6 +295,7 @@ export async function markPaymentAsPaid(paymentId: number, gymId: number): Promi
         member: {
           packageId: payment.member.packageId,
           membershipEnd: payment.member.membershipEnd,
+          membershipStart: payment.member.membershipStart,
           package: payment.member.package,
         },
       }
@@ -342,6 +358,7 @@ export async function markPaymentsAsPaidBulk(
         member: {
           packageId: p.member.packageId,
           membershipEnd: p.member.membershipEnd,
+          membershipStart: p.member.membershipStart,
           package: p.member.package,
         },
       });
@@ -392,6 +409,7 @@ export type MemberPaymentSummaryRow = {
     month: string;
     status: 'PENDING' | 'OVERDUE';
     isOverdue: boolean;
+    displayBucket: 'overdue' | 'pending' | 'advance';
   };
   overdueMonthCount: number;
 };
@@ -457,6 +475,7 @@ export async function getMemberPaymentSummaries(
 
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
+  const startNextCalendarMonth = startOfNextCalendarMonthUTC(today);
 
   const unpaidByMember = new Map<number, typeof unpaidPayments>();
   for (const p of unpaidPayments) {
@@ -470,6 +489,16 @@ export async function getMemberPaymentSummaries(
     const next = list[0];
     const overdueMonthCount = list.filter((p) => p.dueDate < today).length;
 
+    const bucketFor = (p: (typeof list)[0]): 'overdue' | 'pending' | 'advance' => {
+      if (p.dueDate < today) {
+        return 'overdue';
+      }
+      if (p.dueDate < startNextCalendarMonth) {
+        return 'pending';
+      }
+      return 'advance';
+    };
+
     return {
       member,
       nextUnpaid: next
@@ -480,6 +509,7 @@ export async function getMemberPaymentSummaries(
             month: next.month,
             status: next.status as 'PENDING' | 'OVERDUE',
             isOverdue: next.status === 'OVERDUE' || next.dueDate < today,
+            displayBucket: bucketFor(next),
           }
         : null,
       overdueMonthCount,

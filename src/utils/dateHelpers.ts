@@ -57,3 +57,33 @@ export function formatMonth(date: Date): string {
   return `${year}-${month}`;
 }
 
+/** Day-of-month from membership start used as the billing anchor (UTC). */
+export function getBillingAnchorDayUTC(from: Date): number {
+  return from.getUTCDate();
+}
+
+/**
+ * Next installment after prevDue: move one calendar month forward, then use
+ * min(anchorDay, lastDayOfThatMonth). E.g. anchor 30 → Jan 30, Feb 28, Mar 30, Apr 30 (2026).
+ */
+export function nextBillingDueDate(prevDueDate: Date, anchorDay: number): Date {
+  const y = prevDueDate.getUTCFullYear();
+  const m = prevDueDate.getUTCMonth();
+  let nextM = m + 1;
+  let nextY = y;
+  if (nextM > 11) {
+    nextM = 0;
+    nextY += 1;
+  }
+  const lastDay = new Date(Date.UTC(nextY, nextM + 1, 0)).getUTCDate();
+  const day = Math.min(anchorDay, lastDay);
+  return new Date(Date.UTC(nextY, nextM, day));
+}
+
+/** First instant of the calendar month after `reference` (UTC). */
+export function startOfNextCalendarMonthUTC(reference: Date): Date {
+  const y = reference.getUTCFullYear();
+  const m = reference.getUTCMonth();
+  return new Date(Date.UTC(y, m + 1, 1));
+}
+

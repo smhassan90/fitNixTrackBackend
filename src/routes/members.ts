@@ -14,7 +14,7 @@ import {
 } from '../validations/members';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError } from '../utils/errors';
-import { parseDate } from '../utils/dateHelpers';
+import { parseDate, startOfNextCalendarMonthUTC } from '../utils/dateHelpers';
 import { generatePaymentsForMember, markOverduePayments } from '../services/paymentService';
 
 const router = Router();
@@ -582,17 +582,31 @@ router.get(
 
       const todayStart = new Date();
       todayStart.setUTCHours(0, 0, 0, 0);
+      const startNextCalendarMonth = startOfNextCalendarMonthUTC(todayStart);
+
+      const displayBucketFor = (p: { status: string; dueDate: Date }): 'paid' | 'overdue' | 'pending' | 'advance' => {
+        if (p.status === 'PAID') {
+          return 'paid';
+        }
+        if (p.dueDate < todayStart) {
+          return 'overdue';
+        }
+        if (p.dueDate < startNextCalendarMonth) {
+          return 'pending';
+        }
+        return 'advance';
+      };
+
+      const monthlyInstallments = formattedMonthlyTimeline.map((p) => ({
+        ...p,
+        displayBucket: displayBucketFor(p),
+      }));
 
       const monthlyGrouped = {
-        paid: formattedMonthlyTimeline.filter((p) => p.status === 'PAID'),
-        pending: formattedMonthlyTimeline.filter(
-          (p) => p.status === 'PENDING' && p.dueDate >= todayStart
-        ),
-        overdue: formattedMonthlyTimeline.filter(
-          (p) =>
-            p.status !== 'PAID' &&
-            (p.status === 'OVERDUE' || p.dueDate < todayStart)
-        ),
+        paid: monthlyInstallments.filter((p) => p.displayBucket === 'paid'),
+        overdue: monthlyInstallments.filter((p) => p.displayBucket === 'overdue'),
+        pending: monthlyInstallments.filter((p) => p.displayBucket === 'pending'),
+        advance: monthlyInstallments.filter((p) => p.displayBucket === 'advance'),
       };
 
       const formattedMonthlyPayments = monthlyPayments.map(formatMonthly);
@@ -621,21 +635,16 @@ router.get(
           id: member.id,
           name: member.name,
         },
-        monthlyInstallments: formattedMonthlyTimeline,
+        monthlyInstallments,
         monthlyGrouped,
         payments: allPayments,
         summary: {
           monthly: {
-            total: allMonthlyForTimeline.length,
-            paid: allMonthlyForTimeline.filter((p) => p.status === 'PAID').length,
-            pending: allMonthlyForTimeline.filter(
-              (p) => p.status === 'PENDING' && p.dueDate >= todayStart
-            ).length,
-            overdue: allMonthlyForTimeline.filter(
-              (p) =>
-                p.status !== 'PAID' &&
-                (p.status === 'OVERDUE' || p.dueDate < todayStart)
-            ).length,
+            total: monthlyInstallments.length,
+            paid: monthlyInstallments.filter((p) => p.displayBucket === 'paid').length,
+            pending: monthlyInstallments.filter((p) => p.displayBucket === 'pending').length,
+            overdue: monthlyInstallments.filter((p) => p.displayBucket === 'overdue').length,
+            advance: monthlyInstallments.filter((p) => p.displayBucket === 'advance').length,
           },
           oneTime: {
             total: oneTimeTotal,
