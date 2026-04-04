@@ -579,10 +579,19 @@ router.get(
 
       const formattedMonthlyTimeline = allMonthlyForTimeline.map(formatMonthly);
 
+      const todayStart = new Date();
+      todayStart.setUTCHours(0, 0, 0, 0);
+
       const monthlyGrouped = {
         paid: formattedMonthlyTimeline.filter((p) => p.status === 'PAID'),
-        pending: formattedMonthlyTimeline.filter((p) => p.status === 'PENDING'),
-        overdue: formattedMonthlyTimeline.filter((p) => p.status === 'OVERDUE'),
+        pending: formattedMonthlyTimeline.filter(
+          (p) => p.status === 'PENDING' && p.dueDate >= todayStart
+        ),
+        overdue: formattedMonthlyTimeline.filter(
+          (p) =>
+            p.status !== 'PAID' &&
+            (p.status === 'OVERDUE' || p.dueDate < todayStart)
+        ),
       };
 
       const formattedMonthlyPayments = monthlyPayments.map(formatMonthly);
@@ -618,8 +627,14 @@ router.get(
           monthly: {
             total: allMonthlyForTimeline.length,
             paid: allMonthlyForTimeline.filter((p) => p.status === 'PAID').length,
-            pending: allMonthlyForTimeline.filter((p) => p.status === 'PENDING').length,
-            overdue: allMonthlyForTimeline.filter((p) => p.status === 'OVERDUE').length,
+            pending: allMonthlyForTimeline.filter(
+              (p) => p.status === 'PENDING' && p.dueDate >= todayStart
+            ).length,
+            overdue: allMonthlyForTimeline.filter(
+              (p) =>
+                p.status !== 'PAID' &&
+                (p.status === 'OVERDUE' || p.dueDate < todayStart)
+            ).length,
           },
           oneTime: {
             total: oneTimeTotal,

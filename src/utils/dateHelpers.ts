@@ -31,11 +31,11 @@ export function getEndOfDay(date: Date): Date {
 }
 
 /**
- * Add months to a date
+ * Add months to a date (UTC calendar month; matches due dates stored as UTC midnight)
  */
 export function addMonths(date: Date, months: number): Date {
   const result = new Date(date);
-  result.setMonth(result.getMonth() + months);
+  result.setUTCMonth(result.getUTCMonth() + months);
   return result;
 }
 
@@ -49,11 +49,11 @@ export function parseDurationToMonths(duration: string): number {
 }
 
 /**
- * Format month as YYYY-MM
+ * Format month as YYYY-MM (UTC; matches payment dueDate / month field)
  */
 export function formatMonth(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
   return `${year}-${month}`;
 }
 

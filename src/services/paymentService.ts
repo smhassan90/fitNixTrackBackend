@@ -149,6 +149,100 @@ export async function generatePaymentsForMember(
       monthlyPaymentAmount: amount,
     },
   });
+
+  await ensureOpenMonthlyInstallmentExists({
+    memberId,
+    gymId,
+    membershipEnd,
+    amount,
+  });
+}
+
+/**
+ * After regenerating installments, if every unpaid row was removed but the membership is still active
+ * and the anchor month is already PAID, create the next due row so the member never ends up with zero open installments.
+ */
+async function ensureOpenMonthlyInstallmentExists(params: {
+  memberId: number;
+  gymId: number;
+  membershipEnd: Date;
+  amount: number;
+}): Promise<void> {
+  const { memberId, gymId, membershipEnd, amount } = params;
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+
+  const end = new Date(membershipEnd);
+  end.setUTCHours(0, 0, 0, 0);
+  if (end < today) {
+    return;
+  }
+
+  const open = await prisma.payment.findFirst({
+    where: {
+      memberId,
+      gymId,
+      status: { in: ['PENDING', 'OVERDUE'] },
+    },
+  });
+  if (open) {
+    return;
+  }
+
+  const lastPaid = await prisma.payment.findFirst({
+    where: { memberId, gymId, status: 'PAID' },
+    orderBy: { dueDate: 'desc' },
+  });
+
+  const member = await prisma.member.findFirst({
+    where: { id: memberId, gymId },
+    select: { membershipStart: true },
+  });
+  if (!member?.membershipStart) {
+    return;
+  }
+
+  let nextDueDate: Date;
+  if (lastPaid) {
+    nextDueDate = addMonths(lastPaid.dueDate, 1);
+  } else {
+    nextDueDate = new Date(member.membershipStart);
+  }
+  nextDueDate.setUTCHours(0, 0, 0, 0);
+
+  const maxSteps = 120;
+  for (let step = 0; step < maxSteps; step++) {
+    if (nextDueDate > end) {
+      return;
+    }
+
+    const month = formatMonth(nextDueDate);
+    const existing = await prisma.payment.findFirst({
+      where: { memberId, gymId, month },
+    });
+
+    if (!existing) {
+      const status = nextDueDate < today ? 'OVERDUE' : 'PENDING';
+      await prisma.payment.create({
+        data: {
+          gymId,
+          memberId,
+          month,
+          amount,
+          status,
+          dueDate: nextDueDate,
+        },
+      });
+      return;
+    }
+
+    if (existing.status === 'PENDING' || existing.status === 'OVERDUE') {
+      return;
+    }
+
+    nextDueDate = addMonths(existing.dueDate, 1);
+    nextDueDate.setUTCHours(0, 0, 0, 0);
+  }
 }
 
 /**
