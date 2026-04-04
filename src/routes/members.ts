@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import type { Trainer } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { validate } from '../middleware/validation';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
@@ -235,7 +236,7 @@ router.post(
       }
 
       // Validate trainers exist if provided
-      let trainers = [];
+      let trainers: Trainer[] = [];
       if (trainerIds.length > 0) {
         trainers = await prisma.trainer.findMany({
           where: { id: { in: trainerIds }, gymId },
