@@ -2,11 +2,14 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import {
   parseDurationToMonths,
-  addMonths,
   formatMonth,
   nextBillingDueDate,
   getBillingAnchorDayUTC,
-  startOfNextCalendarMonthUTC,
+  computeMembershipLastDueDate,
+  initialOpenInstallmentStatus,
+  isDueCalendarDateBeforeTodayInGymTZ,
+  unpaidInstallmentDisplayBucket,
+  getGymTimezone,
 } from '../utils/dateHelpers';
 import { NotFoundError, ValidationError } from '../utils/errors';
 
@@ -62,9 +65,8 @@ export async function createNextInstallmentIfNeeded(
   const discount = member.package?.discount ?? 0;
   const amount = Math.max(0, packagePrice - discount);
 
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
-  const status = nextDueDate < today ? 'OVERDUE' : 'PENDING';
+  const tz = getGymTimezone();
+  const status = initialOpenInstallmentStatus(nextDueDate, tz);
 
   await db.payment.create({
     data: {
@@ -105,7 +107,8 @@ export async function generatePaymentsForMember(
     return;
   }
 
-  const membershipEnd = addMonths(membershipStart, durationMonths);
+  const anchorDay = getBillingAnchorDayUTC(membershipStart);
+  const membershipEnd = computeMembershipLastDueDate(membershipStart, durationMonths, anchorDay);
 
   await prisma.payment.deleteMany({
     where: {
@@ -115,8 +118,7 @@ export async function generatePaymentsForMember(
     },
   });
 
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
+  const tz = getGymTimezone();
 
   const currentDueDate = new Date(membershipStart);
   currentDueDate.setUTCHours(0, 0, 0, 0);
@@ -124,7 +126,10 @@ export async function generatePaymentsForMember(
   const discount = packageData.discount ?? 0;
   const amount = Math.max(0, packageData.price - discount);
 
-  if (currentDueDate <= membershipEnd) {
+  const membershipEndNorm = new Date(membershipEnd);
+  membershipEndNorm.setUTCHours(0, 0, 0, 0);
+
+  if (currentDueDate <= membershipEndNorm) {
     const currentMonth = formatMonth(currentDueDate);
 
     const existingPayment = await prisma.payment.findFirst({
@@ -136,7 +141,7 @@ export async function generatePaymentsForMember(
     });
 
     if (!existingPayment) {
-      const status = currentDueDate < today ? 'OVERDUE' : 'PENDING';
+      const status = initialOpenInstallmentStatus(currentDueDate, tz);
 
       await prisma.payment.create({
         data: {
@@ -148,7 +153,10 @@ export async function generatePaymentsForMember(
           dueDate: currentDueDate,
         },
       });
-    } else if (existingPayment.status === 'PENDING' && currentDueDate < today) {
+    } else if (
+      existingPayment.status === 'PENDING' &&
+      isDueCalendarDateBeforeTodayInGymTZ(currentDueDate, tz)
+    ) {
       await prisma.payment.update({
         where: { id: existingPayment.id },
         data: { status: 'OVERDUE' },
@@ -238,7 +246,7 @@ async function ensureOpenMonthlyInstallmentExists(params: {
     });
 
     if (!existing) {
-      const status = nextDueDate < today ? 'OVERDUE' : 'PENDING';
+      const status = initialOpenInstallmentStatus(nextDueDate, getGymTimezone());
       await prisma.payment.create({
         data: {
           gymId,
@@ -372,22 +380,21 @@ export async function markPaymentsAsPaidBulk(
  * Check and mark overdue payments
  */
 export async function markOverduePayments(gymId: number): Promise<number> {
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
-
-  const result = await prisma.payment.updateMany({
-    where: {
-      gymId,
-      status: 'PENDING',
-      dueDate: {
-        lt: today,
-      },
-    },
-    data: {
-      status: 'OVERDUE',
-    },
+  const tz = getGymTimezone();
+  const pending = await prisma.payment.findMany({
+    where: { gymId, status: 'PENDING' },
+    select: { id: true, dueDate: true },
   });
-
+  const overdueIds = pending
+    .filter((p) => isDueCalendarDateBeforeTodayInGymTZ(p.dueDate, tz))
+    .map((p) => p.id);
+  if (overdueIds.length === 0) {
+    return 0;
+  }
+  const result = await prisma.payment.updateMany({
+    where: { id: { in: overdueIds } },
+    data: { status: 'OVERDUE' },
+  });
   return result.count;
 }
 
@@ -473,9 +480,7 @@ export async function getMemberPaymentSummaries(
     orderBy: { dueDate: 'asc' },
   });
 
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
-  const startNextCalendarMonth = startOfNextCalendarMonthUTC(today);
+  const tz = getGymTimezone();
 
   const unpaidByMember = new Map<number, typeof unpaidPayments>();
   for (const p of unpaidPayments) {
@@ -487,17 +492,9 @@ export async function getMemberPaymentSummaries(
   let rows: MemberPaymentSummaryRow[] = members.map((member) => {
     const list = unpaidByMember.get(member.id) ?? [];
     const next = list[0];
-    const overdueMonthCount = list.filter((p) => p.dueDate < today).length;
-
-    const bucketFor = (p: (typeof list)[0]): 'overdue' | 'pending' | 'advance' => {
-      if (p.dueDate < today) {
-        return 'overdue';
-      }
-      if (p.dueDate < startNextCalendarMonth) {
-        return 'pending';
-      }
-      return 'advance';
-    };
+    const overdueMonthCount = list.filter((p) =>
+      isDueCalendarDateBeforeTodayInGymTZ(p.dueDate, tz)
+    ).length;
 
     return {
       member,
@@ -508,8 +505,10 @@ export async function getMemberPaymentSummaries(
             dueDate: next.dueDate,
             month: next.month,
             status: next.status as 'PENDING' | 'OVERDUE',
-            isOverdue: next.status === 'OVERDUE' || next.dueDate < today,
-            displayBucket: bucketFor(next),
+            isOverdue:
+              next.status === 'OVERDUE' ||
+              isDueCalendarDateBeforeTodayInGymTZ(next.dueDate, tz),
+            displayBucket: unpaidInstallmentDisplayBucket(next.dueDate, tz),
           }
         : null,
       overdueMonthCount,

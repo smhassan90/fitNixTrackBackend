@@ -87,3 +87,102 @@ export function startOfNextCalendarMonthUTC(reference: Date): Date {
   return new Date(Date.UTC(y, m + 1, 1));
 }
 
+// --- Gym-local calendar (align with frontend: local date strings, no shifting due alone) ---
+
+const gymDateFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function dateFormatterForTimezone(timeZone: string): Intl.DateTimeFormat {
+  let fmt = gymDateFormatters.get(timeZone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    gymDateFormatters.set(timeZone, fmt);
+  }
+  return fmt;
+}
+
+/**
+ * IANA zone for billing/overdue/display (e.g. Asia/Karachi). Match the gym wall clock / frontend locale.
+ */
+export function getGymTimezone(): string {
+  const tz = process.env.GYM_TIMEZONE?.trim();
+  return tz && tz.length > 0 ? tz : 'UTC';
+}
+
+/** YYYY-MM-DD in the gym timezone (lexicographic compare works for ordering). */
+export function calendarDateStringInGymTZ(date: Date, timeZone: string = getGymTimezone()): string {
+  return dateFormatterForTimezone(timeZone).format(date);
+}
+
+/** True if due calendar date is strictly before today's calendar date in the gym TZ (unpaid → overdue). */
+export function isDueCalendarDateBeforeTodayInGymTZ(
+  dueDate: Date,
+  timeZone: string = getGymTimezone()
+): boolean {
+  const dueStr = calendarDateStringInGymTZ(dueDate, timeZone);
+  const todayStr = calendarDateStringInGymTZ(new Date(), timeZone);
+  return dueStr < todayStr;
+}
+
+/** DB status for a new open installment. */
+export function initialOpenInstallmentStatus(
+  dueDate: Date,
+  timeZone: string = getGymTimezone()
+): 'OVERDUE' | 'PENDING' {
+  return isDueCalendarDateBeforeTodayInGymTZ(dueDate, timeZone) ? 'OVERDUE' : 'PENDING';
+}
+
+/**
+ * Last scheduled monthly due date for a package: N payments at anchor rhythm starting membershipStart.
+ * Inclusive end of the billing schedule (used so the next installment after the last payment is not created).
+ */
+export function computeMembershipLastDueDate(
+  membershipStart: Date,
+  paymentCountMonths: number,
+  anchorDay: number
+): Date {
+  let d = new Date(membershipStart);
+  d.setUTCHours(0, 0, 0, 0);
+  for (let i = 1; i < paymentCountMonths; i++) {
+    d = nextBillingDueDate(d, anchorDay);
+  }
+  return d;
+}
+
+/**
+ * Unpaid installment UI bucket — same rules as frontend monthlyInstallmentUi:
+ * overdue: due calendar date before today (gym TZ); pending: same calendar month as today; else advance.
+ */
+export function installmentDisplayBucket(
+  status: string,
+  dueDate: Date,
+  timeZone: string = getGymTimezone()
+): 'paid' | 'overdue' | 'pending' | 'advance' {
+  if (status === 'PAID') {
+    return 'paid';
+  }
+  return unpaidInstallmentDisplayBucket(dueDate, timeZone);
+}
+
+/** Open installment bucket (pending / overdue in DB only). */
+export function unpaidInstallmentDisplayBucket(
+  dueDate: Date,
+  timeZone: string = getGymTimezone()
+): 'overdue' | 'pending' | 'advance' {
+  const dueStr = calendarDateStringInGymTZ(dueDate, timeZone);
+  const todayStr = calendarDateStringInGymTZ(new Date(), timeZone);
+  if (dueStr < todayStr) {
+    return 'overdue';
+  }
+  const dueYm = dueStr.slice(0, 7);
+  const todayYm = todayStr.slice(0, 7);
+  if (dueYm === todayYm) {
+    return 'pending';
+  }
+  return 'advance';
+}
+

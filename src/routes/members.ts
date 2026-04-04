@@ -14,7 +14,7 @@ import {
 } from '../validations/members';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError } from '../utils/errors';
-import { parseDate, startOfNextCalendarMonthUTC } from '../utils/dateHelpers';
+import { parseDate, installmentDisplayBucket, getGymTimezone } from '../utils/dateHelpers';
 import { generatePaymentsForMember, markOverduePayments } from '../services/paymentService';
 
 const router = Router();
@@ -580,26 +580,11 @@ router.get(
 
       const formattedMonthlyTimeline = allMonthlyForTimeline.map(formatMonthly);
 
-      const todayStart = new Date();
-      todayStart.setUTCHours(0, 0, 0, 0);
-      const startNextCalendarMonth = startOfNextCalendarMonthUTC(todayStart);
-
-      const displayBucketFor = (p: { status: string; dueDate: Date }): 'paid' | 'overdue' | 'pending' | 'advance' => {
-        if (p.status === 'PAID') {
-          return 'paid';
-        }
-        if (p.dueDate < todayStart) {
-          return 'overdue';
-        }
-        if (p.dueDate < startNextCalendarMonth) {
-          return 'pending';
-        }
-        return 'advance';
-      };
+      const gymTz = getGymTimezone();
 
       const monthlyInstallments = formattedMonthlyTimeline.map((p) => ({
         ...p,
-        displayBucket: displayBucketFor(p),
+        displayBucket: installmentDisplayBucket(p.status, p.dueDate, gymTz),
       }));
 
       const monthlyGrouped = {
