@@ -19,8 +19,112 @@ type MemberWithPackage = {
   packageId: number | null;
   membershipEnd: Date | null;
   membershipStart: Date | null;
-  package: { price: number; discount: number | null } | null;
+  package: { price: number; discount: number | null; duration: string } | null;
 };
+
+function normalizeUtcDay(d: Date): Date {
+  const x = new Date(d);
+  x.setUTCHours(0, 0, 0, 0);
+  return x;
+}
+
+/**
+ * Latest day through which a monthly installment may be scheduled: max(stored membershipEnd, package schedule end).
+ * Fixes null/too-short membershipEnd blocking the next row after mark-paid.
+ */
+function resolveEffectiveMembershipEndDay(
+  member: {
+    membershipStart: Date | null;
+    membershipEnd: Date | null;
+    package: { duration: string } | null;
+  },
+  anchorDay: number
+): Date | null {
+  let best: Date | null = null;
+  if (member.membershipEnd) {
+    best = normalizeUtcDay(member.membershipEnd);
+  }
+  if (member.membershipStart && member.package) {
+    const n = parseDurationToMonths(member.package.duration);
+    if (n > 0) {
+      const computed = computeMembershipLastDueDate(member.membershipStart, n, anchorDay);
+      const cn = normalizeUtcDay(computed);
+      if (!best || cn.getTime() > best.getTime()) {
+        best = cn;
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * If the latest PAID monthly has no following row for the next billing month, create it (within effective membership end).
+ * Idempotent; safe to call on GET payments and after mark-paid.
+ */
+export async function syncMissingNextMonthlyInstallment(
+  memberId: number,
+  gymId: number
+): Promise<void> {
+  const member = await prisma.member.findFirst({
+    where: { id: memberId, gymId },
+    include: { package: true },
+  });
+
+  if (!member?.packageId || !member.membershipStart || !member.package) {
+    return;
+  }
+
+  const anchorDay = getBillingAnchorDayUTC(member.membershipStart);
+  const effectiveEnd = resolveEffectiveMembershipEndDay(
+    {
+      membershipStart: member.membershipStart,
+      membershipEnd: member.membershipEnd,
+      package: member.package,
+    },
+    anchorDay
+  );
+  if (!effectiveEnd) {
+    return;
+  }
+
+  const lastPaid = await prisma.payment.findFirst({
+    where: { memberId, gymId, status: 'PAID' },
+    orderBy: { dueDate: 'desc' },
+  });
+  if (!lastPaid) {
+    return;
+  }
+
+  const nextDue = nextBillingDueDate(lastPaid.dueDate, anchorDay);
+  const nextMonth = formatMonth(nextDue);
+  if (nextDue.getTime() > effectiveEnd.getTime()) {
+    return;
+  }
+
+  const existing = await prisma.payment.findFirst({
+    where: { memberId, gymId, month: nextMonth },
+  });
+  if (existing) {
+    return;
+  }
+
+  const packagePrice = member.package.price;
+  const discount = member.package.discount ?? 0;
+  const amount = Math.max(0, packagePrice - discount);
+  const tz = getGymTimezone();
+  const status = initialOpenInstallmentStatus(nextDue, tz);
+
+  await prisma.payment.create({
+    data: {
+      gymId,
+      memberId,
+      month: nextMonth,
+      amount,
+      status,
+      dueDate: nextDue,
+    },
+  });
+}
 
 /**
  * After a monthly installment is marked paid, create the following month's row if within membership.
@@ -36,7 +140,7 @@ export async function createNextInstallmentIfNeeded(
   }
 ): Promise<void> {
   const { member } = paidPayment;
-  if (!member.packageId || !member.membershipEnd) {
+  if (!member.packageId || !member.package) {
     return;
   }
 
@@ -54,10 +158,19 @@ export async function createNextInstallmentIfNeeded(
     },
   });
 
-  const membershipEndDay = new Date(member.membershipEnd);
-  membershipEndDay.setUTCHours(0, 0, 0, 0);
+  const membershipEndDay = resolveEffectiveMembershipEndDay(
+    {
+      membershipStart: member.membershipStart,
+      membershipEnd: member.membershipEnd,
+      package: member.package,
+    },
+    anchorDay
+  );
+  if (!membershipEndDay) {
+    return;
+  }
 
-  if (existingPayment || nextDueDate > membershipEndDay) {
+  if (existingPayment || nextDueDate.getTime() > membershipEndDay.getTime()) {
     return;
   }
 
@@ -309,6 +422,9 @@ export async function markPaymentAsPaid(paymentId: number, gymId: number): Promi
       }
     );
   });
+
+  await syncMissingNextMonthlyInstallment(payment.memberId, gymId);
+  await markOverduePayments(gymId);
 }
 
 /**
@@ -372,6 +488,10 @@ export async function markPaymentsAsPaidBulk(
       });
     }
   });
+
+  const mid = sorted[0].memberId;
+  await syncMissingNextMonthlyInstallment(mid, gymId);
+  await markOverduePayments(gymId);
 
   return { paidIds: sorted.map((p) => p.id) };
 }
@@ -471,7 +591,7 @@ export async function getMemberPaymentSummaries(
     return { rows: [], total: 0 };
   }
 
-  const unpaidPayments = await prisma.payment.findMany({
+  let unpaidPayments = await prisma.payment.findMany({
     where: {
       gymId,
       memberId: { in: memberIds },
@@ -479,6 +599,46 @@ export async function getMemberPaymentSummaries(
     },
     orderBy: { dueDate: 'asc' },
   });
+
+  const unpaidByMemberScratch = new Map<number, typeof unpaidPayments>();
+  for (const p of unpaidPayments) {
+    const list = unpaidByMemberScratch.get(p.memberId) ?? [];
+    list.push(p);
+    unpaidByMemberScratch.set(p.memberId, list);
+  }
+
+  const paidMemberRows = await prisma.payment.findMany({
+    where: {
+      gymId,
+      memberId: { in: memberIds },
+      status: 'PAID',
+    },
+    select: { memberId: true },
+    distinct: ['memberId'],
+  });
+  const membersWithSomePaid = new Set(paidMemberRows.map((r) => r.memberId));
+
+  const membersNeedingGapFill = members.filter(
+    (m) =>
+      membersWithSomePaid.has(m.id) &&
+      m.packageId != null &&
+      m.membershipStart != null &&
+      (unpaidByMemberScratch.get(m.id) ?? []).length === 0
+  );
+  for (const m of membersNeedingGapFill) {
+    await syncMissingNextMonthlyInstallment(m.id, gymId);
+  }
+  if (membersNeedingGapFill.length > 0) {
+    await markOverduePayments(gymId);
+    unpaidPayments = await prisma.payment.findMany({
+      where: {
+        gymId,
+        memberId: { in: memberIds },
+        status: { in: ['PENDING', 'OVERDUE'] },
+      },
+      orderBy: { dueDate: 'asc' },
+    });
+  }
 
   const tz = getGymTimezone();
 

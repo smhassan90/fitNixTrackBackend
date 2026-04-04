@@ -15,7 +15,11 @@ import {
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError } from '../utils/errors';
 import { parseDate, installmentDisplayBucket, getGymTimezone } from '../utils/dateHelpers';
-import { generatePaymentsForMember, markOverduePayments } from '../services/paymentService';
+import {
+  generatePaymentsForMember,
+  markOverduePayments,
+  syncMissingNextMonthlyInstallment,
+} from '../services/paymentService';
 
 const router = Router();
 
@@ -517,6 +521,11 @@ router.get(
       }
 
       await markOverduePayments(gymId);
+
+      if (type === 'all' || type === 'monthly') {
+        await syncMissingNextMonthlyInstallment(memberId, gymId);
+        await markOverduePayments(gymId);
+      }
 
       const normalizedStatus = status ? String(status).toUpperCase() : null;
       const whereMonthly: any = { gymId, memberId };
