@@ -23,6 +23,7 @@ import {
   getMemberPaymentSummaries,
   markPaymentsAsPaidBulk,
   markMonthlyInstallmentByYearMonth,
+  markLastPaidInstallmentUnpaid,
 } from '../services/paymentService';
 
 const router = Router();
@@ -566,6 +567,22 @@ router.patch(
       });
 
       sendSuccess(res, payment, 'Payment marked as paid');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// PATCH /api/payments/:id/mark-unpaid — only the member's latest PAID installment by dueDate (LIFO)
+router.patch(
+  '/:id/mark-unpaid',
+  validate(markPaidSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const id = parseInt(req.params.id, 10);
+      const updated = await markLastPaidInstallmentUnpaid(id, gymId);
+      sendSuccess(res, updated, 'Payment marked as unpaid');
     } catch (error) {
       sendError(res, error as Error);
     }

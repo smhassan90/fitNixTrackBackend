@@ -619,6 +619,75 @@ export async function markPaymentAsPaid(paymentId: number, gymId: number): Promi
 }
 
 /**
+ * Revert a monthly installment from PAID to open status. Only allowed for the member's **latest**
+ * PAID row by `dueDate` (then `id`) — LIFO so mistakes are undone one billing month at a time.
+ * Drops unpaid future rows (PENDING/OVERDUE with dueDate after this one) created by the pay chain.
+ */
+export async function markLastPaidInstallmentUnpaid(paymentId: number, gymId: number) {
+  const payment = await prisma.payment.findFirst({
+    where: { id: paymentId, gymId },
+  });
+
+  if (!payment) {
+    throw new NotFoundError('Payment', paymentId);
+  }
+
+  if (payment.status !== 'PAID') {
+    throw new ValidationError('Only paid installments can be marked unpaid');
+  }
+
+  const lastPaid = await prisma.payment.findFirst({
+    where: { memberId: payment.memberId, gymId, status: 'PAID' },
+    orderBy: [{ dueDate: 'desc' }, { id: 'desc' }],
+  });
+
+  if (!lastPaid || lastPaid.id !== paymentId) {
+    throw new ValidationError(
+      'Only the latest paid installment (by billing date) can be marked unpaid. Unmark more recent payments first.'
+    );
+  }
+
+  const tz = getGymTimezone();
+  const newStatus = initialOpenInstallmentStatus(payment.dueDate, tz);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.payment.deleteMany({
+      where: {
+        memberId: payment.memberId,
+        gymId,
+        status: { in: ['PENDING', 'OVERDUE'] },
+        dueDate: { gt: payment.dueDate },
+      },
+    });
+
+    await tx.payment.update({
+      where: { id: paymentId },
+      data: {
+        status: newStatus,
+        paidDate: null,
+      },
+    });
+  });
+
+  await syncMissingNextMonthlyInstallment(payment.memberId, gymId);
+  await markOverduePayments(gymId);
+
+  return prisma.payment.findFirst({
+    where: { id: paymentId, gymId },
+    include: {
+      member: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+        },
+      },
+    },
+  });
+}
+
+/**
  * Mark multiple monthly installments paid in one action (same member, chronological order).
  * paidDate is set to start of today (UTC) for all.
  */
