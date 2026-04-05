@@ -12,7 +12,7 @@ import {
 } from '../validations/trainers';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
-import { parseDate } from '../utils/dateHelpers';
+import { parseDate, startOfGymCalendarDayUtc, startOfNextGymCalendarDayUtc } from '../utils/dateHelpers';
 
 const router = Router();
 
@@ -27,13 +27,35 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { search, sortBy = 'createdAt', sortOrder = 'desc', page, limit } = req.query as any;
+      const {
+        search,
+        sortBy = 'createdAt',
+        sortOrder = 'desc',
+        page,
+        limit,
+        createdFrom,
+        createdTo,
+      } = req.query as any;
 
       // Ensure page and limit are numbers
       const pageNum = typeof page === 'number' ? page : parseInt(page as string, 10) || 1;
       const limitNum = typeof limit === 'number' ? limit : parseInt(limit as string, 10) || 50;
 
       const where: any = { gymId };
+
+      if (createdFrom || createdTo) {
+        if (createdFrom && createdTo && createdFrom > createdTo) {
+          sendError(res, new ValidationError('createdFrom must be on or before createdTo'));
+          return;
+        }
+        where.createdAt = {};
+        if (createdFrom) {
+          where.createdAt.gte = startOfGymCalendarDayUtc(createdFrom);
+        }
+        if (createdTo) {
+          where.createdAt.lt = startOfNextGymCalendarDayUtc(createdTo);
+        }
+      }
 
       // Search filter
       if (search) {

@@ -198,3 +198,103 @@ export function unpaidInstallmentDisplayBucket(
   return 'advance';
 }
 
+function parseYmdParts(dateStr: string): { y: number; mo: number; d: number } {
+  const [y, mo, d] = dateStr.split('-').map(Number);
+  return { y, mo, d };
+}
+
+/**
+ * UTC instant of the first millisecond that falls on `dateStr` (YYYY-MM-DD) in the gym wall calendar.
+ * Used for inclusive date-range filters on `createdAt` / `paidDate`.
+ */
+export function startOfGymCalendarDayUtc(
+  dateStr: string,
+  timeZone: string = getGymTimezone()
+): Date {
+  const { y, mo, d } = parseYmdParts(dateStr);
+  if (timeZone === 'UTC') {
+    return new Date(Date.UTC(y, mo - 1, d, 0, 0, 0, 0));
+  }
+
+  let lo = Date.UTC(y, mo - 1, d, 0, 0, 0, 0) - 72 * 3600 * 1000;
+  let hi = Date.UTC(y, mo - 1, d, 0, 0, 0, 0) + 72 * 3600 * 1000;
+  while (calendarDateStringInGymTZ(new Date(lo), timeZone) >= dateStr) {
+    lo -= 24 * 3600 * 1000;
+  }
+  while (calendarDateStringInGymTZ(new Date(hi), timeZone) < dateStr) {
+    hi += 24 * 3600 * 1000;
+  }
+
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const s = calendarDateStringInGymTZ(new Date(mid), timeZone);
+    if (s < dateStr) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+
+  const at = calendarDateStringInGymTZ(new Date(lo), timeZone);
+  if (at !== dateStr) {
+    let t = lo - 48 * 3600 * 1000;
+    for (let i = 0; i < 5000; i++) {
+      if (calendarDateStringInGymTZ(new Date(t), timeZone) === dateStr) {
+        return new Date(t);
+      }
+      t += 60000;
+    }
+    return new Date(Date.UTC(y, mo - 1, d, 0, 0, 0, 0));
+  }
+  return new Date(lo);
+}
+
+/** First instant of the calendar day after `dateStr` in gym TZ (exclusive upper bound for `endDate`). */
+export function startOfNextGymCalendarDayUtc(
+  dateStr: string,
+  timeZone: string = getGymTimezone()
+): Date {
+  const t0 = startOfGymCalendarDayUtc(dateStr, timeZone).getTime();
+  const prev = dateStr;
+  for (let h = 1; h <= 48; h++) {
+    const t = t0 + h * 3600000;
+    const s = calendarDateStringInGymTZ(new Date(t), timeZone);
+    if (s !== prev) {
+      return startOfGymCalendarDayUtc(s, timeZone);
+    }
+  }
+  for (let m = 1; m <= 2000; m++) {
+    const t = t0 + m * 60000;
+    const s = calendarDateStringInGymTZ(new Date(t), timeZone);
+    if (s !== prev) {
+      return startOfGymCalendarDayUtc(s, timeZone);
+    }
+  }
+  const { y, mo, d } = parseYmdParts(dateStr);
+  return new Date(Date.UTC(y, mo - 1, d + 1, 0, 0, 0, 0));
+}
+
+/**
+ * Inclusive gym-local dates from `fromYmd` through `toYmd` as `[YYYY-MM-DD, ...]`.
+ */
+export function enumerateGymCalendarDaysInclusive(
+  fromYmd: string,
+  toYmd: string,
+  timeZone: string = getGymTimezone()
+): string[] {
+  if (fromYmd > toYmd) {
+    return [];
+  }
+  const out: string[] = [];
+  let cur = fromYmd;
+  for (let guard = 0; guard < 800 && cur <= toYmd; guard++) {
+    out.push(cur);
+    if (cur === toYmd) {
+      break;
+    }
+    const nextStart = startOfNextGymCalendarDayUtc(cur, timeZone);
+    cur = calendarDateStringInGymTZ(nextStart, timeZone);
+  }
+  return out;
+}
+

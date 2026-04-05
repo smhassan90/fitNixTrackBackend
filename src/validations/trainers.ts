@@ -29,6 +29,8 @@ export const updateTrainerSchema = z.object({
   }),
 });
 
+const ymdQuery = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format');
+
 export const getTrainersSchema = z.object({
   query: z.object({
     search: z.string().optional(),
@@ -36,6 +38,9 @@ export const getTrainersSchema = z.object({
     sortOrder: z.enum(['asc', 'desc']).optional().default('asc'),
     page: z.string().regex(/^\d+$/).optional().transform((val) => (val ? parseInt(val, 10) : 1)),
     limit: z.string().regex(/^\d+$/).optional().transform((val) => (val ? parseInt(val, 10) : 50)),
+    /** Gym-local creation date range (filters `createdAt`). */
+    createdFrom: ymdQuery.optional(),
+    createdTo: ymdQuery.optional(),
   }),
 });
 

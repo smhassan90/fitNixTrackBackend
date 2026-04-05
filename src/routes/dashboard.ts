@@ -2,14 +2,52 @@ import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { requireGymId } from '../middleware/multiTenant';
+import { validate } from '../middleware/validation';
 import { sendSuccess, sendError } from '../utils/response';
 import { formatMonth, getStartOfDay, getEndOfDay } from '../utils/dateHelpers';
+import { getFinancialSummarySchema, getPaymentsReceivedDailySchema } from '../validations/reports';
+import { getFinancialSummary, getPaymentsReceivedDaily } from '../services/reportService';
 
 const router = Router();
 
 // All routes require authentication and gymId
 router.use(authenticateToken);
 router.use(requireGymId);
+
+// Aliases for portal probes (same payloads as /api/reports/*)
+router.get(
+  '/reports/financial-summary',
+  validate(getFinancialSummarySchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { startDate, endDate, reportMonth } = req.query as {
+        startDate: string;
+        endDate: string;
+        reportMonth: string;
+      };
+      const data = await getFinancialSummary(gymId, startDate, endDate, reportMonth);
+      sendSuccess(res, data);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+router.get(
+  '/payments-received-daily',
+  validate(getPaymentsReceivedDailySchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { startDate, endDate } = req.query as { startDate: string; endDate: string };
+      const data = await getPaymentsReceivedDaily(gymId, startDate, endDate);
+      sendSuccess(res, data);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
 
 // GET /api/dashboard/stats
 router.get('/stats', async (req: AuthRequest, res: Response) => {

@@ -3,9 +3,14 @@ import { prisma } from '../lib/prisma';
 import { validate } from '../middleware/validation';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { requireGymId } from '../middleware/multiTenant';
-import { getAttendanceReportSchema } from '../validations/reports';
+import {
+  getAttendanceReportSchema,
+  getFinancialSummarySchema,
+  getPaymentsReceivedDailySchema,
+} from '../validations/reports';
 import { sendSuccess, sendError } from '../utils/response';
 import { parseDate, getStartOfDay, getEndOfDay } from '../utils/dateHelpers';
+import { getFinancialSummary, getPaymentsReceivedDaily } from '../services/reportService';
 
 const router = Router();
 
@@ -110,6 +115,42 @@ router.get(
         late,
         consecutiveAbsences,
       });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// GET /api/reports/financial-summary — owner KPIs (see reportService for metric definitions)
+router.get(
+  '/financial-summary',
+  validate(getFinancialSummarySchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { startDate, endDate, reportMonth } = req.query as {
+        startDate: string;
+        endDate: string;
+        reportMonth: string;
+      };
+      const data = await getFinancialSummary(gymId, startDate, endDate, reportMonth);
+      sendSuccess(res, data);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// GET /api/reports/payments-received-daily — collections by gym-local calendar day
+router.get(
+  '/payments-received-daily',
+  validate(getPaymentsReceivedDailySchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { startDate, endDate } = req.query as { startDate: string; endDate: string };
+      const data = await getPaymentsReceivedDaily(gymId, startDate, endDate);
+      sendSuccess(res, data);
     } catch (error) {
       sendError(res, error as Error);
     }

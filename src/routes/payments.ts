@@ -14,6 +14,8 @@ import {
   bulkMarkPaidSchema,
   markMonthPaidPaymentsSchema,
 } from '../validations/payments';
+import { getPaymentsReceivedDailySchema } from '../validations/reports';
+import { getPaymentsReceivedDaily } from '../services/reportService';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import { parseDate } from '../utils/dateHelpers';
@@ -210,6 +212,22 @@ router.get(
           totalPages: Math.ceil(total / limitNum),
         },
       });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// GET /api/payments/received-daily — alias for /api/reports/payments-received-daily (portal probe)
+router.get(
+  '/received-daily',
+  validate(getPaymentsReceivedDailySchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { startDate, endDate } = req.query as { startDate: string; endDate: string };
+      const data = await getPaymentsReceivedDaily(gymId, startDate, endDate);
+      sendSuccess(res, data);
     } catch (error) {
       sendError(res, error as Error);
     }
