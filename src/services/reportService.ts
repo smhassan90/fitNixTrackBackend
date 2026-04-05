@@ -28,8 +28,23 @@ function assertDateRangeOrder(startDate: string, endDate: string): void {
 export type FinancialSummaryResult = {
   newMembersInRange: number;
   newTrainersInRange: number;
-  /** Sum of monthly installment `amount` for rows with payment.month === reportMonth (PAID+PENDING+OVERDUE). Excludes one-time/admission. */
+  /**
+   * Expected monthly fee for `reportMonth`: **one installment per member** (latest `Payment.id` wins if duplicates exist).
+   * Sum of `amount` for those canonical rows. Excludes one-time/admission.
+   */
   expectedRevenueThisMonth: number;
+  /** Distinct members included in `expectedRevenueThisMonth` (same dedupe rule). */
+  expectedMemberCount: number;
+  /**
+   * Raw row count of `Payment` with `month === reportMonth` before per-member dedupe.
+   * If greater than `expectedMemberCount`, the DB has duplicate month rows for some members (inflates naive sums).
+   */
+  expectedInstallmentRowCount: number;
+  /**
+   * Bucket totals for open (PENDING/OVERDUE) monthly installments only.
+   * Each *Amount and *Count use the **same** rows: those in that display bucket with **amount > 0**
+   * (so advanceCount is 0 whenever advanceAmount is 0). Zero-amount rows are omitted from both.
+   */
   overdueAmount: number;
   pendingAmount: number;
   advanceAmount: number;
@@ -40,8 +55,7 @@ export type FinancialSummaryResult = {
 };
 
 /**
- * expectedRevenueThisMonth: scheduled monthly fee installments for `reportMonth` (YYYY-MM),
- * regardless of paid status — matches the sum of `Payment.amount` where `month` = reportMonth.
+ * expectedRevenueThisMonth: per member, at most one installment row for `reportMonth` (highest `id` if duplicates).
  * Does not include OneTimePayment or admission-only rows.
  */
 export async function getFinancialSummary(
@@ -74,7 +88,8 @@ export async function getFinancialSummary(
     }),
     prisma.payment.findMany({
       where: { gymId, month: reportMonth },
-      select: { amount: true },
+      select: { id: true, memberId: true, amount: true },
+      orderBy: { id: 'asc' },
     }),
     prisma.payment.findMany({
       where: {
@@ -85,7 +100,21 @@ export async function getFinancialSummary(
     }),
   ]);
 
-  const expectedRevenueThisMonth = monthInstallments.reduce((s, p) => s + p.amount, 0);
+  const expectedInstallmentRowCount = monthInstallments.length;
+
+  const canonicalByMember = new Map<number, { amount: number; id: number }>();
+  for (const p of monthInstallments) {
+    const cur = canonicalByMember.get(p.memberId);
+    if (!cur || p.id > cur.id) {
+      canonicalByMember.set(p.memberId, { amount: p.amount, id: p.id });
+    }
+  }
+
+  let expectedRevenueThisMonth = 0;
+  for (const row of canonicalByMember.values()) {
+    expectedRevenueThisMonth += row.amount;
+  }
+  const expectedMemberCount = canonicalByMember.size;
 
   let overdueAmount = 0;
   let pendingAmount = 0;
@@ -95,6 +124,9 @@ export async function getFinancialSummary(
   let advanceCount = 0;
 
   for (const p of openInstallments) {
+    if (p.amount <= 0) {
+      continue;
+    }
     const bucket = unpaidInstallmentDisplayBucket(p.dueDate, tz);
     if (bucket === 'overdue') {
       overdueAmount += p.amount;
@@ -112,6 +144,8 @@ export async function getFinancialSummary(
     newMembersInRange,
     newTrainersInRange,
     expectedRevenueThisMonth,
+    expectedMemberCount,
+    expectedInstallmentRowCount,
     overdueAmount,
     pendingAmount,
     advanceAmount,
