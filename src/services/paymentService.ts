@@ -166,6 +166,156 @@ export async function syncMissingNextMonthlyInstallment(
   }
 }
 
+function endOfUtcMonthFromYearMonthKey(ym: string): Date {
+  const [y, mo] = ym.split('-').map(Number);
+  const d = new Date(Date.UTC(y, mo, 0));
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+}
+
+/**
+ * Materialize missing rows after last PAID through target YYYY-MM (inclusive), so advance months can be marked paid.
+ * Bounded by max(syncCap, end of target month).
+ */
+export async function ensureMonthlyInstallmentsThroughMonthKey(
+  memberId: number,
+  gymId: number,
+  targetMonthKey: string
+): Promise<void> {
+  const member = await prisma.member.findFirst({
+    where: { id: memberId, gymId },
+    include: { package: true },
+  });
+
+  if (!member?.packageId || !member.membershipStart || !member.package) {
+    return;
+  }
+
+  const anchorDay = getBillingAnchorDayUTC(member.membershipStart);
+  const tz = getGymTimezone();
+  const syncCap = resolveInstallmentSyncCapDay(
+    {
+      membershipStart: member.membershipStart,
+      membershipEnd: member.membershipEnd,
+      package: member.package,
+    },
+    anchorDay,
+    tz
+  );
+  if (!syncCap) {
+    return;
+  }
+
+  const targetEnd = endOfUtcMonthFromYearMonthKey(targetMonthKey);
+  const endCap = new Date(Math.max(syncCap.getTime(), targetEnd.getTime()));
+
+  const lastPaid = await prisma.payment.findFirst({
+    where: { memberId, gymId, status: 'PAID' },
+    orderBy: { dueDate: 'desc' },
+  });
+  if (!lastPaid) {
+    return;
+  }
+
+  const packagePrice = member.package.price;
+  const discount = member.package.discount ?? 0;
+  const amount = Math.max(0, packagePrice - discount);
+
+  let d = nextBillingDueDate(lastPaid.dueDate, anchorDay);
+
+  for (let step = 0; step < 120; step++) {
+    if (d.getTime() > endCap.getTime()) {
+      break;
+    }
+
+    const monthKey = formatMonth(d);
+    const existing = await prisma.payment.findFirst({
+      where: { memberId, gymId, month: monthKey },
+    });
+
+    if (!existing) {
+      const status = initialOpenInstallmentStatus(d, tz);
+      await prisma.payment.create({
+        data: {
+          gymId,
+          memberId,
+          month: monthKey,
+          amount,
+          status,
+          dueDate: d,
+        },
+      });
+    }
+
+    if (monthKey >= targetMonthKey) {
+      break;
+    }
+
+    d = nextBillingDueDate(d, anchorDay);
+  }
+}
+
+/**
+ * Sync + ensure rows through month, then mark that installment paid. Used by member and payment routes.
+ */
+export async function markMonthlyInstallmentByYearMonth(
+  gymId: number,
+  memberId: number,
+  monthKey: string
+) {
+  const member = await prisma.member.findFirst({
+    where: { id: memberId, gymId },
+    select: { id: true },
+  });
+  if (!member) {
+    throw new NotFoundError('Member', String(memberId));
+  }
+
+  await markOverduePayments(gymId);
+  await syncMissingNextMonthlyInstallment(memberId, gymId);
+  await ensureMonthlyInstallmentsThroughMonthKey(memberId, gymId, monthKey);
+  await markOverduePayments(gymId);
+
+  const payment = await prisma.payment.findFirst({
+    where: { gymId, memberId, month: monthKey },
+    include: {
+      member: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+        },
+      },
+    },
+  });
+
+  if (!payment) {
+    throw new NotFoundError('Monthly payment', `${memberId}/${monthKey}`);
+  }
+  if (payment.status === 'PAID') {
+    throw new ValidationError(`Month ${monthKey} is already marked paid`);
+  }
+
+  await markPaymentAsPaid(payment.id, gymId);
+
+  const updated = await prisma.payment.findFirst({
+    where: { id: payment.id, gymId },
+    include: {
+      member: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+        },
+      },
+    },
+  });
+
+  return updated;
+}
+
 /**
  * After a monthly installment is marked paid, create the following month's row if within membership.
  */

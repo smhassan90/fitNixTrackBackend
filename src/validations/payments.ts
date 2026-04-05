@@ -76,3 +76,11 @@ export const bulkMarkPaidSchema = z.object({
   }),
 });
 
+/** POST /api/payments/mark-month-paid — same behavior as member route; body includes memberId */
+export const markMonthPaidPaymentsSchema = z.object({
+  body: z.object({
+    memberId: z.coerce.number().int('Member ID must be an integer').positive('Member ID must be positive'),
+    month: z.string().regex(monthRegex, 'Month must be in YYYY-MM format'),
+  }),
+});
+

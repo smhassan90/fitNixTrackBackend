@@ -19,7 +19,7 @@ import { parseDate, installmentDisplayBucket, getGymTimezone } from '../utils/da
 import {
   generatePaymentsForMember,
   markOverduePayments,
-  markPaymentAsPaid,
+  markMonthlyInstallmentByYearMonth,
   syncMissingNextMonthlyInstallment,
 } from '../services/paymentService';
 
@@ -672,58 +672,7 @@ router.post(
       const memberId = typeof rawId === 'number' ? rawId : parseInt(String(rawId), 10);
       const { month } = req.body as { month: string };
 
-      const member = await prisma.member.findFirst({
-        where: { id: memberId, gymId },
-        select: { id: true },
-      });
-      if (!member) {
-        sendError(res, new NotFoundError('Member', String(memberId)));
-        return;
-      }
-
-      await markOverduePayments(gymId);
-      await syncMissingNextMonthlyInstallment(memberId, gymId);
-      await markOverduePayments(gymId);
-
-      const payment = await prisma.payment.findFirst({
-        where: { gymId, memberId, month },
-        include: {
-          member: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              phone: true,
-            },
-          },
-        },
-      });
-
-      if (!payment) {
-        sendError(res, new NotFoundError('Monthly payment', `${memberId}/${month}`));
-        return;
-      }
-
-      if (payment.status === 'PAID') {
-        sendError(res, new ValidationError(`Month ${month} is already marked paid`));
-        return;
-      }
-
-      await markPaymentAsPaid(payment.id, gymId);
-
-      const updated = await prisma.payment.findFirst({
-        where: { id: payment.id, gymId },
-        include: {
-          member: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              phone: true,
-            },
-          },
-        },
-      });
+      const updated = await markMonthlyInstallmentByYearMonth(gymId, memberId, month);
 
       sendSuccess(res, updated, 'Payment marked as paid');
     } catch (error) {

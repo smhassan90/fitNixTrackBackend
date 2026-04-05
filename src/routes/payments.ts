@@ -12,6 +12,7 @@ import {
   deletePaymentSchema,
   getMemberPaymentSummariesSchema,
   bulkMarkPaidSchema,
+  markMonthPaidPaymentsSchema,
 } from '../validations/payments';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
@@ -21,6 +22,7 @@ import {
   markOverduePayments,
   getMemberPaymentSummaries,
   markPaymentsAsPaidBulk,
+  markMonthlyInstallmentByYearMonth,
 } from '../services/paymentService';
 
 const router = Router();
@@ -240,6 +242,22 @@ router.post(
       });
 
       sendSuccess(res, { payments: updated, paidIds: result.paidIds }, 'Payments marked as paid');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// POST /api/payments/mark-month-paid — portal fallback path (memberId + month in body)
+router.post(
+  '/mark-month-paid',
+  validate(markMonthPaidPaymentsSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { memberId, month } = req.body as { memberId: number; month: string };
+      const updated = await markMonthlyInstallmentByYearMonth(gymId, memberId, month);
+      sendSuccess(res, updated, 'Payment marked as paid');
     } catch (error) {
       sendError(res, error as Error);
     }
