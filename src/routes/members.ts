@@ -11,13 +11,15 @@ import {
   getMemberSchema,
   deleteMemberSchema,
   getMemberPaymentsSchema,
+  markMemberMonthPaidSchema,
 } from '../validations/members';
 import { sendSuccess, sendError } from '../utils/response';
-import { NotFoundError } from '../utils/errors';
+import { NotFoundError, ValidationError } from '../utils/errors';
 import { parseDate, installmentDisplayBucket, getGymTimezone } from '../utils/dateHelpers';
 import {
   generatePaymentsForMember,
   markOverduePayments,
+  markPaymentAsPaid,
   syncMissingNextMonthlyInstallment,
 } from '../services/paymentService';
 
@@ -653,6 +655,77 @@ router.get(
           totalPages: Math.ceil(totalPayments / limitNum),
         },
       });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// POST /api/members/:id/payments/mark-month-paid — mark monthly installment for YYYY-MM (portal projected month)
+router.post(
+  '/:id/payments/mark-month-paid',
+  validate(markMemberMonthPaidSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const rawId = req.params.id;
+      const memberId = typeof rawId === 'number' ? rawId : parseInt(String(rawId), 10);
+      const { month } = req.body as { month: string };
+
+      const member = await prisma.member.findFirst({
+        where: { id: memberId, gymId },
+        select: { id: true },
+      });
+      if (!member) {
+        sendError(res, new NotFoundError('Member', String(memberId)));
+        return;
+      }
+
+      await markOverduePayments(gymId);
+      await syncMissingNextMonthlyInstallment(memberId, gymId);
+      await markOverduePayments(gymId);
+
+      const payment = await prisma.payment.findFirst({
+        where: { gymId, memberId, month },
+        include: {
+          member: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
+            },
+          },
+        },
+      });
+
+      if (!payment) {
+        sendError(res, new NotFoundError('Monthly payment', `${memberId}/${month}`));
+        return;
+      }
+
+      if (payment.status === 'PAID') {
+        sendError(res, new ValidationError(`Month ${month} is already marked paid`));
+        return;
+      }
+
+      await markPaymentAsPaid(payment.id, gymId);
+
+      const updated = await prisma.payment.findFirst({
+        where: { id: payment.id, gymId },
+        include: {
+          member: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
+            },
+          },
+        },
+      });
+
+      sendSuccess(res, updated, 'Payment marked as paid');
     } catch (error) {
       sendError(res, error as Error);
     }

@@ -123,3 +123,14 @@ export const getMemberPaymentsSchema = z.object({
   }),
 });
 
+const monthKeyRegex = /^\d{4}-\d{2}$/;
+
+export const markMemberMonthPaidSchema = z.object({
+  params: z.object({
+    id: z.string().regex(/^\d+$/, 'Member ID must be a number').transform((val) => parseInt(val, 10)),
+  }),
+  body: z.object({
+    month: z.string().regex(monthKeyRegex, 'month must be YYYY-MM'),
+  }),
+});
+
