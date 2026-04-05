@@ -41,16 +41,24 @@ export type FinancialSummaryResult = {
    */
   expectedInstallmentRowCount: number;
   /**
-   * Bucket totals for open (PENDING/OVERDUE) monthly installments only.
-   * Each *Amount and *Count use the **same** rows: those in that display bucket with **amount > 0**
-   * (so advanceCount is 0 whenever advanceAmount is 0). Zero-amount rows are omitted from both.
+   * Bucket totals use the **next unpaid installment per member** only (earliest `dueDate`, tie-break lower `id`),
+   * same basis as `GET /api/dashboard/stats` pending/overdue counts — not every open row in the gym.
+   * Each *Amount and *Count use the **same** rows: that next row per member with **amount > 0**, classified by
+   * `unpaidInstallmentDisplayBucket` (gym TZ). *Count is the number of members in that bucket.
    */
   overdueAmount: number;
   pendingAmount: number;
   advanceAmount: number;
+  /** Members whose next unpaid installment is in the overdue display bucket (same as overdueMemberCount). */
   overdueCount: number;
+  /** Members whose next unpaid installment is in the pending display bucket (same as pendingMemberCount). */
   pendingCount: number;
+  /** Members whose next unpaid installment is in the advance display bucket (same as advanceMemberCount). */
   advanceCount: number;
+  /** Explicit aliases for portal/docs; equal to overdueCount / pendingCount / advanceCount respectively. */
+  overdueMemberCount: number;
+  pendingMemberCount: number;
+  advanceMemberCount: number;
   currency: string;
 };
 
@@ -96,7 +104,8 @@ export async function getFinancialSummary(
         gymId,
         status: { in: ['PENDING', 'OVERDUE'] },
       },
-      select: { amount: true, dueDate: true },
+      select: { id: true, memberId: true, amount: true, dueDate: true },
+      orderBy: { dueDate: 'asc' },
     }),
   ]);
 
@@ -123,7 +132,26 @@ export async function getFinancialSummary(
   let pendingCount = 0;
   let advanceCount = 0;
 
+  const nextOpenByMember = new Map<
+    number,
+    { amount: number; dueDate: Date; id: number }
+  >();
   for (const p of openInstallments) {
+    const existing = nextOpenByMember.get(p.memberId);
+    const earlier =
+      !existing ||
+      p.dueDate.getTime() < existing.dueDate.getTime() ||
+      (p.dueDate.getTime() === existing.dueDate.getTime() && p.id < existing.id);
+    if (earlier) {
+      nextOpenByMember.set(p.memberId, {
+        amount: p.amount,
+        dueDate: p.dueDate,
+        id: p.id,
+      });
+    }
+  }
+
+  for (const p of nextOpenByMember.values()) {
     if (p.amount <= 0) {
       continue;
     }
@@ -152,6 +180,9 @@ export async function getFinancialSummary(
     overdueCount,
     pendingCount,
     advanceCount,
+    overdueMemberCount: overdueCount,
+    pendingMemberCount: pendingCount,
+    advanceMemberCount: advanceCount,
     currency: DEFAULT_CURRENCY,
   };
 }

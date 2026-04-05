@@ -4,7 +4,7 @@ import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { requireGymId } from '../middleware/multiTenant';
 import { validate } from '../middleware/validation';
 import { sendSuccess, sendError } from '../utils/response';
-import { formatMonth, getStartOfDay, getEndOfDay } from '../utils/dateHelpers';
+import { getStartOfDay, getEndOfDay, getGymTimezone, unpaidInstallmentDisplayBucket } from '../utils/dateHelpers';
 import { getFinancialSummarySchema, getPaymentsReceivedDailySchema } from '../validations/reports';
 import { getFinancialSummary, getPaymentsReceivedDaily } from '../services/reportService';
 
@@ -87,19 +87,30 @@ router.get('/stats', async (req: AuthRequest, res: Response) => {
     const memberNextPayments = new Map<number, typeof allPayments[0]>();
     
     for (const payment of allPayments) {
-      // Only consider pending or overdue payments
       if (payment.status === 'PENDING' || payment.status === 'OVERDUE') {
         const existing = memberNextPayments.get(payment.memberId);
-        // If no payment for this member yet, or this one is earlier, use this one
-        if (!existing || payment.dueDate < existing.dueDate) {
+        const earlier =
+          !existing ||
+          payment.dueDate.getTime() < existing.dueDate.getTime() ||
+          (payment.dueDate.getTime() === existing.dueDate.getTime() && payment.id < existing.id);
+        if (earlier) {
           memberNextPayments.set(payment.memberId, payment);
         }
       }
     }
 
-    // Count pending and overdue from next payments only
-    const pendingPayments = Array.from(memberNextPayments.values()).filter((p) => p.status === 'PENDING').length;
-    const overduePayments = Array.from(memberNextPayments.values()).filter((p) => p.status === 'OVERDUE').length;
+    // Same display buckets as member payment UI / financial-summary (gym TZ), not raw DB status
+    const tz = getGymTimezone();
+    let pendingPayments = 0;
+    let overduePayments = 0;
+    for (const p of memberNextPayments.values()) {
+      const bucket = unpaidInstallmentDisplayBucket(p.dueDate, tz);
+      if (bucket === 'pending') {
+        pendingPayments++;
+      } else if (bucket === 'overdue') {
+        overduePayments++;
+      }
+    }
     
     // For revenue calculation, use all payments
     const payments = allPayments;
