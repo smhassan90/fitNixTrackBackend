@@ -10,6 +10,7 @@ import {
   isDueCalendarDateBeforeTodayInGymTZ,
   unpaidInstallmentDisplayBucket,
   getGymTimezone,
+  calendarDateStringInGymTZ,
 } from '../utils/dateHelpers';
 import { NotFoundError, ValidationError } from '../utils/errors';
 
@@ -58,8 +59,10 @@ function resolveEffectiveMembershipEndDay(
 }
 
 /**
- * If the latest PAID monthly has no following row for the next billing month, create it (within effective membership end).
- * Idempotent; safe to call on GET payments and after mark-paid.
+ * After the last PAID installment, materialize every missing monthly row up through the **current
+ * calendar month** in GYM_TIMEZONE (not future billing months), bounded by effective membership end.
+ * So if Feb is paid and today is April, creates March and April when missing — overdue/pending from DB rules.
+ * Idempotent; safe on GET payments and after mark-paid.
  */
 export async function syncMissingNextMonthlyInstallment(
   memberId: number,
@@ -95,35 +98,48 @@ export async function syncMissingNextMonthlyInstallment(
     return;
   }
 
-  const nextDue = nextBillingDueDate(lastPaid.dueDate, anchorDay);
-  const nextMonth = formatMonth(nextDue);
-  if (nextDue.getTime() > effectiveEnd.getTime()) {
-    return;
-  }
-
-  const existing = await prisma.payment.findFirst({
-    where: { memberId, gymId, month: nextMonth },
-  });
-  if (existing) {
-    return;
-  }
+  const tz = getGymTimezone();
+  const todayStr = calendarDateStringInGymTZ(new Date(), tz);
+  const todayYm = todayStr.slice(0, 7);
 
   const packagePrice = member.package.price;
   const discount = member.package.discount ?? 0;
   const amount = Math.max(0, packagePrice - discount);
-  const tz = getGymTimezone();
-  const status = initialOpenInstallmentStatus(nextDue, tz);
 
-  await prisma.payment.create({
-    data: {
-      gymId,
-      memberId,
-      month: nextMonth,
-      amount,
-      status,
-      dueDate: nextDue,
-    },
-  });
+  let d = nextBillingDueDate(lastPaid.dueDate, anchorDay);
+  const maxSteps = 120;
+
+  for (let step = 0; step < maxSteps; step++) {
+    if (d.getTime() > effectiveEnd.getTime()) {
+      break;
+    }
+
+    const dueYm = calendarDateStringInGymTZ(d, tz).slice(0, 7);
+    if (dueYm > todayYm) {
+      break;
+    }
+
+    const monthKey = formatMonth(d);
+    const existing = await prisma.payment.findFirst({
+      where: { memberId, gymId, month: monthKey },
+    });
+
+    if (!existing) {
+      const status = initialOpenInstallmentStatus(d, tz);
+      await prisma.payment.create({
+        data: {
+          gymId,
+          memberId,
+          month: monthKey,
+          amount,
+          status,
+          dueDate: d,
+        },
+      });
+    }
+
+    d = nextBillingDueDate(d, anchorDay);
+  }
 }
 
 /**
@@ -591,22 +607,6 @@ export async function getMemberPaymentSummaries(
     return { rows: [], total: 0 };
   }
 
-  let unpaidPayments = await prisma.payment.findMany({
-    where: {
-      gymId,
-      memberId: { in: memberIds },
-      status: { in: ['PENDING', 'OVERDUE'] },
-    },
-    orderBy: { dueDate: 'asc' },
-  });
-
-  const unpaidByMemberScratch = new Map<number, typeof unpaidPayments>();
-  for (const p of unpaidPayments) {
-    const list = unpaidByMemberScratch.get(p.memberId) ?? [];
-    list.push(p);
-    unpaidByMemberScratch.set(p.memberId, list);
-  }
-
   const paidMemberRows = await prisma.payment.findMany({
     where: {
       gymId,
@@ -618,27 +618,25 @@ export async function getMemberPaymentSummaries(
   });
   const membersWithSomePaid = new Set(paidMemberRows.map((r) => r.memberId));
 
-  const membersNeedingGapFill = members.filter(
+  const membersToChainSync = members.filter(
     (m) =>
-      membersWithSomePaid.has(m.id) &&
-      m.packageId != null &&
-      m.membershipStart != null &&
-      (unpaidByMemberScratch.get(m.id) ?? []).length === 0
+      membersWithSomePaid.has(m.id) && m.packageId != null && m.membershipStart != null
   );
-  for (const m of membersNeedingGapFill) {
+  for (const m of membersToChainSync) {
     await syncMissingNextMonthlyInstallment(m.id, gymId);
   }
-  if (membersNeedingGapFill.length > 0) {
+  if (membersToChainSync.length > 0) {
     await markOverduePayments(gymId);
-    unpaidPayments = await prisma.payment.findMany({
-      where: {
-        gymId,
-        memberId: { in: memberIds },
-        status: { in: ['PENDING', 'OVERDUE'] },
-      },
-      orderBy: { dueDate: 'asc' },
-    });
   }
+
+  const unpaidPayments = await prisma.payment.findMany({
+    where: {
+      gymId,
+      memberId: { in: memberIds },
+      status: { in: ['PENDING', 'OVERDUE'] },
+    },
+    orderBy: { dueDate: 'asc' },
+  });
 
   const tz = getGymTimezone();
 
