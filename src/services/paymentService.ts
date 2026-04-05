@@ -11,6 +11,7 @@ import {
   unpaidInstallmentDisplayBucket,
   getGymTimezone,
   calendarDateStringInGymTZ,
+  endOfCalendarMonthInGymTZ,
 } from '../utils/dateHelpers';
 import { NotFoundError, ValidationError } from '../utils/errors';
 
@@ -59,6 +60,28 @@ function resolveEffectiveMembershipEndDay(
 }
 
 /**
+ * Upper bound for creating/displaying open installments: later of package-derived end and
+ * end of the **current** calendar month in GYM_TIMEZONE. Short packages (e.g. "2 months" ending Feb)
+ * otherwise block March/April rows even when the member is still active on monthly fees.
+ */
+function resolveInstallmentSyncCapDay(
+  member: {
+    membershipStart: Date | null;
+    membershipEnd: Date | null;
+    package: { duration: string } | null;
+  },
+  anchorDay: number,
+  tz: string
+): Date | null {
+  const packageEnd = resolveEffectiveMembershipEndDay(member, anchorDay);
+  const throughCurrentMonth = endOfCalendarMonthInGymTZ(new Date(), tz);
+  if (!packageEnd) {
+    return throughCurrentMonth;
+  }
+  return packageEnd.getTime() > throughCurrentMonth.getTime() ? packageEnd : throughCurrentMonth;
+}
+
+/**
  * After the last PAID installment, materialize every missing monthly row up through the **current
  * calendar month** in GYM_TIMEZONE (not future billing months), bounded by effective membership end.
  * So if Feb is paid and today is April, creates March and April when missing — overdue/pending from DB rules.
@@ -78,15 +101,17 @@ export async function syncMissingNextMonthlyInstallment(
   }
 
   const anchorDay = getBillingAnchorDayUTC(member.membershipStart);
-  const effectiveEnd = resolveEffectiveMembershipEndDay(
+  const tz = getGymTimezone();
+  const syncCap = resolveInstallmentSyncCapDay(
     {
       membershipStart: member.membershipStart,
       membershipEnd: member.membershipEnd,
       package: member.package,
     },
-    anchorDay
+    anchorDay,
+    tz
   );
-  if (!effectiveEnd) {
+  if (!syncCap) {
     return;
   }
 
@@ -98,7 +123,6 @@ export async function syncMissingNextMonthlyInstallment(
     return;
   }
 
-  const tz = getGymTimezone();
   const todayStr = calendarDateStringInGymTZ(new Date(), tz);
   const todayYm = todayStr.slice(0, 7);
 
@@ -110,7 +134,7 @@ export async function syncMissingNextMonthlyInstallment(
   const maxSteps = 120;
 
   for (let step = 0; step < maxSteps; step++) {
-    if (d.getTime() > effectiveEnd.getTime()) {
+    if (d.getTime() > syncCap.getTime()) {
       break;
     }
 
@@ -174,19 +198,21 @@ export async function createNextInstallmentIfNeeded(
     },
   });
 
-  const membershipEndDay = resolveEffectiveMembershipEndDay(
+  const tz = getGymTimezone();
+  const syncCap = resolveInstallmentSyncCapDay(
     {
       membershipStart: member.membershipStart,
       membershipEnd: member.membershipEnd,
       package: member.package,
     },
-    anchorDay
+    anchorDay,
+    tz
   );
-  if (!membershipEndDay) {
+  if (!syncCap) {
     return;
   }
 
-  if (existingPayment || nextDueDate.getTime() > membershipEndDay.getTime()) {
+  if (existingPayment || nextDueDate.getTime() > syncCap.getTime()) {
     return;
   }
 
@@ -194,7 +220,6 @@ export async function createNextInstallmentIfNeeded(
   const discount = member.package?.discount ?? 0;
   const amount = Math.max(0, packagePrice - discount);
 
-  const tz = getGymTimezone();
   const status = initialOpenInstallmentStatus(nextDueDate, tz);
 
   await db.payment.create({

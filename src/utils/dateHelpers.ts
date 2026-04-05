@@ -118,6 +118,18 @@ export function calendarDateStringInGymTZ(date: Date, timeZone: string = getGymT
   return dateFormatterForTimezone(timeZone).format(date);
 }
 
+/**
+ * Start of the last calendar day of the month containing `ref` (in gym TZ), UTC midnight.
+ * e.g. April 2026 → 2026-04-30T00:00:00.000Z
+ */
+export function endOfCalendarMonthInGymTZ(ref: Date, timeZone: string = getGymTimezone()): Date {
+  const ym = calendarDateStringInGymTZ(ref, timeZone).slice(0, 7);
+  const [y, mo] = ym.split('-').map(Number);
+  const last = new Date(Date.UTC(y, mo, 0));
+  last.setUTCHours(0, 0, 0, 0);
+  return last;
+}
+
 /** True if due calendar date is strictly before today's calendar date in the gym TZ (unpaid → overdue). */
 export function isDueCalendarDateBeforeTodayInGymTZ(
   dueDate: Date,
