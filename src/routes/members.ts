@@ -34,6 +34,39 @@ import {
 
 const router = Router();
 
+let memberStatusColumnsAvailableCache: boolean | null = null;
+
+async function hasMemberStatusColumns(): Promise<boolean> {
+  if (memberStatusColumnsAvailableCache !== null) {
+    return memberStatusColumnsAvailableCache;
+  }
+  try {
+    const rows = await prisma.$queryRawUnsafe<Array<{ cnt: bigint | number }>>(
+      `SELECT COUNT(*) AS cnt
+       FROM information_schema.columns
+       WHERE table_schema = DATABASE()
+         AND table_name = 'members'
+         AND column_name IN ('isActive', 'inactiveFrom', 'billingResumeFrom')`
+    );
+    const raw = rows?.[0]?.cnt ?? 0;
+    const count = typeof raw === 'bigint' ? Number(raw) : Number(raw);
+    memberStatusColumnsAvailableCache = count >= 3;
+    return memberStatusColumnsAvailableCache;
+  } catch {
+    memberStatusColumnsAvailableCache = false;
+    return false;
+  }
+}
+
+async function ensureMemberStatusColumnsOrThrow(): Promise<void> {
+  const available = await hasMemberStatusColumns();
+  if (!available) {
+    throw new ValidationError(
+      'Member status columns are not migrated yet. Please run prisma db push (or production migration) first.'
+    );
+  }
+}
+
 // All routes require authentication and gymId
 router.use(authenticateToken);
 router.use(requireGymId);
@@ -93,11 +126,40 @@ router.get(
       const sortField = validSortFields.includes(sortBy) ? sortBy : 'createdAt';
 
       // Get total count and members in parallel for better performance
+      const statusColsAvailable = await hasMemberStatusColumns();
+
       const [total, members] = await Promise.all([
         prisma.member.count({ where }),
         prisma.member.findMany({
           where,
-          include: {
+          select: {
+            id: true,
+            gymId: true,
+            name: true,
+            phone: true,
+            email: true,
+            gender: true,
+            dateOfBirth: true,
+            cnic: true,
+            comments: true,
+            packageId: true,
+            discount: true,
+            membershipStart: true,
+            membershipEnd: true,
+            ...(statusColsAvailable
+              ? {
+                  isActive: true,
+                  inactiveFrom: true,
+                  billingResumeFrom: true,
+                }
+              : {}),
+            admissionFeeWaived: true,
+            admissionFeePaid: true,
+            oneTimePaymentAmount: true,
+            oneTimePaymentPaid: true,
+            monthlyPaymentAmount: true,
+            createdAt: true,
+            updatedAt: true,
             package: {
               select: {
                 id: true,
@@ -129,9 +191,12 @@ router.get(
       ]);
 
       // Format response with payment summary
-      const formattedMembers = members.map((member) => ({
+      const formattedMembers = members.map((member: any) => ({
         ...member,
-        trainers: member.trainers.map((mt) => mt.trainer),
+        isActive: member.isActive ?? true,
+        inactiveFrom: member.inactiveFrom ?? null,
+        billingResumeFrom: member.billingResumeFrom ?? null,
+        trainers: member.trainers.map((mt: any) => mt.trainer),
         paymentSummary: {
           admissionFeeWaived: member.admissionFeeWaived,
           admissionFeePaid: member.admissionFeePaid ?? 0,
@@ -167,9 +232,38 @@ router.get(
       // id is transformed to number by validation middleware
       const memberId = typeof id === 'number' ? id : parseInt(id as string, 10);
 
+      const statusColsAvailable = await hasMemberStatusColumns();
+
       const member = await prisma.member.findFirst({
         where: { id: memberId, gymId },
-        include: {
+        select: {
+          id: true,
+          gymId: true,
+          name: true,
+          phone: true,
+          email: true,
+          gender: true,
+          dateOfBirth: true,
+          cnic: true,
+          comments: true,
+          packageId: true,
+          discount: true,
+          membershipStart: true,
+          membershipEnd: true,
+          ...(statusColsAvailable
+            ? {
+                isActive: true,
+                inactiveFrom: true,
+                billingResumeFrom: true,
+              }
+            : {}),
+          admissionFeeWaived: true,
+          admissionFeePaid: true,
+          oneTimePaymentAmount: true,
+          oneTimePaymentPaid: true,
+          monthlyPaymentAmount: true,
+          createdAt: true,
+          updatedAt: true,
           package: true,
           trainers: {
             include: {
@@ -204,6 +298,9 @@ router.get(
 
       sendSuccess(res, {
         ...member,
+        isActive: (member as any).isActive ?? true,
+        inactiveFrom: (member as any).inactiveFrom ?? null,
+        billingResumeFrom: (member as any).billingResumeFrom ?? null,
         trainers: member.trainers.map((mt) => mt.trainer),
         deviceMappings: member.deviceUserMappings.map((mapping) => ({
           id: mapping.id,
@@ -395,6 +492,7 @@ router.put(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
+      await ensureMemberStatusColumnsOrThrow();
       const { id } = req.params;
       // id is transformed to number by validation middleware
       const memberId = typeof id === 'number' ? id : parseInt(id as string, 10);
@@ -530,6 +628,7 @@ router.patch(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
+      await ensureMemberStatusColumnsOrThrow();
       const { id } = req.params;
       const memberId = typeof id === 'number' ? id : parseInt(id as string, 10);
       const effectiveDate = req.body?.effectiveDate
