@@ -12,6 +12,8 @@ import {
   deleteMemberSchema,
   getMemberPaymentsSchema,
   markMemberMonthPaidSchema,
+  deactivateMemberSchema,
+  reactivateMemberSchema,
 } from '../validations/members';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
@@ -27,6 +29,7 @@ import {
   markOverduePayments,
   markMonthlyInstallmentByYearMonth,
   syncMissingNextMonthlyInstallment,
+  ensureMonthlyInstallmentsThroughMonthKey,
 } from '../services/paymentService';
 
 const router = Router();
@@ -302,7 +305,7 @@ router.post(
       const monthlyPaymentAmount = packageFee;
 
       // Create member (ID will be auto-generated)
-      const member = await prisma.member.create({
+      const member: any = await prisma.member.create({
         data: {
           gymId,
           name,
@@ -315,6 +318,7 @@ router.post(
           packageId: packageId || null,
           discount: discount || null,
           membershipStart,
+          billingResumeFrom: membershipStart,
           admissionFeeWaived,
           admissionFeePaid,
           oneTimePaymentAmount,
@@ -324,7 +328,7 @@ router.post(
               trainerId,
             })),
           },
-        },
+        } as any,
         include: {
           package: true,
           trainers: {
@@ -365,7 +369,7 @@ router.post(
         res,
         {
           ...member,
-          trainers: member.trainers.map((mt) => mt.trainer),
+          trainers: member.trainers.map((mt: any) => mt.trainer),
           oneTimePayment: oneTimePayment || null,
           paymentSummary: {
             admissionFeeWaived: member.admissionFeeWaived,
@@ -512,6 +516,161 @@ router.put(
           },
         },
         'Member updated successfully'
+      );
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// PATCH /api/members/:id/deactivate
+router.patch(
+  '/:id/deactivate',
+  validate(deactivateMemberSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { id } = req.params;
+      const memberId = typeof id === 'number' ? id : parseInt(id as string, 10);
+      const effectiveDate = req.body?.effectiveDate
+        ? parseDate(req.body.effectiveDate)
+        : parseDate(new Date().toISOString().slice(0, 10));
+
+      const member: any = await prisma.member.findFirst({
+        where: { id: memberId, gymId },
+      });
+      if (!member) {
+        sendError(res, new NotFoundError('Member', String(memberId)));
+        return;
+      }
+      if (!member.isActive) {
+        sendError(res, new ValidationError('Member is already inactive'));
+        return;
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.member.update({
+          where: { id: memberId },
+          data: {
+            isActive: false,
+            inactiveFrom: effectiveDate,
+          } as any,
+        });
+
+        // Remove all unpaid installments from inactive date onward so overdue is cleared.
+        await tx.payment.deleteMany({
+          where: {
+            gymId,
+            memberId,
+            status: { in: ['PENDING', 'OVERDUE'] },
+            dueDate: { gte: effectiveDate },
+          },
+        });
+      });
+
+      const updated: any = await prisma.member.findFirst({
+        where: { id: memberId, gymId },
+        include: {
+          package: true,
+          trainers: {
+            include: {
+              trainer: true,
+            },
+          },
+        },
+      });
+
+      sendSuccess(
+        res,
+        {
+          ...updated,
+          trainers: updated?.trainers.map((mt: any) => mt.trainer) ?? [],
+        },
+        'Member deactivated successfully'
+      );
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// PATCH /api/members/:id/reactivate
+router.patch(
+  '/:id/reactivate',
+  validate(reactivateMemberSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { id } = req.params;
+      const memberId = typeof id === 'number' ? id : parseInt(id as string, 10);
+      const effectiveDate = req.body?.effectiveDate
+        ? parseDate(req.body.effectiveDate)
+        : parseDate(new Date().toISOString().slice(0, 10));
+
+      const member: any = await prisma.member.findFirst({
+        where: { id: memberId, gymId },
+      });
+      if (!member) {
+        sendError(res, new NotFoundError('Member', String(memberId)));
+        return;
+      }
+      if (member.isActive) {
+        sendError(res, new ValidationError('Member is already active'));
+        return;
+      }
+
+      const inactiveFrom = member.inactiveFrom;
+      if (!inactiveFrom) {
+        sendError(res, new ValidationError('Inactive start date is missing for this member'));
+        return;
+      }
+      if (effectiveDate.getTime() < inactiveFrom.getTime()) {
+        sendError(res, new ValidationError('effectiveDate cannot be before inactiveFrom'));
+        return;
+      }
+
+      const dayMs = 24 * 60 * 60 * 1000;
+      const pausedDays = Math.floor((effectiveDate.getTime() - inactiveFrom.getTime()) / dayMs);
+      const newMembershipEnd = member.membershipEnd
+        ? new Date(member.membershipEnd.getTime() + pausedDays * dayMs)
+        : null;
+
+      await prisma.member.update({
+        where: { id: memberId },
+        data: {
+          isActive: true,
+          inactiveFrom: null,
+          billingResumeFrom: effectiveDate,
+          ...(newMembershipEnd ? { membershipEnd: newMembershipEnd } : {}),
+        } as any,
+      });
+
+      const monthKey = `${effectiveDate.getUTCFullYear()}-${String(
+        effectiveDate.getUTCMonth() + 1
+      ).padStart(2, '0')}`;
+      await ensureMonthlyInstallmentsThroughMonthKey(memberId, gymId, monthKey);
+      await syncMissingNextMonthlyInstallment(memberId, gymId);
+      await markOverduePayments(gymId);
+
+      const updated: any = await prisma.member.findFirst({
+        where: { id: memberId, gymId },
+        include: {
+          package: true,
+          trainers: {
+            include: {
+              trainer: true,
+            },
+          },
+        },
+      });
+
+      sendSuccess(
+        res,
+        {
+          ...updated,
+          trainers: updated?.trainers.map((mt: any) => mt.trainer) ?? [],
+        },
+        'Member reactivated successfully'
       );
     } catch (error) {
       sendError(res, error as Error);

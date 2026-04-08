@@ -67,6 +67,9 @@ model Member {
   discount              Float?
   membershipStart       DateTime?
   membershipEnd         DateTime?
+  isActive              Boolean   @default(true)
+  inactiveFrom          DateTime?
+  billingResumeFrom     DateTime?
   admissionFeeWaived    Boolean   @default(false) // Whether admission fee was waived
   admissionFeePaid      Float?    @default(0) // Actual admission fee paid (0 if waived)
   oneTimePaymentAmount  Float?    // Total one-time payment (admission + package + trainer fees)

@@ -139,3 +139,27 @@ export const markMemberMonthPaidSchema = z.object({
   }),
 });
 
+export const deactivateMemberSchema = z.object({
+  params: z.object({
+    id: z.string().regex(/^\d+$/, 'Member ID must be a number').transform((val) => parseInt(val, 10)),
+  }),
+  body: z.object({
+    effectiveDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'effectiveDate must be in YYYY-MM-DD format')
+      .optional(),
+  }),
+});
+
+export const reactivateMemberSchema = z.object({
+  params: z.object({
+    id: z.string().regex(/^\d+$/, 'Member ID must be a number').transform((val) => parseInt(val, 10)),
+  }),
+  body: z.object({
+    effectiveDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'effectiveDate must be in YYYY-MM-DD format')
+      .optional(),
+  }),
+});
+

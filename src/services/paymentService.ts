@@ -21,6 +21,8 @@ type MemberWithPackage = {
   packageId: number | null;
   membershipEnd: Date | null;
   membershipStart: Date | null;
+  isActive?: boolean;
+  billingResumeFrom?: Date | null;
   package: { price: number; discount: number | null; duration: string } | null;
 };
 
@@ -96,7 +98,7 @@ export async function syncMissingNextMonthlyInstallment(
     include: { package: true },
   });
 
-  if (!member?.packageId || !member.membershipStart || !member.package) {
+  if (!member?.packageId || !member.membershipStart || !member.package || !member.isActive) {
     return;
   }
 
@@ -131,6 +133,7 @@ export async function syncMissingNextMonthlyInstallment(
   const amount = Math.max(0, packagePrice - discount);
 
   let d = nextBillingDueDate(lastPaid.dueDate, anchorDay);
+  d = shiftToBillableDate(d, anchorDay, member.billingResumeFrom);
   const maxSteps = 120;
 
   for (let step = 0; step < maxSteps; step++) {
@@ -173,6 +176,24 @@ function endOfUtcMonthFromYearMonthKey(ym: string): Date {
   return d;
 }
 
+function shiftToBillableDate(
+  dueDate: Date,
+  anchorDay: number,
+  billableFrom: Date | null | undefined
+): Date {
+  if (!billableFrom) {
+    return dueDate;
+  }
+  const from = new Date(billableFrom);
+  from.setUTCHours(0, 0, 0, 0);
+  let d = new Date(dueDate);
+  d.setUTCHours(0, 0, 0, 0);
+  for (let i = 0; i < 120 && d.getTime() < from.getTime(); i++) {
+    d = nextBillingDueDate(d, anchorDay);
+  }
+  return d;
+}
+
 /**
  * Materialize missing rows after last PAID through target YYYY-MM (inclusive), so advance months can be marked paid.
  * Bounded by max(syncCap, end of target month).
@@ -187,7 +208,7 @@ export async function ensureMonthlyInstallmentsThroughMonthKey(
     include: { package: true },
   });
 
-  if (!member?.packageId || !member.membershipStart || !member.package) {
+  if (!member?.packageId || !member.membershipStart || !member.package || !member.isActive) {
     return;
   }
 
@@ -222,6 +243,7 @@ export async function ensureMonthlyInstallmentsThroughMonthKey(
   const amount = Math.max(0, packagePrice - discount);
 
   let d = nextBillingDueDate(lastPaid.dueDate, anchorDay);
+  d = shiftToBillableDate(d, anchorDay, member.billingResumeFrom);
 
   for (let step = 0; step < 120; step++) {
     if (d.getTime() > endCap.getTime()) {
@@ -330,14 +352,15 @@ export async function createNextInstallmentIfNeeded(
   }
 ): Promise<void> {
   const { member } = paidPayment;
-  if (!member.packageId || !member.package) {
+  if (!member.packageId || !member.package || member.isActive === false) {
     return;
   }
 
   const anchorDay = member.membershipStart
     ? getBillingAnchorDayUTC(member.membershipStart)
     : getBillingAnchorDayUTC(paidPayment.dueDate);
-  const nextDueDate = nextBillingDueDate(paidPayment.dueDate, anchorDay);
+  let nextDueDate = nextBillingDueDate(paidPayment.dueDate, anchorDay);
+  nextDueDate = shiftToBillableDate(nextDueDate, anchorDay, member.billingResumeFrom);
   const nextMonth = formatMonth(nextDueDate);
 
   const existingPayment = await db.payment.findFirst({
@@ -506,9 +529,9 @@ async function ensureOpenMonthlyInstallmentExists(params: {
 
   const member = await prisma.member.findFirst({
     where: { id: memberId, gymId },
-    select: { membershipStart: true },
+    select: { membershipStart: true, billingResumeFrom: true, isActive: true },
   });
-  if (!member?.membershipStart) {
+  if (!member?.membershipStart || !member.isActive) {
     return;
   }
 
@@ -537,6 +560,7 @@ async function ensureOpenMonthlyInstallmentExists(params: {
     nextDueDate = new Date(member.membershipStart);
     nextDueDate.setUTCHours(0, 0, 0, 0);
   }
+  nextDueDate = shiftToBillableDate(nextDueDate, anchorDay, member.billingResumeFrom);
 
   const maxSteps = 120;
   for (let step = 0; step < maxSteps; step++) {
@@ -608,6 +632,8 @@ export async function markPaymentAsPaid(paymentId: number, gymId: number): Promi
           packageId: payment.member.packageId,
           membershipEnd: payment.member.membershipEnd,
           membershipStart: payment.member.membershipStart,
+          isActive: payment.member.isActive,
+          billingResumeFrom: payment.member.billingResumeFrom,
           package: payment.member.package,
         },
       }
@@ -743,6 +769,8 @@ export async function markPaymentsAsPaidBulk(
           packageId: p.member.packageId,
           membershipEnd: p.member.membershipEnd,
           membershipStart: p.member.membershipStart,
+          isActive: p.member.isActive,
+          billingResumeFrom: p.member.billingResumeFrom,
           package: p.member.package,
         },
       });
@@ -763,10 +791,10 @@ export async function markOverduePayments(gymId: number): Promise<number> {
   const tz = getGymTimezone();
   const pending = await prisma.payment.findMany({
     where: { gymId, status: 'PENDING' },
-    select: { id: true, dueDate: true },
+    select: { id: true, dueDate: true, member: { select: { isActive: true } } },
   });
   const overdueIds = pending
-    .filter((p) => isDueCalendarDateBeforeTodayInGymTZ(p.dueDate, tz))
+    .filter((p) => p.member.isActive && isDueCalendarDateBeforeTodayInGymTZ(p.dueDate, tz))
     .map((p) => p.id);
   if (overdueIds.length === 0) {
     return 0;
