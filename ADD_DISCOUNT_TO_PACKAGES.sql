@@ -11,3 +11,12 @@ ADD COLUMN discount FLOAT DEFAULT 0 AFTER price;
 -- AND TABLE_NAME = 'packages' 
 -- AND COLUMN_NAME = 'discount';
 
+
+
+
+
+
+
+
+
+

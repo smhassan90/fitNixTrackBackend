@@ -41,19 +41,28 @@ async function hasMemberStatusColumns(): Promise<boolean> {
     return memberStatusColumnsAvailableCache;
   }
   try {
-    const rows = await prisma.$queryRawUnsafe<Array<{ cnt: bigint | number }>>(
-      `SELECT COUNT(*) AS cnt
-       FROM information_schema.columns
-       WHERE table_schema = DATABASE()
-         AND table_name = 'members'
-         AND column_name IN ('isActive', 'inactiveFrom', 'billingResumeFrom')`
+    // Probe the real table so we match MySQL’s view of columns (information_schema
+    // can miss rows when table name casing / permissions differ).
+    await prisma.$queryRawUnsafe(
+      'SELECT `isActive`, `inactiveFrom`, `billingResumeFrom` FROM `members` WHERE 1 = 0'
     );
-    const raw = rows?.[0]?.cnt ?? 0;
-    const count = typeof raw === 'bigint' ? Number(raw) : Number(raw);
-    memberStatusColumnsAvailableCache = count >= 3;
-    return memberStatusColumnsAvailableCache;
-  } catch {
-    memberStatusColumnsAvailableCache = false;
+    memberStatusColumnsAvailableCache = true;
+    return true;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const code =
+      typeof e === 'object' && e !== null && 'code' in e
+        ? String((e as { code: unknown }).code)
+        : '';
+    const missingColumn =
+      /unknown column/i.test(msg) ||
+      /doesn't exist/i.test(msg) ||
+      code === 'ER_BAD_FIELD_ERROR';
+    if (missingColumn) {
+      memberStatusColumnsAvailableCache = false;
+      return false;
+    }
+    // Transient DB errors: do not cache so the next request can re-probe.
     return false;
   }
 }
