@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../lib/prisma';
-import { UnauthorizedError } from '../utils/errors';
+import { UnauthorizedError, ForbiddenError } from '../utils/errors';
 import { sendError } from '../utils/response';
 
 export interface ApiKeyAuthRequest extends Request {
@@ -45,6 +45,22 @@ export async function authenticateApiKey(
 
     if (!device) {
       sendError(res, new UnauthorizedError('Device not found'));
+      return;
+    }
+
+    const gym = await prisma.gym.findUnique({
+      where: { id: device.gymId },
+      select: { tenantStatus: true },
+    });
+    if (!gym) {
+      sendError(res, new UnauthorizedError('Gym not found for this device'));
+      return;
+    }
+    if (gym.tenantStatus === 'SUSPENDED') {
+      sendError(
+        res,
+        new ForbiddenError('This gym account is suspended. Sync is disabled.')
+      );
       return;
     }
 
