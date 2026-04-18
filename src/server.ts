@@ -16,6 +16,7 @@ import dashboardRoutes from './routes/dashboard';
 import reportRoutes from './routes/reports';
 import deviceRoutes from './routes/device';
 import settingsRoutes from './routes/settings';
+import platformRoutes from './routes/platform';
 
 // Load environment variables
 dotenv.config();
@@ -94,6 +95,7 @@ app.get('/health', async (req, res) => {
 
 // API routes
 app.use('/api/auth', authRoutes);
+app.use('/api/platform', platformRoutes);
 app.use('/api/members', memberRoutes);
 app.use('/api/trainers', trainerRoutes);
 app.use('/api/packages', packageRoutes);

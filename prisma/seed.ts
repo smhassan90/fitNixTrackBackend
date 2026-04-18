@@ -275,6 +275,26 @@ async function main() {
   console.log('\n📝 Test credentials:');
   console.log('   Admin: admin@fitnix.com / password123');
   console.log('   Staff: staff@fitnix.com / password123');
+
+  const platformEmail = process.env.PLATFORM_BOOTSTRAP_EMAIL?.trim().toLowerCase();
+  const platformPassword = process.env.PLATFORM_BOOTSTRAP_PASSWORD;
+  if (platformEmail && platformPassword) {
+    const platformHash = await bcrypt.hash(platformPassword, 10);
+    await prisma.platformUser.upsert({
+      where: { email: platformEmail },
+      create: {
+        name: 'Platform Super Admin',
+        email: platformEmail,
+        password: platformHash,
+        role: 'SUPER_ADMIN',
+      },
+      update: {
+        password: platformHash,
+        role: 'SUPER_ADMIN',
+      },
+    });
+    console.log('\n✅ Platform SUPER_ADMIN upserted:', platformEmail);
+  }
 }
 
 main()

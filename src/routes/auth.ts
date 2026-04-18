@@ -1,12 +1,12 @@
 import { Router, Response } from 'express';
-// import bcrypt from 'bcrypt'; // TEMPORARILY DISABLED - using plain text passwords for development
+import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma';
 import { validate } from '../middleware/validation';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { loginSchema, meSchema } from '../validations/auth';
 import { sendSuccess, sendError } from '../utils/response';
-import { UnauthorizedError, NotFoundError } from '../utils/errors';
+import { UnauthorizedError, NotFoundError, ForbiddenError } from '../utils/errors';
 
 const router = Router();
 
@@ -18,7 +18,6 @@ router.post(
     try {
       const { email, password } = req.body;
 
-      // Normalize email (lowercase, trim) and password (trim)
       const normalizedEmail = email?.toLowerCase().trim();
       const normalizedPassword = password?.trim();
 
@@ -27,19 +26,16 @@ router.post(
         return;
       }
 
-      // Find user (email is already normalized to lowercase)
       let user = await prisma.user.findUnique({
         where: { email: normalizedEmail },
         include: { gym: true },
       });
 
-      // Fallback: If not found, search all users and match case-insensitively
-      // This handles cases where email in DB has different casing
       if (!user) {
         const allUsers = await prisma.user.findMany({
           include: { gym: true },
         });
-        user = allUsers.find(u => u.email.toLowerCase().trim() === normalizedEmail) || null;
+        user = allUsers.find((u) => u.email.toLowerCase().trim() === normalizedEmail) || null;
       }
 
       if (!user) {
@@ -47,19 +43,25 @@ router.post(
         return;
       }
 
-      // Verify password - trim both for comparison
-      // TEMPORARY: Using plain text comparison for development
-      // TODO: Re-enable bcrypt hashing before production
-      // const isValidPassword = await bcrypt.compare(normalizedPassword, user.password);
+      if (user.gym.tenantStatus === 'SUSPENDED') {
+        sendError(
+          res,
+          new ForbiddenError('This gym account is suspended. Contact your administrator.')
+        );
+        return;
+      }
+
       const userPassword = user.password?.trim() || '';
-      const isValidPassword = normalizedPassword === userPassword;
-      
+      const isBcrypt = userPassword.startsWith('$2');
+      const isValidPassword = isBcrypt
+        ? await bcrypt.compare(normalizedPassword, userPassword)
+        : normalizedPassword === userPassword;
+
       if (!isValidPassword) {
         sendError(res, new UnauthorizedError('Invalid email or password'));
         return;
       }
 
-      // Generate JWT token
       const jwtSecret = process.env.JWT_SECRET;
       const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '7d';
 
@@ -69,19 +71,20 @@ router.post(
       }
 
       const payload = {
+        principal: 'gym',
         id: user.id,
         email: user.email,
         name: user.name,
         role: user.role,
         gymId: user.gymId,
         gymName: user.gym?.name,
+        tokenVersion: user.tokenVersion,
       };
 
       const token = jwt.sign(payload, jwtSecret, {
         expiresIn: jwtExpiresIn,
       } as jwt.SignOptions);
 
-      // Return user data (without password) and token
       const { password: _, ...userWithoutPassword } = user;
       sendSuccess(
         res,
@@ -131,6 +134,7 @@ router.get(
               address: true,
               phone: true,
               email: true,
+              tenantStatus: true,
             },
           },
         },
@@ -151,12 +155,21 @@ router.get(
   }
 );
 
-// POST /api/auth/logout (optional, client-side token removal)
-router.post('/logout', authenticateToken, (req: AuthRequest, res: Response) => {
-  // Since we're using stateless JWT, logout is handled client-side
-  // This endpoint just confirms the request
-  sendSuccess(res, { message: 'Logged out successfully' });
+// POST /api/auth/logout — bump tokenVersion to invalidate outstanding JWTs
+router.post('/logout', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.user) {
+      sendError(res, new UnauthorizedError('User not found'));
+      return;
+    }
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: { tokenVersion: { increment: 1 } },
+    });
+    sendSuccess(res, { ok: true }, 'Logged out successfully');
+  } catch (error) {
+    sendError(res, error as Error);
+  }
 });
 
 export default router;
-

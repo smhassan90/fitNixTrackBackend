@@ -10,15 +10,25 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum GymTenantStatus {
+  ACTIVE
+  SUSPENDED
+}
+
 model Gym {
-  id          Int      @id @default(autoincrement())
-  name        String
-  address     String?
-  phone       String?
-  email       String?
-  admissionFee Float?  @default(0) // Admission fee configured in settings
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id             Int              @id @default(autoincrement())
+  name           String
+  slug           String?          @unique
+  logoUrl        String?          @db.VarChar(2048)
+  address        String?
+  city           String?
+  country        String?
+  phone          String?
+  email          String?
+  admissionFee   Float?           @default(0) // Admission fee configured in settings
+  tenantStatus   GymTenantStatus  @default(ACTIVE)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
 
   users             User[]
   members           Member[]
@@ -28,20 +38,22 @@ model Gym {
   attendanceRecords AttendanceRecord[]
   deviceConfigs     DeviceConfig[]
   oneTimePayments   OneTimePayment[]
+  gymSubscription   GymSubscription?
 
   @@map("gyms")
 }
 
 model User {
-  id        Int      @id @default(autoincrement())
-  name      String
-  email     String   @unique
-  password  String
-  role      UserRole @default(STAFF)
-  gymId     Int
-  gymName   String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  password     String
+  role         UserRole @default(STAFF)
+  gymId        Int
+  gymName      String?
+  tokenVersion Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   gym Gym @relation(fields: [gymId], references: [id], onDelete: Cascade)
 
@@ -51,6 +63,84 @@ model User {
 enum UserRole {
   GYM_ADMIN
   STAFF
+}
+
+enum PlatformRole {
+  SUPER_ADMIN
+  PLATFORM_SUPPORT
+}
+
+enum GymSubscriptionStatus {
+  ACTIVE
+  TRIAL
+  PAST_DUE
+  CANCELLED
+}
+
+model Plan {
+  id           Int      @id @default(autoincrement())
+  name         String
+  price        Float
+  billingCycle String   @db.VarChar(32)
+  features     Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  gymSubscriptions GymSubscription[]
+
+  @@map("plans")
+}
+
+model GymSubscription {
+  id                Int                   @id @default(autoincrement())
+  gymId             Int                   @unique
+  planId            Int
+  dueDate           DateTime              @db.Date
+  billingResumeFrom DateTime?
+  status            GymSubscriptionStatus @default(ACTIVE)
+  lastPaidAt        DateTime?
+  notes             String?               @db.Text
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  gym  Gym  @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([planId])
+  @@index([dueDate])
+  @@map("gym_subscriptions")
+}
+
+model PlatformUser {
+  id           Int          @id @default(autoincrement())
+  name         String
+  email        String       @unique
+  password     String
+  role         PlatformRole @default(PLATFORM_SUPPORT)
+  tokenVersion Int          @default(0)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  auditLogs PlatformAuditLog[]
+
+  @@map("platform_users")
+}
+
+model PlatformAuditLog {
+  id          Int      @id @default(autoincrement())
+  actorUserId Int
+  actorRole   String   @db.VarChar(32)
+  actionType  String   @db.VarChar(64)
+  targetGymId Int?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  actor PlatformUser @relation(fields: [actorUserId], references: [id], onDelete: Cascade)
+
+  @@index([actorUserId])
+  @@index([targetGymId])
+  @@index([createdAt])
+  @@map("platform_audit_logs")
 }
 
 model Member {
