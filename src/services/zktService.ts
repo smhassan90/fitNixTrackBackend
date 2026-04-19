@@ -1,8 +1,7 @@
 import { prisma } from '../lib/prisma';
 
 // Import node-zklib - it's a constructor function
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const ZKLibConstructor = require('node-zklib');
+import ZKLibConstructor from 'node-zklib';
 
 export interface ZKTDeviceConfig {
   ip: string;
@@ -56,7 +55,7 @@ export class ZKTService {
       
       // Create ZKLib instance with constructor parameters: (ip, port, timeout, inport)
       if (!this.zkInstance) {
-        this.zkInstance = new ZKLibConstructor(
+        this.zkInstance = new (ZKLibConstructor as any)(
           this.config.ip,
           this.config.port,
           this.config.timeout,
