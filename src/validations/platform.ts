@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { KNOWN_PLATFORM_PERMISSION_KEYS } from '../constants/platformPermissions';
 
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD');
 
@@ -146,4 +147,66 @@ export const platformTopMembersQuerySchema = z.object({
   query: z.object({
     limit: z.coerce.number().int().min(1).max(50).optional().default(10),
   }),
+});
+
+const platformRoleZ = z.enum(['SUPER_ADMIN', 'PLATFORM_SUPPORT']);
+
+const permissionKeysBody = z
+  .array(z.string().min(1).max(128))
+  .optional()
+  .superRefine((keys, ctx) => {
+    if (!keys) return;
+    keys.forEach((k, i) => {
+      if (!KNOWN_PLATFORM_PERMISSION_KEYS.has(k)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Unknown permission key: ${k}`,
+          path: [i],
+        });
+      }
+    });
+  });
+
+/** List / filter platform operators (SUPER_ADMIN only — see route). */
+export const platformOperatorUsersQuerySchema = z.object({
+  query: z.object({
+    search: z.string().max(200).optional(),
+    role: platformRoleZ.optional(),
+    isActive: z.enum(['true', 'false']).optional(),
+    page: z.coerce.number().int().min(1).optional().default(1),
+    limit: z.coerce.number().int().min(1).max(100).optional().default(20),
+  }),
+});
+
+export const platformOperatorUserIdParamSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+});
+
+export const platformOperatorUserCreateSchema = z.object({
+  body: z.object({
+    name: z.string().min(1).max(191),
+    email: z.string().email().max(191),
+    password: z.string().min(8).max(128).optional(),
+    role: platformRoleZ,
+    isActive: z.boolean().optional().default(true),
+    permissionKeys: permissionKeysBody,
+  }),
+});
+
+export const platformOperatorUserPatchSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+  body: z
+    .object({
+      name: z.string().min(1).max(191).optional(),
+      email: z.string().email().max(191).optional(),
+      password: z.string().min(8).max(128).optional(),
+      role: platformRoleZ.optional(),
+      isActive: z.boolean().optional(),
+      permissionKeys: permissionKeysBody,
+    })
+    .refine((b) => Object.keys(b).length > 0, { message: 'At least one field is required' }),
 });

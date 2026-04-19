@@ -62,11 +62,23 @@ export function authenticatePlatformToken(
 
       const user = await prisma.platformUser.findUnique({
         where: { id: platformUserId },
-        select: { id: true, email: true, name: true, role: true, tokenVersion: true },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          tokenVersion: true,
+          isActive: true,
+        },
       });
 
       if (!user) {
         sendError(res, new UnauthorizedError('Platform user not found'));
+        return;
+      }
+
+      if (!user.isActive) {
+        sendError(res, new ForbiddenError('Platform account is disabled'));
         return;
       }
 

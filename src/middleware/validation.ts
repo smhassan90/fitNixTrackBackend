@@ -24,7 +24,7 @@ export function validate(schema: ZodSchema) {
           path: err.path.join('.'),
           message: err.message,
         }));
-        sendError(res, new ValidationError('Validation failed', details));
+        sendError(res, new ValidationError('Validation failed', details, 422));
         return;
       }
       next(error);

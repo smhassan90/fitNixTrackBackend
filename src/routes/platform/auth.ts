@@ -56,6 +56,12 @@ router.post(
         return;
       }
 
+      if (!user.isActive) {
+        recordPlatformLoginFailure(ip, email);
+        sendError(res, new UnauthorizedError('Invalid email or password'));
+        return;
+      }
+
       const ok = await bcrypt.compare(password, user.password);
       if (!ok) {
         recordPlatformLoginFailure(ip, email);
@@ -64,6 +70,11 @@ router.post(
       }
 
       clearPlatformLoginFailures(ip, email);
+
+      await prisma.platformUser.update({
+        where: { id: user.id },
+        data: { lastLoginAt: new Date() },
+      });
 
       const jwtSecret = process.env.JWT_SECRET;
       const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '8h';

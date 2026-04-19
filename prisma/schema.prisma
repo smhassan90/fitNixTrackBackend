@@ -112,14 +112,17 @@ model GymSubscription {
 }
 
 model PlatformUser {
-  id           Int          @id @default(autoincrement())
-  name         String
-  email        String       @unique
-  password     String
-  role         PlatformRole @default(PLATFORM_SUPPORT)
-  tokenVersion Int          @default(0)
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  id             Int          @id @default(autoincrement())
+  name           String
+  email          String       @unique
+  password       String
+  role           PlatformRole @default(PLATFORM_SUPPORT)
+  isActive       Boolean      @default(true)
+  permissionKeys Json?
+  tokenVersion   Int          @default(0)
+  lastLoginAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
 
   auditLogs PlatformAuditLog[]
 

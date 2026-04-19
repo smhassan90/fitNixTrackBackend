@@ -12,9 +12,16 @@ export class AppError extends Error {
 }
 
 export class ValidationError extends AppError {
-  constructor(message: string, details?: any) {
-    super('VALIDATION_ERROR', message, 400, details);
+  constructor(message: string, details?: any, statusCode: number = 400) {
+    super('VALIDATION_ERROR', message, statusCode, details);
     this.name = 'ValidationError';
+  }
+}
+
+export class ConflictError extends AppError {
+  constructor(message: string, details?: any) {
+    super('CONFLICT', message, 409, details);
+    this.name = 'ConflictError';
   }
 }
 

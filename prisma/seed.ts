@@ -287,10 +287,13 @@ async function main() {
         email: platformEmail,
         password: platformHash,
         role: 'SUPER_ADMIN',
+        isActive: true,
+        permissionKeys: [],
       },
       update: {
         password: platformHash,
         role: 'SUPER_ADMIN',
+        isActive: true,
       },
     });
     console.log('\n✅ Platform SUPER_ADMIN upserted:', platformEmail);
