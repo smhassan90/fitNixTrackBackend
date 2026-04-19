@@ -4,16 +4,25 @@ const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD');
 
 const slugRegex = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-const logoUrlSchema = z
-  .string()
-  .max(2048)
-  .url()
-  .refine(
-    (u) => /^https?:\/\//i.test(u),
-    'logoUrl must be http or https'
-  )
-  .optional()
-  .nullable();
+/** Full http(s) URL, or path returned by logo upload (`/uploads/logos/...`). */
+export const logoUrlSchema = z.preprocess(
+  (val) => (val === '' ? undefined : val),
+  z
+    .union([z.string().max(2048), z.null()])
+    .optional()
+    .superRefine((val, ctx) => {
+      if (val === undefined || val === null) return;
+      const ok =
+        /^https?:\/\/.+/i.test(val) || /^\/uploads\/logos\/[a-zA-Z0-9._-]+$/i.test(val);
+      if (!ok) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            'logoUrl must be a full http(s) URL or an uploaded path under /uploads/logos/',
+        });
+      }
+    })
+);
 
 export const platformLoginSchema = z.object({
   body: z.object({

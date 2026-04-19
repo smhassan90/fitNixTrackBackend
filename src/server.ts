@@ -1,4 +1,6 @@
 import express, { Express } from 'express';
+import path from 'path';
+import fs from 'fs';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
@@ -55,6 +57,11 @@ app.use((req, res, next) => {
 // Body parsing middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Uploaded gym logos (platform multipart). Not ideal on serverless ephemeral disks — use object storage in production.
+const uploadsRoot = path.join(process.cwd(), 'uploads');
+fs.mkdirSync(path.join(uploadsRoot, 'logos'), { recursive: true });
+app.use('/uploads', express.static(uploadsRoot));
 
 // Health check endpoint
 app.get('/health', async (req, res) => {

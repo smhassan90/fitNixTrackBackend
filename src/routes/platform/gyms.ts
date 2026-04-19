@@ -4,6 +4,7 @@ import bcrypt from 'bcrypt';
 import { Prisma, PlatformRole } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { validate } from '../../middleware/validation';
+import { parsePlatformGymMultipart } from '../../middleware/gymLogoMultipart';
 import { requirePlatformRole, PlatformRequest } from '../../middleware/platformAuth';
 import {
   platformCreateGymSchema,
@@ -151,6 +152,7 @@ router.get(
 router.post(
   '/',
   requirePlatformRole(...writeRoles),
+  parsePlatformGymMultipart,
   validate(platformCreateGymSchema),
   async (req: PlatformRequest, res: Response) => {
     try {
@@ -329,6 +331,7 @@ router.get(
 router.patch(
   '/:id',
   requirePlatformRole(...writeRoles),
+  parsePlatformGymMultipart,
   validate(platformPatchGymSchema),
   async (req: PlatformRequest, res: Response) => {
     try {

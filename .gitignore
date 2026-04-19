@@ -18,6 +18,9 @@ build/
 *.swo
 *~
 
+# User uploads (gym logos)
+uploads/
+
 # Logs
 logs/
 *.log
