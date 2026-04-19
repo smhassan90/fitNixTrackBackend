@@ -7,7 +7,7 @@ generator client {
 
 datasource db {
   provider = "mysql"
-  url      = env("DATABASE_URL")
+  url      = "mysql://fitnixtrack_user:fitNixTrack@123@66.135.60.203:3308/dbfitnixtrack"
 }
 
 enum GymTenantStatus {
