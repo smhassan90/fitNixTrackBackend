@@ -53,8 +53,10 @@ jobs:
           vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
           vercel-args: '--prod'
 
+      # Requires MySQL to allow inbound from GitHub Actions egress IPs (dynamic).
+      # If this step always fails with P1001, run migrations from an allowed host instead
+      # (e.g. VPN + local, bastion, or DB provider "allow list" that includes GH IP ranges).
       - name: Run database migrations
-        continue-on-error: true
         run: npx prisma migrate deploy
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
