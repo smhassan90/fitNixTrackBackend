@@ -17,43 +17,23 @@ import attendanceRoutes from './routes/attendance';
 import dashboardRoutes from './routes/dashboard';
 import reportRoutes from './routes/reports';
 import settingsRoutes from './routes/settings';
+import platformRoutes from './routes/platform';
 
 // Load environment variables
 dotenv.config();
 
-/* eslint-disable @typescript-eslint/no-var-requires -- conditional CJS requires so Vercel never loads device.ts (node-zklib); revert to static imports after diagnosis */
-/** TEMP (Vercel): avoid loading heavy route modules that pull native deps (e.g. node-zklib) or full platform stack. */
-function loadPlatformRoutes(): Router {
-  if (process.env.VERCEL === '1') {
-    return require('./routes/platform/indexDiag').default as Router;
+/* Device routes pull `node-zklib` (native). Lazy-load so gym login and other APIs do not load it. */
+let deviceRoutes: Router | null = null;
+function getDeviceRoutes(): Router {
+  if (!deviceRoutes) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    deviceRoutes = require('./routes/device').default as Router;
   }
-  return require('./routes/platform').default as Router;
+  return deviceRoutes;
 }
-
-function loadDeviceRoutes(): Router {
-  if (process.env.VERCEL === '1') {
-    return Router();
-  }
-  return require('./routes/device').default as Router;
-}
-/* eslint-enable @typescript-eslint/no-var-requires */
-
-const platformRoutes = loadPlatformRoutes();
-const deviceRoutes = loadDeviceRoutes();
 
 const app: Express = express();
 const PORT = process.env.PORT || 3001;
-
-// Bare handler: no Prisma/DB in this callback — use to verify Vercel can run this file at all.
-app.get('/api/_diag/structure', (_req, res) => {
-  res.status(200).json({
-    ok: true,
-    path: '/api/_diag/structure',
-    vercel: process.env.VERCEL ?? null,
-    node: process.version,
-    time: new Date().toISOString(),
-  });
-});
 
 // Vercel always sets X-Forwarded-For. express-rate-limit v7 throws if trust proxy stays false
 // (ERR_ERL_UNEXPECTED_X_FORWARDED_FOR). Use hop count, not boolean true (forbidden by rate-limit validations).
@@ -70,15 +50,12 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// Rate limiting (TEMP: disabled on Vercel to diagnose FUNCTION_INVOCATION_FAILED — re-enable after root cause found)
-if (process.env.VERCEL !== '1') {
-  const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // limit each IP to 100 requests per windowMs
-    message: 'Too many requests from this IP, please try again later.',
-  });
-  app.use('/api/', limiter);
-}
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100,
+  message: 'Too many requests from this IP, please try again later.',
+});
+app.use('/api/', limiter);
 
 // Disable caching for API responses
 app.use((req, res, next) => {
@@ -94,16 +71,17 @@ app.use((req, res, next) => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Uploaded gym logos (TEMP: disabled on Vercel to diagnose FUNCTION_INVOCATION_FAILED — re-enable after root cause found)
-if (process.env.VERCEL !== '1') {
-  const uploadsRoot = path.join(process.cwd(), 'uploads');
-  try {
-    fs.mkdirSync(path.join(uploadsRoot, 'logos'), { recursive: true });
-  } catch (err) {
-    console.warn('Could not create uploads directory:', err);
-  }
-  app.use('/uploads', express.static(uploadsRoot));
+// Uploaded gym logos — Vercel FS is read-only except /tmp.
+const uploadsRoot =
+  process.env.VERCEL === '1'
+    ? path.join('/tmp', 'fitnix-uploads')
+    : path.join(process.cwd(), 'uploads');
+try {
+  fs.mkdirSync(path.join(uploadsRoot, 'logos'), { recursive: true });
+} catch (err) {
+  console.warn('Could not create uploads directory:', err);
 }
+app.use('/uploads', express.static(uploadsRoot));
 
 // Health check endpoint
 app.get('/health', async (req, res) => {
@@ -152,7 +130,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/reports', reportRoutes);
-app.use('/api/device', deviceRoutes);
+app.use('/api/device', (req, res, next) => getDeviceRoutes()(req, res, next));
 app.use('/api/settings', settingsRoutes);
 
 // 404 handler
