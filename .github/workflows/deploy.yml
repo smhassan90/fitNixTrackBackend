@@ -8,46 +8,14 @@ jobs:
   build-and-deploy:
     name: Build and Deploy to Vercel
     runs-on: ubuntu-latest
+    env:
+      # CI does not connect to MySQL. Prisma only needs a syntactically valid URL for `prisma generate` / schema load.
+      # Real migrations run on Vercel build (`npm run vercel-build`) where DATABASE_URL is configured.
+      DATABASE_URL: mysql://ci:ci@127.0.0.1:3306/ci
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      # Vercel env vars are NOT visible here. Provide either:
-      # - Actions secret DATABASE_URL (full mysql://... URL), OR
-      # - Actions secrets DB_HOST, DB_NAME, DB_USER, DB_PASSWORD (and optional DB_PORT).
-      - name: Prepare DATABASE_URL for Prisma (GitHub Actions secrets only)
-        env:
-          SECRET_DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-        run: |
-          set -e
-          if [ -n "${SECRET_DATABASE_URL}" ]; then
-            echo "DATABASE_URL=${SECRET_DATABASE_URL}" >> "$GITHUB_ENV"
-            echo "Using DATABASE_URL from repository secret."
-            exit 0
-          fi
-          if [ -z "${DB_HOST}" ] || [ -z "${DB_NAME}" ] || [ -z "${DB_USER}" ] || [ -z "${DB_PASSWORD}" ]; then
-            echo "::error::No database URL in GitHub Actions. Add repository secret DATABASE_URL, OR all of: DB_HOST, DB_NAME, DB_USER, DB_PASSWORD (optional DB_PORT, default 3306). Vercel env is not used in CI."
-            exit 1
-          fi
-          PORT="${DB_PORT:-3306}"
-          ENC_USER=$(node -e "console.log(encodeURIComponent(process.env.DB_USER || ''))")
-          ENC_PASS=$(node -e "console.log(encodeURIComponent(process.env.DB_PASSWORD || ''))")
-          echo "DATABASE_URL=mysql://${ENC_USER}:${ENC_PASS}@${DB_HOST}:${PORT}/${DB_NAME}" >> "$GITHUB_ENV"
-          echo "Constructed DATABASE_URL from DB_* secrets (host=${DB_HOST}, port=${PORT}, db=${DB_NAME})."
-
-      - name: Verify DATABASE_URL is set (value not printed)
-        run: |
-          if [ -z "${DATABASE_URL}" ]; then
-            echo "::error::DATABASE_URL is still empty after prepare step."
-            exit 1
-          fi
-          echo "DATABASE_URL is set (length ${#DATABASE_URL})."
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -57,9 +25,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Generate Prisma Client
-        run: npm run prisma:generate
 
       - name: Run linter
         run: npm run lint || echo "Linting skipped"
@@ -86,9 +51,3 @@ jobs:
           vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
           vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
           vercel-args: '--prod'
-
-      # Requires MySQL to allow inbound from GitHub Actions egress IPs (dynamic).
-      # If this step fails with P1001,run migrations from an allowed host instead
-      # (VPN + local, bastion, or DB allow list that includes GitHub egress IPs).
-      - name: Run database migrations
-        run: npx prisma migrate deploy
