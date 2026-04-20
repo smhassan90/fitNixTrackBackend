@@ -8,10 +8,21 @@ jobs:
   build-and-deploy:
     name: Build and Deploy to Vercel
     runs-on: ubuntu-latest
+    # GitHub Actions does NOT read Vercel env vars. Set DATABASE_URL in:
+    # Repo → Settings → Secrets and variables → Actions → DATABASE_URL
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Require DATABASE_URL (GitHub Actions secret)
+        run: |
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "::error::DATABASE_URL is empty in GitHub Actions. Add repository secret DATABASE_URL (not the same as Vercel project env). Encode @ in password as %40."
+            exit 1
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -24,8 +35,6 @@ jobs:
 
       - name: Generate Prisma Client
         run: npm run prisma:generate
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL || 'mysql://user:password@localhost:3306/test' }}
 
       - name: Run linter
         run: npm run lint || echo "Linting skipped"
@@ -58,5 +67,3 @@ jobs:
       # (VPN + local, bastion, or DB allow list that includes GitHub egress IPs).
       - name: Run database migrations
         run: npx prisma migrate deploy
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
