@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import { randomBytes } from 'crypto';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import { Prisma, PlatformRole } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { validate } from '../../middleware/validation';

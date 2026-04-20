@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import { PlatformRole, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma';

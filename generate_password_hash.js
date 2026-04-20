@@ -2,7 +2,7 @@
 // Usage: node generate_password_hash.js [password]
 // Example: node generate_password_hash.js password123
 
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 
 const password = process.argv[2] || 'password123';
 
