@@ -1,28 +1,33 @@
-import type { IncomingMessage, ServerResponse } from 'http';
+import express, { type Express } from 'express';
 
 /**
- * Vercel entry: avoid importing `src/server` or `src/lib/prisma` for `/api/_diag/structure`
- * so we can tell import-time crashes from request-time crashes.
+ * Vercel expects `export default` to be an Express `Application` (not a raw Node handler).
+ * Register `/api/_diag/structure` first so it never loads `src/server` / Prisma.
  */
-export default function handler(req: IncomingMessage, res: ServerResponse): void {
-  const url = String(req.url ?? '');
+const root = express();
+root.disable('x-powered-by');
 
-  if (url.includes('/api/_diag/structure')) {
-    const body = JSON.stringify({
-      ok: true,
-      entry: 'api/index-bypass',
-      hint: 'If you see this JSON, the Lambda boots and this file runs without loading src/server.ts.',
-      url,
-      time: new Date().toISOString(),
-    });
-    res.statusCode = 200;
-    res.setHeader('Content-Type', 'application/json');
-    res.end(body);
-    return;
+root.get('/api/_diag/structure', (_req, res) => {
+  res.status(200).json({
+    ok: true,
+    entry: 'api/index-express-wrapper',
+    hint: 'If you see this, the entry file ran without importing src/server.ts for this path.',
+    time: new Date().toISOString(),
+  });
+});
+
+let fullStack: Express | null = null;
+function getFullStack(): Express {
+  if (!fullStack) {
+    /* eslint-disable @typescript-eslint/no-var-requires */
+    fullStack = require('../src/server').default as Express;
+    /* eslint-enable @typescript-eslint/no-var-requires */
   }
-
-  /* eslint-disable @typescript-eslint/no-var-requires -- load full Express app only when needed */
-  const app = require('../src/server').default as (req: IncomingMessage, res: ServerResponse) => void;
-  /* eslint-enable @typescript-eslint/no-var-requires */
-  app(req, res);
+  return fullStack;
 }
+
+root.use((req, res, next) => {
+  getFullStack()(req, res, next);
+});
+
+export default root;
