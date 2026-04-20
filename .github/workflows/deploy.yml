@@ -17,6 +17,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # secrets.* cannot be used in all workflow `if:` expressions; use outputs instead.
+      - name: Detect Vercel deploy secrets
+        id: vercel_secrets
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          if [ -n "$VERCEL_TOKEN" ] && [ -n "$VERCEL_ORG_ID" ] && [ -n "$VERCEL_PROJECT_ID" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -44,7 +58,7 @@ jobs:
           echo "Build successful"
 
       - name: Deploy to Vercel
-        if: ${{ secrets.VERCEL_TOKEN != '' && secrets.VERCEL_ORG_ID != '' && secrets.VERCEL_PROJECT_ID != '' }}
+        if: steps.vercel_secrets.outputs.ready == 'true'
         continue-on-error: true
         uses: amondnet/vercel-action@v25
         with:
@@ -54,6 +68,6 @@ jobs:
           vercel-args: '--prod'
 
       - name: Vercel deploy skipped (missing secrets)
-        if: ${{ secrets.VERCEL_TOKEN == '' || secrets.VERCEL_ORG_ID == '' || secrets.VERCEL_PROJECT_ID == '' }}
+        if: steps.vercel_secrets.outputs.ready != 'true'
         run: |
           echo "Skipping Vercel deploy: set GitHub Actions secrets VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID to enable."
