@@ -26,6 +26,14 @@
     "node": true,
     "es2020": true
   },
-  "ignorePatterns": ["dist", "node_modules", "*.js"]
+  "ignorePatterns": ["dist", "node_modules", "*.js"],
+  "overrides": [
+    {
+      "files": ["api/**/*.ts"],
+      "parserOptions": {
+        "project": null
+      }
+    }
+  ]
 }
 
