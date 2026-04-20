@@ -26,6 +26,12 @@ dotenv.config();
 const app: Express = express();
 const PORT = process.env.PORT || 3001;
 
+// Vercel always sets X-Forwarded-For. express-rate-limit v7 throws if trust proxy stays false
+// (ERR_ERL_UNEXPECTED_X_FORWARDED_FOR). Use hop count, not boolean true (forbidden by rate-limit validations).
+if (process.env.VERCEL === '1' || process.env.TRUST_PROXY === '1') {
+  app.set('trust proxy', 1);
+}
+
 // CORS configuration
 const corsOptions = {
   origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
