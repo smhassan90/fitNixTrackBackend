@@ -25,10 +25,19 @@ jobs:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
-          if [ -n "$VERCEL_TOKEN" ] && [ -n "$VERCEL_ORG_ID" ] && [ -n "$VERCEL_PROJECT_ID" ]; then
+          set -e
+          missing=""
+          [ -z "$VERCEL_TOKEN" ] && missing="${missing}VERCEL_TOKEN "
+          [ -z "$VERCEL_ORG_ID" ] && missing="${missing}VERCEL_ORG_ID "
+          [ -z "$VERCEL_PROJECT_ID" ] && missing="${missing}VERCEL_PROJECT_ID "
+          if [ -z "$missing" ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "Vercel deploy secrets are present."
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Vercel deploy will be skipped — empty GitHub Actions secrets: ${missing% }"
+            echo "Add them under: Repository → Settings → Secrets and variables → Actions"
+            echo "Token: https://vercel.com/account/tokens — Org/Project ID: run \`vercel link\` locally and read .vercel/project.json"
           fi
 
       - name: Setup Node.js
@@ -70,4 +79,4 @@ jobs:
       - name: Vercel deploy skipped (missing secrets)
         if: steps.vercel_secrets.outputs.ready != 'true'
         run: |
-          echo "Skipping Vercel deploy: set GitHub Actions secrets VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID to enable."
+          echo "Skipping Vercel deploy — CI still ran build/lint/tsc. Push to Vercel Git integration or add the three secrets to deploy from Actions."
