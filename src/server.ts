@@ -41,14 +41,15 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later.',
-});
-
-app.use('/api/', limiter);
+// Rate limiting (TEMP: disabled on Vercel to diagnose FUNCTION_INVOCATION_FAILED — re-enable after root cause found)
+if (process.env.VERCEL !== '1') {
+  const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // limit each IP to 100 requests per windowMs
+    message: 'Too many requests from this IP, please try again later.',
+  });
+  app.use('/api/', limiter);
+}
 
 // Disable caching for API responses
 app.use((req, res, next) => {
@@ -64,17 +65,16 @@ app.use((req, res, next) => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Uploaded gym logos (platform multipart). Vercel serverless FS is read-only except /tmp.
-const uploadsRoot =
-  process.env.VERCEL === '1'
-    ? path.join('/tmp', 'fitnix-uploads')
-    : path.join(process.cwd(), 'uploads');
-try {
-  fs.mkdirSync(path.join(uploadsRoot, 'logos'), { recursive: true });
-} catch (err) {
-  console.warn('Could not create uploads directory:', err);
+// Uploaded gym logos (TEMP: disabled on Vercel to diagnose FUNCTION_INVOCATION_FAILED — re-enable after root cause found)
+if (process.env.VERCEL !== '1') {
+  const uploadsRoot = path.join(process.cwd(), 'uploads');
+  try {
+    fs.mkdirSync(path.join(uploadsRoot, 'logos'), { recursive: true });
+  } catch (err) {
+    console.warn('Could not create uploads directory:', err);
+  }
+  app.use('/uploads', express.static(uploadsRoot));
 }
-app.use('/uploads', express.static(uploadsRoot));
 
 // Health check endpoint
 app.get('/health', async (req, res) => {

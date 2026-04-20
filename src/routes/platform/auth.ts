@@ -1,4 +1,4 @@
-import { Router, Response } from 'express';
+import { Router, Response, RequestHandler } from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { PlatformRole } from '@prisma/client';
@@ -23,9 +23,15 @@ import { writePlatformAuditLog } from '../../services/platformAuditService';
 
 const router = Router();
 
+// TEMP (Vercel only): skip strict login rate limiter to diagnose FUNCTION_INVOCATION_FAILED — restore unconditional limiter after root cause found
+const platformLoginPre: RequestHandler =
+  process.env.VERCEL === '1'
+    ? (_req, _res, next) => next()
+    : platformLoginRateLimiter;
+
 router.post(
   '/login',
-  platformLoginRateLimiter,
+  platformLoginPre,
   validate(platformLoginSchema),
   async (req: PlatformRequest, res: Response) => {
     const ip = getClientIp(req);
