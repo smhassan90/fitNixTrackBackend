@@ -25,11 +25,10 @@ jobs:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
-          set -e
           missing=""
-          [ -z "$VERCEL_TOKEN" ] && missing="${missing}VERCEL_TOKEN "
-          [ -z "$VERCEL_ORG_ID" ] && missing="${missing}VERCEL_ORG_ID "
-          [ -z "$VERCEL_PROJECT_ID" ] && missing="${missing}VERCEL_PROJECT_ID "
+          if [ -z "${VERCEL_TOKEN:-}" ]; then missing="${missing}VERCEL_TOKEN "; fi
+          if [ -z "${VERCEL_ORG_ID:-}" ]; then missing="${missing}VERCEL_ORG_ID "; fi
+          if [ -z "${VERCEL_PROJECT_ID:-}" ]; then missing="${missing}VERCEL_PROJECT_ID "; fi
           if [ -z "$missing" ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
             echo "Vercel deploy secrets are present."
@@ -37,7 +36,7 @@ jobs:
             echo "ready=false" >> "$GITHUB_OUTPUT"
             echo "::warning::Vercel deploy will be skipped — empty GitHub Actions secrets: ${missing% }"
             echo "Add them under: Repository → Settings → Secrets and variables → Actions"
-            echo "Token: https://vercel.com/account/tokens — Org/Project ID: run \`vercel link\` locally and read .vercel/project.json"
+            echo "Token: https://vercel.com/account/tokens — Org/Project ID: run vercel link locally, then read .vercel/project.json"
           fi
 
       - name: Setup Node.js
