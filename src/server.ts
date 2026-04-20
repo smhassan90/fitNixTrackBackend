@@ -58,9 +58,16 @@ app.use((req, res, next) => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Uploaded gym logos (platform multipart). Not ideal on serverless ephemeral disks — use object storage in production.
-const uploadsRoot = path.join(process.cwd(), 'uploads');
-fs.mkdirSync(path.join(uploadsRoot, 'logos'), { recursive: true });
+// Uploaded gym logos (platform multipart). Vercel serverless FS is read-only except /tmp.
+const uploadsRoot =
+  process.env.VERCEL === '1'
+    ? path.join('/tmp', 'fitnix-uploads')
+    : path.join(process.cwd(), 'uploads');
+try {
+  fs.mkdirSync(path.join(uploadsRoot, 'logos'), { recursive: true });
+} catch (err) {
+  console.warn('Could not create uploads directory:', err);
+}
 app.use('/uploads', express.static(uploadsRoot));
 
 // Health check endpoint
