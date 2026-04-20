@@ -21,13 +21,12 @@ import settingsRoutes from './routes/settings';
 // Load environment variables
 dotenv.config();
 
+/* eslint-disable @typescript-eslint/no-var-requires -- conditional CJS requires so Vercel never loads device.ts (node-zklib); revert to static imports after diagnosis */
 /** TEMP (Vercel): avoid loading heavy route modules that pull native deps (e.g. node-zklib) or full platform stack. */
 function loadPlatformRoutes(): Router {
   if (process.env.VERCEL === '1') {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     return require('./routes/platform/indexDiag').default as Router;
   }
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   return require('./routes/platform').default as Router;
 }
 
@@ -35,9 +34,9 @@ function loadDeviceRoutes(): Router {
   if (process.env.VERCEL === '1') {
     return Router();
   }
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   return require('./routes/device').default as Router;
 }
+/* eslint-enable @typescript-eslint/no-var-requires */
 
 const platformRoutes = loadPlatformRoutes();
 const deviceRoutes = loadDeviceRoutes();
