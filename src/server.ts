@@ -44,6 +44,17 @@ const deviceRoutes = loadDeviceRoutes();
 const app: Express = express();
 const PORT = process.env.PORT || 3001;
 
+// Bare handler: no Prisma/DB in this callback — use to verify Vercel can run this file at all.
+app.get('/api/_diag/structure', (_req, res) => {
+  res.status(200).json({
+    ok: true,
+    path: '/api/_diag/structure',
+    vercel: process.env.VERCEL ?? null,
+    node: process.version,
+    time: new Date().toISOString(),
+  });
+});
+
 // Vercel always sets X-Forwarded-For. express-rate-limit v7 throws if trust proxy stays false
 // (ERR_ERL_UNEXPECTED_X_FORWARDED_FOR). Use hop count, not boolean true (forbidden by rate-limit validations).
 if (process.env.VERCEL === '1' || process.env.TRUST_PROXY === '1') {
