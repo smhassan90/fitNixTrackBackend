@@ -10,6 +10,9 @@ import { sendError } from '../utils/response';
 const UPLOAD_SUBDIR = path.join('uploads', 'logos');
 
 function uploadRoot(): string {
+  if (process.env.VERCEL === '1') {
+    return path.join('/tmp', 'fitnix-uploads', 'logos');
+  }
   return path.join(process.cwd(), UPLOAD_SUBDIR);
 }
 

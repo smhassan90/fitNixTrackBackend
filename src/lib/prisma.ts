@@ -9,9 +9,10 @@ dotenv.config();
  * This handles passwords with special characters like @
  */
 function getDatabaseUrl(): string {
-  // If DATABASE_URL is already set, use it
-  if (process.env.DATABASE_URL) {
-    return process.env.DATABASE_URL;
+  const raw = process.env.DATABASE_URL?.trim();
+  if (raw) {
+    process.env.DATABASE_URL = raw;
+    return raw;
   }
 
   // Otherwise, construct it from individual components
