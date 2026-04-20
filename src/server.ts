@@ -1,4 +1,4 @@
-import express, { Express } from 'express';
+import express, { Express, Router } from 'express';
 import path from 'path';
 import fs from 'fs';
 import cors from 'cors';
@@ -16,12 +16,31 @@ import paymentRoutes from './routes/payments';
 import attendanceRoutes from './routes/attendance';
 import dashboardRoutes from './routes/dashboard';
 import reportRoutes from './routes/reports';
-import deviceRoutes from './routes/device';
 import settingsRoutes from './routes/settings';
-import platformRoutes from './routes/platform';
 
 // Load environment variables
 dotenv.config();
+
+/** TEMP (Vercel): avoid loading heavy route modules that pull native deps (e.g. node-zklib) or full platform stack. */
+function loadPlatformRoutes(): Router {
+  if (process.env.VERCEL === '1') {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('./routes/platform/indexDiag').default as Router;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require('./routes/platform').default as Router;
+}
+
+function loadDeviceRoutes(): Router {
+  if (process.env.VERCEL === '1') {
+    return Router();
+  }
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require('./routes/device').default as Router;
+}
+
+const platformRoutes = loadPlatformRoutes();
+const deviceRoutes = loadDeviceRoutes();
 
 const app: Express = express();
 const PORT = process.env.PORT || 3001;
