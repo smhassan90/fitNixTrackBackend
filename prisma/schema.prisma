@@ -2,12 +2,14 @@
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // Vercel serverless runs Linux; include engine for deploy targets (avoids runtime load failures).
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
   provider = "mysql"
-  url      = "mysql://fitnixtrack_user:fitNixTrack@123@66.135.60.203:3308/dbfitnixtrack"
+  url      = env("DATABASE_URL")
 }
 
 enum GymTenantStatus {

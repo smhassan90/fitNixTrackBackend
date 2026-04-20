@@ -1,4 +1,8 @@
+import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
+
+// Load .env before reading DB_* / DATABASE_URL (import order in server.ts runs prisma before dotenv.config()).
+dotenv.config();
 
 /**
  * Construct DATABASE_URL from individual components if DATABASE_URL is not set
