@@ -195,24 +195,18 @@ router.post(
       const gymId = req.gymId!;
       const { name, price, discount, duration, featureIds } = req.body;
 
-      // Use raw SQL to create package
-      // Note: Database still has old 'features' JSON column, so we provide empty array
       const discountValue = discount ?? 0;
-      await prisma.$executeRaw`
-        INSERT INTO packages (gymId, name, price, discount, duration, features, createdAt, updatedAt)
-        VALUES (${gymId}, ${name}, ${price}, ${discountValue}, ${duration}, JSON_ARRAY(), NOW(), NOW())
-      `;
-
-      // Get the created package ID
-      const result = await prisma.$queryRaw<Array<{ id: number }>>`
-        SELECT LAST_INSERT_ID() as id
-      `;
-
-      const createdPackageId = result[0]?.id;
-
-      if (!createdPackageId) {
-        throw new Error('Failed to create package');
-      }
+      const createdPackage = await (prisma.package.create({
+        data: {
+          gymId,
+          name,
+          price,
+          discount: discountValue,
+          duration,
+        },
+        select: { id: true },
+      }) as any);
+      const createdPackageId = createdPackage.id as number;
 
       // Add features separately if provided
       let featuresAssigned = false;
