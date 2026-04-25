@@ -174,6 +174,12 @@ export const platformBillingDuesQuerySchema = z.object({
   }),
 });
 
+export const platformBillingPlansQuerySchema = z.object({
+  query: z.object({
+    active: z.enum(['true', 'false']).optional(),
+  }),
+});
+
 export const platformReportsSummaryQuerySchema = z
   .object({
     query: z.object({

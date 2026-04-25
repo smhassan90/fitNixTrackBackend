@@ -176,6 +176,16 @@ router.post(
         sendError(res, new NotFoundError('Plan', planId));
         return;
       }
+      if ((plan as { isActive?: boolean }).isActive === false) {
+        sendError(
+          res,
+          new ValidationError('Selected plan is inactive', {
+            code: 'inactive_plan',
+            planId,
+          })
+        );
+        return;
+      }
 
       const emailTaken = await prisma.user.findUnique({
         where: { email: ownerAdmin.email.toLowerCase().trim() },

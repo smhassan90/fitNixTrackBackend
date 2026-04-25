@@ -3,11 +3,71 @@ import { Prisma, PlatformRole, GymSubscriptionStatus } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { validate } from '../../middleware/validation';
 import { requirePlatformRole, PlatformRequest } from '../../middleware/platformAuth';
-import { platformBillingDuesQuerySchema } from '../../validations/platform';
+import { platformBillingDuesQuerySchema, platformBillingPlansQuerySchema } from '../../validations/platform';
 import { sendSuccess, sendError } from '../../utils/response';
 const router = Router();
 
 const readRoles = [PlatformRole.SUPER_ADMIN, PlatformRole.PLATFORM_SUPPORT] as const;
+
+router.get(
+  '/plans',
+  requirePlatformRole(...readRoles),
+  validate(platformBillingPlansQuerySchema),
+  async (req: PlatformRequest, res: Response) => {
+    try {
+      const q = req.query as Record<string, string | undefined>;
+      const active = q.active;
+      const activeFilter =
+        active === undefined
+          ? Prisma.sql``
+          : active === 'true'
+            ? Prisma.sql`WHERE isActive = TRUE`
+            : Prisma.sql`WHERE isActive = FALSE`;
+      const plans = await prisma.$queryRaw<
+        Array<{
+          id: number;
+          name: string;
+          code: string | null;
+          price: number;
+          currency: string;
+          billingCycle: string;
+          isActive: boolean;
+          sortOrder: number;
+        }>
+      >(Prisma.sql`
+        SELECT
+          id,
+          name,
+          code,
+          price,
+          currency,
+          billingCycle,
+          isActive,
+          sortOrder
+        FROM plans
+        ${activeFilter}
+        ORDER BY sortOrder ASC, name ASC
+      `);
+      sendSuccess(
+        res,
+        plans.map((p) => ({
+          id: p.id,
+          name: p.name,
+          code: p.code,
+          price: p.price,
+          amount: p.price,
+          currency: p.currency,
+          billingCycle: p.billingCycle,
+          isActive: p.isActive,
+          status: p.isActive ? 'ACTIVE' : 'INACTIVE',
+          sortOrder: p.sortOrder,
+        }))
+      );
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
 
 router.get(
   '/dues',
