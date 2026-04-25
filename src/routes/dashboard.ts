@@ -4,11 +4,13 @@ import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { requireGymId } from '../middleware/multiTenant';
 import { validate } from '../middleware/validation';
 import { sendSuccess, sendError } from '../utils/response';
+import { ValidationError } from '../utils/errors';
 import { getStartOfDay, getEndOfDay, getGymTimezone, unpaidInstallmentDisplayBucket } from '../utils/dateHelpers';
 import { getFinancialSummarySchema, getPaymentsReceivedDailySchema } from '../validations/reports';
 import { getFinancialSummary, getPaymentsReceivedDaily } from '../services/reportService';
 
 const router = Router();
+const monthKeyRegex = /^\d{4}-\d{2}$/;
 
 // All routes require authentication and gymId
 router.use(authenticateToken);
@@ -48,6 +50,72 @@ router.get(
     }
   }
 );
+
+// GET /api/dashboard/revenue?startMonth=YYYY-MM&endMonth=YYYY-MM
+router.get('/revenue', async (req: AuthRequest, res: Response) => {
+  try {
+    const gymId = req.gymId!;
+    const { startMonth, endMonth } = req.query as { startMonth?: string; endMonth?: string };
+
+    if (!startMonth || !endMonth || !monthKeyRegex.test(startMonth) || !monthKeyRegex.test(endMonth)) {
+      sendError(res, new ValidationError('startMonth and endMonth are required in YYYY-MM format'));
+      return;
+    }
+
+    if (startMonth > endMonth) {
+      sendError(res, new ValidationError('startMonth must be on or before endMonth'));
+      return;
+    }
+
+    const paidInstallments = await prisma.payment.findMany({
+      where: {
+        gymId,
+        status: 'PAID',
+        month: {
+          gte: startMonth,
+          lte: endMonth,
+        },
+      },
+      select: {
+        month: true,
+        amount: true,
+      },
+      orderBy: {
+        month: 'asc',
+      },
+    });
+
+    const revenueByMonth: Record<string, number> = {};
+    for (const row of paidInstallments) {
+      revenueByMonth[row.month] = (revenueByMonth[row.month] || 0) + row.amount;
+    }
+
+    const [startYear, startM] = startMonth.split('-').map((v) => parseInt(v, 10));
+    const [endYear, endM] = endMonth.split('-').map((v) => parseInt(v, 10));
+
+    const filledRevenueByMonth: Record<string, number> = {};
+    let year = startYear;
+    let month = startM;
+    while (year < endYear || (year === endYear && month <= endM)) {
+      const key = `${year}-${String(month).padStart(2, '0')}`;
+      filledRevenueByMonth[key] = revenueByMonth[key] ?? 0;
+      month += 1;
+      if (month > 12) {
+        month = 1;
+        year += 1;
+      }
+    }
+
+    sendSuccess(res, {
+      startMonth,
+      endMonth,
+      revenueByMonth: filledRevenueByMonth,
+      totalRevenue: Object.values(filledRevenueByMonth).reduce((sum, amount) => sum + amount, 0),
+    });
+  } catch (error) {
+    sendError(res, error as Error);
+  }
+});
 
 // GET /api/dashboard/stats
 router.get('/stats', async (req: AuthRequest, res: Response) => {
