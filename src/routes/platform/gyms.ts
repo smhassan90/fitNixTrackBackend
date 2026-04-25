@@ -17,6 +17,7 @@ import { sendSuccess, sendError } from '../../utils/response';
 import { NotFoundError, ValidationError } from '../../utils/errors';
 import { writePlatformAuditLog } from '../../services/platformAuditService';
 import { parseDate } from '../../utils/dateHelpers';
+import { locationCatalogService } from '../../services/locationCatalogService';
 
 const router = Router();
 
@@ -197,6 +198,10 @@ router.post(
       const passwordHash = await bcrypt.hash(rawPassword, 10);
 
       const tenantStatus = isActive === false ? 'SUSPENDED' : 'ACTIVE';
+      const normalizedLocation = await locationCatalogService.validateActiveGymLocation({
+        country,
+        city,
+      });
 
       const result = await prisma.$transaction(async (tx) => {
         const gym = await tx.gym.create({
@@ -205,8 +210,8 @@ router.post(
             slug,
             logoUrl: logoUrl ?? null,
             address: address ?? null,
-            city: city ?? null,
-            country: country ?? null,
+            city: normalizedLocation.city,
+            country: normalizedLocation.country,
             phone: ownerAdmin.phone ?? null,
             tenantStatus,
           },
@@ -345,12 +350,32 @@ router.patch(
 
       const body = req.body as Record<string, unknown>;
       const data: Prisma.GymUpdateInput = {};
+      const nextCountry =
+        body.country !== undefined ? (body.country as string | null) : (existing.country ?? null);
+      const nextCity = body.city !== undefined ? (body.city as string | null) : (existing.city ?? null);
+      const shouldValidateLocation = body.country !== undefined || body.city !== undefined;
+      if (shouldValidateLocation) {
+        if (!nextCountry || !nextCity) {
+          sendError(
+            res,
+            new ValidationError('Country and city are required together', {
+              code: !nextCountry ? 'invalid_country' : 'invalid_city',
+            })
+          );
+          return;
+        }
+        const normalizedLocation = await locationCatalogService.validateActiveGymLocation({
+          country: nextCountry,
+          city: nextCity,
+        });
+        data.country = normalizedLocation.country;
+        data.city = normalizedLocation.city;
+      }
+
       if (body.name !== undefined) data.name = body.name as string;
       if (body.slug !== undefined) data.slug = body.slug as string;
       if (body.logoUrl !== undefined) data.logoUrl = body.logoUrl as string | null;
       if (body.address !== undefined) data.address = body.address as string | null;
-      if (body.city !== undefined) data.city = body.city as string | null;
-      if (body.country !== undefined) data.country = body.country as string | null;
       if (body.phone !== undefined) data.phone = body.phone as string | null;
       if (body.email !== undefined) data.email = body.email as string | null;
 

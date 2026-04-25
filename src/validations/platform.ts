@@ -58,8 +58,8 @@ export const platformCreateGymSchema = z.object({
     slug: z.string().min(2).max(64).regex(slugRegex),
     logoUrl: logoUrlSchema,
     address: z.string().max(500).optional().nullable(),
-    city: z.string().max(120).optional().nullable(),
-    country: z.string().max(120).optional().nullable(),
+    city: z.string().min(1).max(120),
+    country: z.string().min(1).max(120),
     ownerAdmin: z.object({
       name: z.string().min(1).max(191),
       email: z.string().email().max(191),
@@ -109,6 +109,58 @@ export const platformSubscriptionPatchSchema = z.object({
         b.notes !== undefined,
       { message: 'At least one of planId, dueDate, markPaidAt, notes is required' }
     ),
+});
+
+export const platformLocationCountryCitiesParamsSchema = z.object({
+  params: z.object({
+    countryId: z.coerce.number().int().positive(),
+  }),
+});
+
+export const platformLocationCountryCreateSchema = z.object({
+  body: z.object({
+    name: z.string().min(1).max(120),
+    code: z.string().min(2).max(10).optional().nullable(),
+    isActive: z.boolean().optional().default(true),
+    sortOrder: z.coerce.number().int().optional().default(0),
+  }),
+});
+
+export const platformLocationCountryPatchSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+  body: z
+    .object({
+      name: z.string().min(1).max(120).optional(),
+      code: z.string().min(2).max(10).optional().nullable(),
+      isActive: z.boolean().optional(),
+      sortOrder: z.coerce.number().int().optional(),
+    })
+    .refine((b) => Object.keys(b).length > 0, { message: 'At least one field is required' }),
+});
+
+export const platformLocationCityCreateSchema = z.object({
+  body: z.object({
+    countryId: z.coerce.number().int().positive(),
+    name: z.string().min(1).max(120),
+    isActive: z.boolean().optional().default(true),
+    sortOrder: z.coerce.number().int().optional().default(0),
+  }),
+});
+
+export const platformLocationCityPatchSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+  body: z
+    .object({
+      countryId: z.coerce.number().int().positive().optional(),
+      name: z.string().min(1).max(120).optional(),
+      isActive: z.boolean().optional(),
+      sortOrder: z.coerce.number().int().optional(),
+    })
+    .refine((b) => Object.keys(b).length > 0, { message: 'At least one field is required' }),
 });
 
 export const platformBillingDuesQuerySchema = z.object({

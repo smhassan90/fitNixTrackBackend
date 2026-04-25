@@ -1,0 +1,159 @@
+openapi: 3.0.3
+info:
+  title: FitNix Platform Locations API
+  version: 1.0.0
+paths:
+  /api/platform/locations/countries:
+    get:
+      summary: List active countries
+      tags: [Platform Locations]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Active countries
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  - id: 1
+                    name: Pakistan
+                    code: PK
+                    isActive: true
+                    sortOrder: 1
+  /api/platform/locations/countries/{countryId}/cities:
+    get:
+      summary: List active cities for a country
+      tags: [Platform Locations]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: countryId
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Active cities
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  - id: 1
+                    countryId: 1
+                    name: Karachi
+                    isActive: true
+                    sortOrder: 1
+  /api/platform/locations/catalog:
+    get:
+      summary: Locations catalog (country + cities)
+      tags: [Platform Locations]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Location catalog
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  - country:
+                      id: 1
+                      name: Pakistan
+                      code: PK
+                      isActive: true
+                      sortOrder: 1
+                    cities:
+                      - id: 1
+                        countryId: 1
+                        name: Karachi
+                        isActive: true
+                        sortOrder: 1
+  /api/platform/admin/locations/countries:
+    post:
+      summary: Create country (SUPER_ADMIN only)
+      tags: [Platform Admin Locations]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              name: Pakistan
+              code: PK
+              isActive: true
+              sortOrder: 1
+      responses:
+        '201':
+          description: Country created
+  /api/platform/admin/locations/countries/{id}:
+    patch:
+      summary: Update country (SUPER_ADMIN only)
+      tags: [Platform Admin Locations]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              isActive: false
+      responses:
+        '200':
+          description: Country updated
+  /api/platform/admin/locations/cities:
+    post:
+      summary: Create city (SUPER_ADMIN only)
+      tags: [Platform Admin Locations]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              countryId: 1
+              name: Karachi
+              isActive: true
+              sortOrder: 1
+      responses:
+        '201':
+          description: City created
+  /api/platform/admin/locations/cities/{id}:
+    patch:
+      summary: Update city (SUPER_ADMIN only)
+      tags: [Platform Admin Locations]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              isActive: false
+      responses:
+        '200':
+          description: City updated
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

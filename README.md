@@ -131,6 +131,15 @@ The server will start on `http://localhost:3001` (or the port specified in `.env
 ### Reports
 - `GET /api/reports/attendance` - Get attendance statistics
 
+### Platform Locations
+- `GET /api/platform/locations/countries` - List active countries for gym forms
+- `GET /api/platform/locations/countries/:countryId/cities` - List active cities for selected country
+- `GET /api/platform/locations/catalog` - Get country + cities in one payload
+- `POST /api/platform/admin/locations/countries` - Create country (SUPER_ADMIN only)
+- `PATCH /api/platform/admin/locations/countries/:id` - Update country (SUPER_ADMIN only)
+- `POST /api/platform/admin/locations/cities` - Create city (SUPER_ADMIN only)
+- `PATCH /api/platform/admin/locations/cities/:id` - Update city (SUPER_ADMIN only)
+
 ## Authentication
 
 All endpoints (except `/api/auth/login`) require authentication. Include the JWT token in the Authorization header:
@@ -181,6 +190,9 @@ The database includes the following models:
 ## Seed Data
 
 The seed script creates:
+- location catalog:
+  - Pakistan
+  - Karachi, Lahore, Islamabad, Rawalpindi, Faisalabad, Multan, Peshawar, Quetta, Sialkot, Hyderabad
 - 2 gyms
 - 3 users (admin and staff)
 - 3 packages
@@ -238,6 +250,29 @@ The API uses standardized error responses with appropriate HTTP status codes:
 - CORS configuration
 - Input validation with Zod
 - SQL injection protection via Prisma
+
+## Platform Location Validation Rules
+
+- Gym create/update requests validate `country` and `city` against active location catalog entries
+- `city` must belong to the selected `country`
+- Validation error `details.code` values:
+  - `invalid_country`
+  - `invalid_city`
+  - `city_country_mismatch`
+- Existing gyms with historical free-text values are still readable; validation is enforced on new create/update writes only
+
+OpenAPI examples for these endpoints are available in `docs/openapi.platform-locations.yaml`.
+
+## Frontend Integration Notes (Gym Create/Edit)
+
+- Load countries from `GET /api/platform/locations/countries` on form init
+- On country select, load cities from `GET /api/platform/locations/countries/:countryId/cities`
+- For fewer requests, use `GET /api/platform/locations/catalog` and cache in memory
+- Send selected `country` and `city` names in create/patch payloads
+- If API returns validation errors with `details.code`, map them to field messages:
+  - `invalid_country` -> prompt to reselect country
+  - `invalid_city` -> prompt to reselect city
+  - `city_country_mismatch` -> force city reset when country changes
 
 ## License
 

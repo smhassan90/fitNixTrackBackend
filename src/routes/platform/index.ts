@@ -7,6 +7,7 @@ import reportRoutes from './reports';
 import auditRoutes from './auditLogs';
 import userRoutes from './users';
 import permissionRoutes from './permissions';
+import locationRoutes from './locations';
 
 const router = Router();
 
@@ -17,5 +18,6 @@ router.use('/reports', authenticatePlatformToken, reportRoutes);
 router.use('/audit-logs', authenticatePlatformToken, auditRoutes);
 router.use('/users', authenticatePlatformToken, userRoutes);
 router.use('/permissions', authenticatePlatformToken, permissionRoutes);
+router.use('/', authenticatePlatformToken, locationRoutes);
 
 export default router;

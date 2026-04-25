@@ -12,7 +12,11 @@ export type PlatformAuditAction =
   | 'MARK_PAID'
   | 'PLATFORM_LOGIN'
   | 'PLATFORM_LOGOUT'
-  | 'SUBSCRIPTION_UPDATE';
+  | 'SUBSCRIPTION_UPDATE'
+  | 'LOCATION_COUNTRY_CREATE'
+  | 'LOCATION_COUNTRY_UPDATE'
+  | 'LOCATION_CITY_CREATE'
+  | 'LOCATION_CITY_UPDATE';
 
 export async function writePlatformAuditLog(params: {
   actorUserId: number;
