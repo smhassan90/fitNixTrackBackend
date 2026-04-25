@@ -11,6 +11,7 @@ import {
   platformGymIdParamSchema,
   platformGymListQuerySchema,
   platformPatchGymSchema,
+  platformGymBillingPaymentCreateSchema,
   platformSubscriptionPatchSchema,
 } from '../../validations/platform';
 import { sendSuccess, sendError } from '../../utils/response';
@@ -23,6 +24,35 @@ const router = Router();
 
 const readRoles = [PlatformRole.SUPER_ADMIN, PlatformRole.PLATFORM_SUPPORT] as const;
 const writeRoles = [PlatformRole.SUPER_ADMIN] as const;
+
+function toYmdUtc(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function addBillingCycle(ymd: string, billingCycle: string): string {
+  const base = new Date(`${ymd}T00:00:00.000Z`);
+  const normalized = (billingCycle || '').trim().toUpperCase();
+  const match = normalized.match(/^(\d+)\s*(DAY|DAYS|WEEK|WEEKS|MONTH|MONTHS|YEAR|YEARS)$/);
+  const quantity = match ? parseInt(match[1], 10) : 1;
+  const unit = match ? match[2] : 'MONTH';
+  if (unit.startsWith('DAY')) base.setUTCDate(base.getUTCDate() + quantity);
+  else if (unit.startsWith('WEEK')) base.setUTCDate(base.getUTCDate() + quantity * 7);
+  else if (unit.startsWith('YEAR')) base.setUTCFullYear(base.getUTCFullYear() + quantity);
+  else base.setUTCMonth(base.getUTCMonth() + quantity);
+  return toYmdUtc(base);
+}
+
+async function generateUniqueReceiptNo(): Promise<string> {
+  for (let i = 0; i < 10; i += 1) {
+    const now = new Date();
+    const receiptNo = `RCP-${toYmdUtc(now).replace(/-/g, '')}-${randomBytes(3).toString('hex').toUpperCase()}`;
+    const existing = await prisma.$queryRaw<Array<{ id: number }>>(
+      Prisma.sql`SELECT id FROM billing_payments WHERE receiptNo = ${receiptNo} LIMIT 1`
+    );
+    if (existing.length === 0) return receiptNo;
+  }
+  throw new ValidationError('Could not allocate receipt number');
+}
 
 function paymentAmountsByGym(
   gymIds: number[]
@@ -143,6 +173,163 @@ router.get(
       sendSuccess(res, {
         gyms: rows,
         pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+      });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+router.post(
+  '/:id/billing/payments',
+  requirePlatformRole(...writeRoles),
+  validate(platformGymBillingPaymentCreateSchema),
+  async (req: PlatformRequest, res: Response) => {
+    try {
+      const actor = req.platformUser!;
+      const id = parseInt(req.params.id, 10);
+      const body = req.body as {
+        amountPaid: number;
+        currency: string;
+        paidAt: string;
+        method: 'CASH' | 'BANK_TRANSFER' | 'CARD' | 'JAZZCASH' | 'EASYPAISA';
+        notes?: string;
+      };
+
+      const gym = await prisma.gym.findUnique({
+        where: { id },
+        include: { gymSubscription: { include: { plan: true } } },
+      });
+      if (!gym) {
+        sendError(res, new NotFoundError('Gym', id));
+        return;
+      }
+      if (!gym.gymSubscription) {
+        sendError(res, new ValidationError('Gym has no subscription'));
+        return;
+      }
+
+      const dedupe = await prisma.$queryRaw<
+        Array<{
+          id: number;
+          gymId: number;
+          amountPaid: number;
+          currency: string;
+          paidAt: Date;
+          method: string;
+          notes: string | null;
+          status: 'PAID';
+          receiptNo: string;
+          createdAt: Date;
+          createdBy: number;
+        }>
+      >(Prisma.sql`
+        SELECT id, gymId, amountPaid, currency, paidAt, method, notes, status, receiptNo, createdAt, createdBy
+        FROM billing_payments
+        WHERE gymId = ${id}
+          AND amountPaid = ${body.amountPaid}
+          AND currency = ${body.currency.trim().toUpperCase()}
+          AND paidAt = ${parseDate(body.paidAt)}
+          AND method = ${body.method}
+          AND createdBy = ${actor.id}
+          AND createdAt >= (NOW() - INTERVAL 30 SECOND)
+        ORDER BY id DESC
+        LIMIT 1
+      `);
+      if (dedupe.length > 0) {
+        const existing = dedupe[0];
+        sendSuccess(
+          res,
+          {
+            id: existing.id,
+            gymId: existing.gymId,
+            amountPaid: existing.amountPaid,
+            currency: existing.currency,
+            paidAt: toYmdUtc(new Date(existing.paidAt)),
+            method: existing.method,
+            notes: existing.notes,
+            status: existing.status,
+            receiptNo: existing.receiptNo,
+            createdAt: existing.createdAt,
+            createdBy: existing.createdBy,
+          },
+          'Payment already recorded recently'
+        );
+        return;
+      }
+
+      const receiptNo = await generateUniqueReceiptNo();
+      const paidAtDate = parseDate(body.paidAt);
+      const normalizedCurrency = body.currency.trim().toUpperCase();
+      const normalizedNotes = body.notes?.trim() || null;
+      const nextDueDate = addBillingCycle(body.paidAt, gym.gymSubscription.plan.billingCycle);
+
+      await prisma.$executeRaw(Prisma.sql`
+        INSERT INTO billing_payments
+          (gymId, amountPaid, currency, paidAt, method, notes, status, receiptNo, createdBy, createdAt, updatedAt)
+        VALUES
+          (${id}, ${body.amountPaid}, ${normalizedCurrency}, ${paidAtDate}, ${body.method}, ${normalizedNotes}, 'PAID', ${receiptNo}, ${actor.id}, NOW(3), NOW(3))
+      `);
+
+      const rows = await prisma.$queryRaw<
+        Array<{
+          id: number;
+          gymId: number;
+          amountPaid: number;
+          currency: string;
+          paidAt: Date;
+          method: string;
+          notes: string | null;
+          status: 'PAID';
+          receiptNo: string;
+          createdAt: Date;
+          createdBy: number;
+        }>
+      >(Prisma.sql`
+        SELECT id, gymId, amountPaid, currency, paidAt, method, notes, status, receiptNo, createdAt, createdBy
+        FROM billing_payments
+        WHERE receiptNo = ${receiptNo}
+        LIMIT 1
+      `);
+      const payment = rows[0];
+
+      await prisma.gymSubscription.update({
+        where: { gymId: id },
+        data: {
+          status: 'ACTIVE',
+          lastPaidAt: paidAtDate,
+          dueDate: parseDate(nextDueDate),
+        },
+      });
+
+      await writePlatformAuditLog({
+        actorUserId: actor.id,
+        actorRole: actor.role,
+        actionType: 'BILLING_PAYMENT_RECORDED',
+        targetGymId: id,
+        metadata: {
+          gymName: gym.name,
+          amountPaid: payment.amountPaid,
+          currency: payment.currency,
+          paidAt: body.paidAt,
+          receiptNo: payment.receiptNo,
+          method: payment.method,
+          actor: actor.email,
+        },
+      });
+
+      sendSuccess(res, {
+        id: payment.id,
+        gymId: payment.gymId,
+        amountPaid: payment.amountPaid,
+        currency: payment.currency,
+        paidAt: toYmdUtc(new Date(payment.paidAt)),
+        method: payment.method,
+        notes: payment.notes,
+        status: payment.status,
+        receiptNo: payment.receiptNo,
+        createdAt: payment.createdAt,
+        createdBy: payment.createdBy,
       });
     } catch (error) {
       sendError(res, error as Error);
@@ -329,6 +516,26 @@ router.get(
           _sum: { amount: true },
         }),
       ]);
+      const billingHistory = await prisma.$queryRaw<
+        Array<{
+          id: number;
+          paidAt: Date;
+          amountPaid: number;
+          status: string;
+          notes: string | null;
+          receiptNo: string;
+          method: string;
+          currency: string;
+          createdAt: Date;
+          createdBy: number;
+        }>
+      >(Prisma.sql`
+        SELECT id, paidAt, amountPaid, status, notes, receiptNo, method, currency, createdAt, createdBy
+        FROM billing_payments
+        WHERE gymId = ${id}
+        ORDER BY paidAt DESC, id DESC
+        LIMIT 100
+      `);
 
       sendSuccess(res, {
         ...gym,
@@ -336,6 +543,30 @@ router.get(
         trainersCount: gym._count.trainers,
         pendingAmount: pendingAgg._sum.amount ?? 0,
         overdueAmount: overdueAgg._sum.amount ?? 0,
+        billingHistory: billingHistory.map((p) => ({
+          id: p.id,
+          paidAt: toYmdUtc(new Date(p.paidAt)),
+          amountPaid: p.amountPaid,
+          amount: p.amountPaid,
+          status: p.status,
+          notes: p.notes,
+          receiptNo: p.receiptNo,
+          method: p.method,
+          currency: p.currency,
+          createdAt: p.createdAt,
+          createdBy: p.createdBy,
+        })),
+        subscription: {
+          ...gym.gymSubscription,
+          paymentHistory: billingHistory.map((p) => ({
+            id: p.id,
+            paidAt: toYmdUtc(new Date(p.paidAt)),
+            amountPaid: p.amountPaid,
+            amount: p.amountPaid,
+            status: p.status,
+            notes: p.notes,
+          })),
+        },
       });
     } catch (error) {
       sendError(res, error as Error);

@@ -180,6 +180,21 @@ export const platformBillingPlansQuerySchema = z.object({
   }),
 });
 
+const billingPaymentMethodZ = z.enum(['CASH', 'BANK_TRANSFER', 'CARD', 'JAZZCASH', 'EASYPAISA']);
+
+export const platformGymBillingPaymentCreateSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+  body: z.object({
+    amountPaid: z.coerce.number().positive(),
+    currency: z.string().min(1).max(10),
+    paidAt: ymd,
+    method: billingPaymentMethodZ,
+    notes: z.string().max(2000).optional(),
+  }),
+});
+
 export const platformReportsSummaryQuerySchema = z
   .object({
     query: z.object({

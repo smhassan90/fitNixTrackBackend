@@ -114,6 +114,30 @@ router.get(
           orderBy: { dueDate: 'asc' },
         }),
       ]);
+      const gymIds = rows.map((r) => r.gymId);
+      const paymentAgg =
+        gymIds.length === 0
+          ? []
+          : await prisma.$queryRaw<
+              Array<{
+                gymId: number;
+                amountCollected: number;
+                lastPaidAt: Date | null;
+                paymentHistoryCount: number;
+              }>
+            >(Prisma.sql`
+              SELECT
+                gymId,
+                COALESCE(SUM(amountPaid), 0) AS amountCollected,
+                MAX(paidAt) AS lastPaidAt,
+                COUNT(*) AS paymentHistoryCount
+              FROM billing_payments
+              WHERE gymId IN (${Prisma.join(gymIds)})
+              GROUP BY gymId
+            `);
+      const paymentMap = new Map(
+        paymentAgg.map((p) => [p.gymId, p] as const)
+      );
 
       const msPerDay = 86400000;
       const data = rows.map((r) => {
@@ -122,6 +146,7 @@ router.get(
         const daysOverdue = due.getTime() < today.getTime()
           ? Math.floor((today.getTime() - due.getTime()) / msPerDay)
           : 0;
+        const paymentInfo = paymentMap.get(r.gymId);
         return {
           gymId: r.gymId,
           gymName: r.gym.name,
@@ -130,6 +155,10 @@ router.get(
           dueDate: r.dueDate,
           daysOverdue,
           amountDue: r.plan.price,
+          amountCollected: paymentInfo?.amountCollected ?? 0,
+          collectedAmount: paymentInfo?.amountCollected ?? 0,
+          lastPaidAt: paymentInfo?.lastPaidAt ?? null,
+          paymentHistoryCount: paymentInfo?.paymentHistoryCount ?? 0,
           planName: r.plan.name,
           subscriptionStatus: r.status,
         };

@@ -16,7 +16,8 @@ export type PlatformAuditAction =
   | 'LOCATION_COUNTRY_CREATE'
   | 'LOCATION_COUNTRY_UPDATE'
   | 'LOCATION_CITY_CREATE'
-  | 'LOCATION_CITY_UPDATE';
+  | 'LOCATION_CITY_UPDATE'
+  | 'BILLING_PAYMENT_RECORDED';
 
 export async function writePlatformAuditLog(params: {
   actorUserId: number;
