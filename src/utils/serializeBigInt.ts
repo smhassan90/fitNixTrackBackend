@@ -1,4 +1,7 @@
 export function serializeBigInt<T>(value: T): T {
+  if (value instanceof Date) {
+    return value.toISOString() as T;
+  }
   if (typeof value === 'bigint') {
     return value.toString() as T;
   }

@@ -22,7 +22,10 @@ export type PlatformAuditAction =
   | 'BILLING_PAYMENT_RECORDED'
   | 'BILLING_PLAN_CREATE'
   | 'BILLING_PLAN_UPDATE'
-  | 'BILLING_PLAN_DELETE';
+  | 'BILLING_PLAN_DELETE'
+  | 'PACKAGE_FEATURE_CREATE'
+  | 'PACKAGE_FEATURE_UPDATE'
+  | 'PACKAGE_FEATURE_DELETE';
 
 export async function writePlatformAuditLog(params: {
   actorUserId: number;

@@ -76,6 +76,33 @@ async function ensureMemberStatusColumnsOrThrow(): Promise<void> {
   }
 }
 
+function parseMemberDateOfBirth(input: unknown): Date | null {
+  if (input === undefined || input === null || input === '') return null;
+  const value = String(input).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return parseDate(value);
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new ValidationError('dateOfBirth must be YYYY-MM-DD or ISO 8601 datetime string', [
+      {
+        path: 'body.dateOfBirth',
+        message: 'Expected YYYY-MM-DD or ISO 8601 datetime',
+      },
+    ], 422);
+  }
+  return parsed;
+}
+
+function normalizeMemberDobForResponse<T extends { dateOfBirth?: Date | null }>(member: T): T & {
+  dateOfBirth: string | null;
+} {
+  return {
+    ...member,
+    dateOfBirth: member.dateOfBirth ? new Date(member.dateOfBirth).toISOString() : null,
+  };
+}
+
 // All routes require authentication and gymId
 router.use(authenticateToken);
 router.use(requireGymId);
@@ -201,7 +228,7 @@ router.get(
 
       // Format response with payment summary
       const formattedMembers = members.map((member: any) => ({
-        ...member,
+        ...normalizeMemberDobForResponse(member),
         isActive: member.isActive ?? true,
         inactiveFrom: member.inactiveFrom ?? null,
         billingResumeFrom: member.billingResumeFrom ?? null,
@@ -306,7 +333,7 @@ router.get(
       });
 
       sendSuccess(res, {
-        ...member,
+        ...normalizeMemberDobForResponse(member as any),
         isActive: (member as any).isActive ?? true,
         inactiveFrom: (member as any).inactiveFrom ?? null,
         billingResumeFrom: (member as any).billingResumeFrom ?? null,
@@ -391,7 +418,7 @@ router.post(
       }
 
       // Parse date of birth
-      const dob = dateOfBirth ? parseDate(dateOfBirth) : null;
+      const dob = parseMemberDateOfBirth(dateOfBirth);
       const membershipStart = new Date();
 
       // Calculate payment amounts
@@ -474,7 +501,7 @@ router.post(
       sendSuccess(
         res,
         {
-          ...member,
+          ...normalizeMemberDobForResponse(member),
           trainers: member.trainers.map((mt: any) => mt.trainer),
           oneTimePayment: oneTimePayment || null,
           paymentSummary: {
@@ -551,7 +578,7 @@ router.put(
       }
 
       // Parse date of birth
-      const dob = dateOfBirth ? parseDate(dateOfBirth) : null;
+      const dob = dateOfBirth !== undefined ? parseMemberDateOfBirth(dateOfBirth) : undefined;
       const membershipStart = existingMember.membershipStart || new Date();
 
       // Update member
@@ -611,7 +638,7 @@ router.put(
       sendSuccess(
         res,
         {
-          ...member,
+          ...normalizeMemberDobForResponse(member as any),
           trainers: member.trainers.map((mt) => mt.trainer),
           oneTimePayment: oneTimePayment || null,
           paymentSummary: {

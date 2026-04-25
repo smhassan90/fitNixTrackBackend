@@ -23,10 +23,24 @@ router.use(requireGymId);
 // Returns only features that exist in the 'features' table
 router.get('/features', async (req: AuthRequest, res: Response) => {
   try {
-    // Query database - returns only what's in the features table
-    const features = await (prisma as any).feature.findMany({
-      orderBy: { name: 'asc' },
-    });
+    const features = await prisma.$queryRaw<
+      Array<{
+        id: number;
+        name: string;
+        code: string | null;
+        description: string | null;
+        isActive: boolean;
+        sortOrder: number;
+        createdAt: Date;
+        updatedAt: Date;
+      }>
+    >`
+      SELECT id, name, code, description, isActive, sortOrder, createdAt, updatedAt
+      FROM features
+      WHERE isActive = TRUE
+        AND (deletedAt IS NULL OR deletedAt > NOW())
+      ORDER BY sortOrder ASC, name ASC
+    `;
 
     sendSuccess(res, { features });
   } catch (error) {

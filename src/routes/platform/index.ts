@@ -9,6 +9,7 @@ import userRoutes from './users';
 import permissionRoutes from './permissions';
 import locationRoutes from './locations';
 import adminBillingPlanRoutes from './adminBillingPlans';
+import adminPackageFeatureRoutes from './adminPackageFeatures';
 
 const router = Router();
 
@@ -21,5 +22,6 @@ router.use('/users', authenticatePlatformToken, userRoutes);
 router.use('/permissions', authenticatePlatformToken, permissionRoutes);
 router.use('/', authenticatePlatformToken, locationRoutes);
 router.use('/', authenticatePlatformToken, adminBillingPlanRoutes);
+router.use('/', authenticatePlatformToken, adminPackageFeatureRoutes);
 
 export default router;

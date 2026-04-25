@@ -1,6 +1,15 @@
 import { z } from 'zod';
 
 const cnicRegex = /^\d{13}$/;
+const dobError = 'dateOfBirth must be YYYY-MM-DD or ISO 8601 datetime string';
+
+const dateOfBirthSchema = z
+  .string()
+  .refine((value) => {
+    const v = value.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return true;
+    return !Number.isNaN(new Date(v).getTime());
+  }, dobError);
 
 export const createMemberSchema = z.object({
   body: z.object({
@@ -8,7 +17,7 @@ export const createMemberSchema = z.object({
     phone: z.string().optional().nullable(),
     email: z.string().email('Invalid email format').optional().nullable(),
     gender: z.enum(['Male', 'Female', 'Other']).optional().nullable(),
-    dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').optional().nullable(),
+    dateOfBirth: dateOfBirthSchema.optional().nullable(),
     cnic: z.string().regex(cnicRegex, 'CNIC must be exactly 13 digits').optional().nullable(),
     comments: z.string().max(1000).optional().nullable(),
     packageId: z
@@ -54,7 +63,7 @@ export const updateMemberSchema = z.object({
     phone: z.string().optional().nullable(),
     email: z.string().email().optional().nullable(),
     gender: z.enum(['Male', 'Female', 'Other']).optional().nullable(),
-    dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+    dateOfBirth: dateOfBirthSchema.optional().nullable(),
     cnic: z.string().regex(cnicRegex).optional().nullable(),
     comments: z.string().max(1000).optional().nullable(),
     packageId: z
