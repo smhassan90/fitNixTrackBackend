@@ -21,13 +21,14 @@ router.get(
         active === undefined
           ? Prisma.sql``
           : active === 'true'
-            ? Prisma.sql`WHERE isActive = TRUE`
-            : Prisma.sql`WHERE isActive = FALSE`;
+            ? Prisma.sql`AND isActive = TRUE`
+            : Prisma.sql`AND isActive = FALSE`;
       const plans = await prisma.$queryRaw<
         Array<{
           id: number;
           name: string;
           code: string | null;
+          description: string | null;
           price: number;
           currency: string;
           billingCycle: string;
@@ -39,12 +40,14 @@ router.get(
           id,
           name,
           code,
+          description,
           price,
           currency,
           billingCycle,
           isActive,
           sortOrder
         FROM plans
+        WHERE deletedAt IS NULL
         ${activeFilter}
         ORDER BY sortOrder ASC, name ASC
       `);
@@ -53,7 +56,9 @@ router.get(
         plans.map((p) => ({
           id: p.id,
           name: p.name,
+          packageName: p.name,
           code: p.code,
+          description: (p as { description?: string | null }).description ?? null,
           price: p.price,
           amount: p.price,
           currency: p.currency,

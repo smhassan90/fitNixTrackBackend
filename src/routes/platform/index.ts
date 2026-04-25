@@ -8,6 +8,7 @@ import auditRoutes from './auditLogs';
 import userRoutes from './users';
 import permissionRoutes from './permissions';
 import locationRoutes from './locations';
+import adminBillingPlanRoutes from './adminBillingPlans';
 
 const router = Router();
 
@@ -19,5 +20,6 @@ router.use('/audit-logs', authenticatePlatformToken, auditRoutes);
 router.use('/users', authenticatePlatformToken, userRoutes);
 router.use('/permissions', authenticatePlatformToken, permissionRoutes);
 router.use('/', authenticatePlatformToken, locationRoutes);
+router.use('/', authenticatePlatformToken, adminBillingPlanRoutes);
 
 export default router;

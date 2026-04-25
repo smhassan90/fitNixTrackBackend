@@ -223,6 +223,8 @@ export const platformTopMembersQuerySchema = z.object({
 });
 
 const platformRoleZ = z.enum(['SUPER_ADMIN', 'PLATFORM_SUPPORT']);
+const billingPlanCodeRegex = /^[A-Z0-9_]+$/;
+const billingCycleZ = z.enum(['MONTHLY', 'QUARTERLY', 'YEARLY']);
 
 const permissionKeysBody = z
   .array(z.string().min(1).max(128))
@@ -282,4 +284,41 @@ export const platformOperatorUserPatchSchema = z.object({
       permissionKeys: permissionKeysBody,
     })
     .refine((b) => Object.keys(b).length > 0, { message: 'At least one field is required' }),
+});
+
+export const platformBillingPlanCreateSchema = z.object({
+  body: z.object({
+    name: z.string().min(1).max(191),
+    code: z.string().min(1).max(64).regex(billingPlanCodeRegex),
+    description: z.string().max(2000).optional().nullable(),
+    price: z.coerce.number().min(0),
+    currency: z.string().min(1).max(10),
+    billingCycle: billingCycleZ,
+    isActive: z.boolean().optional().default(true),
+    sortOrder: z.coerce.number().int().optional().default(0),
+  }),
+});
+
+export const platformBillingPlanPatchSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+  body: z
+    .object({
+      name: z.string().min(1).max(191).optional(),
+      code: z.string().min(1).max(64).regex(billingPlanCodeRegex).optional(),
+      description: z.string().max(2000).optional().nullable(),
+      price: z.coerce.number().min(0).optional(),
+      currency: z.string().min(1).max(10).optional(),
+      billingCycle: billingCycleZ.optional(),
+      isActive: z.boolean().optional(),
+      sortOrder: z.coerce.number().int().optional(),
+    })
+    .refine((b) => Object.keys(b).length > 0, { message: 'At least one field is required' }),
+});
+
+export const platformBillingPlanDeleteParamSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
 });
