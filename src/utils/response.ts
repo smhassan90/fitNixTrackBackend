@@ -1,5 +1,6 @@
 import { Response } from 'express';
 import { AppError } from './errors';
+import { serializeBigInt } from './serializeBigInt';
 
 export interface SuccessResponse<T = any> {
   success: true;
@@ -31,7 +32,7 @@ export function sendSuccess<T>(
   
   const response: SuccessResponse<T> = {
     success: true,
-    data,
+    data: serializeBigInt(data),
     ...(message && { message }),
   };
   return res.status(statusCode).json(response);
@@ -47,7 +48,7 @@ export function sendError(
       error: {
         code: error.code,
         message: error.message,
-        ...(error.details && { details: error.details }),
+        ...(error.details && { details: serializeBigInt(error.details) }),
       },
     };
     return res.status(error.statusCode).json(response);

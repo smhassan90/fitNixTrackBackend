@@ -141,3 +141,33 @@ test('POST /gyms creates gym with active plan', async () => {
   assert.equal(res.body.data.gym.id, 101);
   assert.equal(res.body.data.gym.tenantStatus, 'ACTIVE');
 });
+
+test('GET /billing/dues serializes BigInt fields', async () => {
+  mockMethod(prisma.gymSubscription as any, 'count', (async () => 1) as any);
+  mockMethod(prisma.gymSubscription as any, 'findMany', (async () => [
+    {
+      gymId: 12,
+      dueDate: new Date('2026-05-01'),
+      status: 'ACTIVE',
+      gym: { id: 12, name: 'Gym B', slug: 'gym-b', tenantStatus: 'ACTIVE' },
+      plan: { id: 2, name: 'Basic Monthly', price: 2500, billingCycle: 'MONTHLY' },
+    },
+  ]) as any);
+  mockMethod(prisma as any, '$queryRaw', (async () => [
+    {
+      gymId: 12,
+      amountCollected: 3000,
+      lastPaidAt: new Date('2026-04-25'),
+      paymentHistoryCount: BigInt(3),
+    },
+  ]) as any);
+
+  const app = express();
+  app.use(withPlatformUser('SUPER_ADMIN'));
+  app.use('/billing', billingRoutes);
+
+  const res = await request(app).get('/billing/dues');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.data.items[0].paymentHistoryCount, '3');
+});

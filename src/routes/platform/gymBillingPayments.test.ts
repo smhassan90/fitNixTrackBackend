@@ -46,7 +46,7 @@ test('records billing payment successfully', async () => {
     [], // dedupe check
     [
       {
-        id: 88,
+        id: BigInt(88),
         gymId: 10,
         amountPaid: 2500,
         currency: 'PKR',
@@ -56,7 +56,7 @@ test('records billing payment successfully', async () => {
         status: 'PAID',
         receiptNo: 'RCP-20260425-ABC123',
         createdAt: new Date(),
-        createdBy: 7,
+        createdBy: BigInt(7),
       },
     ], // fetch inserted row
   ];
@@ -84,6 +84,8 @@ test('records billing payment successfully', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.body.success, true);
   assert.equal(res.body.data.gymId, 10);
+  assert.equal(res.body.data.id, '88');
+  assert.equal(res.body.data.createdBy, '7');
   assert.equal(res.body.data.status, 'PAID');
 });
 
@@ -177,7 +179,7 @@ test('gym details include billingHistory', async () => {
   mockMethod(prisma.payment as any, 'aggregate', (async () => ({ _sum: { amount: 0 } })) as any);
   mockMethod(prisma as any, '$queryRaw', (async () => [
     {
-      id: 4,
+      id: BigInt(4),
       paidAt: new Date('2026-04-20'),
       amountPaid: 2500,
       status: 'PAID',
@@ -186,7 +188,7 @@ test('gym details include billingHistory', async () => {
       method: 'CASH',
       currency: 'PKR',
       createdAt: new Date(),
-      createdBy: 7,
+      createdBy: BigInt(7),
     },
   ]) as any);
 
@@ -194,5 +196,7 @@ test('gym details include billingHistory', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.body.success, true);
   assert.equal(res.body.data.billingHistory.length, 1);
+  assert.equal(res.body.data.billingHistory[0].id, '4');
+  assert.equal(res.body.data.billingHistory[0].createdBy, '7');
   assert.equal(res.body.data.billingHistory[0].amountPaid, 2500);
 });
