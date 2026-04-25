@@ -9,11 +9,11 @@ import {
 
 function createRepo(): LocationCatalogRepo {
   const now = new Date();
-  let countries: CountryDto[] = [
+  const countries: CountryDto[] = [
     { id: 1, name: 'Pakistan', code: 'PK', isActive: true, sortOrder: 1, createdAt: now, updatedAt: now },
     { id: 2, name: 'UAE', code: 'AE', isActive: false, sortOrder: 2, createdAt: now, updatedAt: now },
   ];
-  let cities: CityDto[] = [
+  const cities: CityDto[] = [
     { id: 1, countryId: 1, name: 'Karachi', isActive: true, sortOrder: 1, createdAt: now, updatedAt: now },
     { id: 2, countryId: 1, name: 'Lahore', isActive: true, sortOrder: 2, createdAt: now, updatedAt: now },
     { id: 3, countryId: 2, name: 'Dubai', isActive: true, sortOrder: 1, createdAt: now, updatedAt: now },

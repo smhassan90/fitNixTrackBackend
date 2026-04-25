@@ -45,6 +45,38 @@ model Gym {
   @@map("gyms")
 }
 
+model Country {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  code      String?  @unique @db.VarChar(10)
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cities City[]
+
+  @@index([isActive, sortOrder, name])
+  @@map("countries")
+}
+
+model City {
+  id        Int      @id @default(autoincrement())
+  countryId Int
+  name      String
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  @@unique([countryId, name])
+  @@index([isActive, sortOrder, name])
+  @@index([countryId])
+  @@map("cities")
+}
+
 model User {
   id           Int      @id @default(autoincrement())
   name         String
