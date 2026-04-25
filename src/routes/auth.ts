@@ -26,16 +26,33 @@ router.post(
         return;
       }
 
-      let user = await prisma.user.findUnique({
+      let withLegacyCase = await prisma.user.findMany({
         where: { email: normalizedEmail },
         include: { gym: true },
       });
 
-      if (!user) {
-        const allUsers = await prisma.user.findMany({
-          include: { gym: true },
-        });
-        user = allUsers.find((u) => u.email.toLowerCase().trim() === normalizedEmail) || null;
+      if (withLegacyCase.length === 0) {
+        const allUsers = await prisma.user.findMany({ include: { gym: true } });
+        withLegacyCase = allUsers.filter((u) => u.email.toLowerCase().trim() === normalizedEmail);
+      }
+
+      withLegacyCase = withLegacyCase.filter((u) => u.isActive !== false);
+      if (withLegacyCase.length === 0) {
+        sendError(res, new UnauthorizedError('Invalid email or password'));
+        return;
+      }
+
+      let user: (typeof withLegacyCase)[0] | null = null;
+      for (const candidate of withLegacyCase) {
+        const userPassword = candidate.password?.trim() || '';
+        const isBcrypt = userPassword.startsWith('$2');
+        const isValidPassword = isBcrypt
+          ? await bcrypt.compare(normalizedPassword, userPassword)
+          : normalizedPassword === userPassword;
+        if (isValidPassword) {
+          user = candidate;
+          break;
+        }
       }
 
       if (!user) {
@@ -51,16 +68,20 @@ router.post(
         return;
       }
 
-      const userPassword = user.password?.trim() || '';
-      const isBcrypt = userPassword.startsWith('$2');
-      const isValidPassword = isBcrypt
-        ? await bcrypt.compare(normalizedPassword, userPassword)
-        : normalizedPassword === userPassword;
-
-      if (!isValidPassword) {
-        sendError(res, new UnauthorizedError('Invalid email or password'));
+      if (user.isActive === false) {
+        sendError(
+          res,
+          new ForbiddenError('This account is deactivated. Contact a gym administrator.')
+        );
         return;
       }
+
+      await prisma.user
+        .update({
+          where: { id: user.id },
+          data: { lastLoginAt: new Date() },
+        })
+        .catch(() => undefined);
 
       const jwtSecret = process.env.JWT_SECRET;
       const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '7d';
@@ -122,9 +143,12 @@ router.get(
           id: true,
           name: true,
           email: true,
+          phone: true,
           role: true,
           gymId: true,
           gymName: true,
+          isActive: true,
+          lastLoginAt: true,
           createdAt: true,
           updatedAt: true,
           gym: {

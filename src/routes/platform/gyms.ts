@@ -374,14 +374,6 @@ router.post(
         return;
       }
 
-      const emailTaken = await prisma.user.findUnique({
-        where: { email: ownerAdmin.email.toLowerCase().trim() },
-      });
-      if (emailTaken) {
-        sendError(res, new ValidationError('Owner email is already registered'));
-        return;
-      }
-
       const slugTaken = await prisma.gym.findUnique({ where: { slug } });
       if (slugTaken) {
         sendError(res, new ValidationError('Slug is already in use'));
@@ -427,8 +419,10 @@ router.post(
           data: {
             name: ownerAdmin.name,
             email: ownerAdmin.email.toLowerCase().trim(),
+            phone: ownerAdmin.phone?.trim() || null,
             password: passwordHash,
             role: 'GYM_ADMIN',
+            isActive: true,
             gymId: gym.id,
             gymName: gym.name,
             tokenVersion: 0,

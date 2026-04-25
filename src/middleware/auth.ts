@@ -85,6 +85,7 @@ export function authenticateToken(
           name: true,
           role: true,
           gymId: true,
+          isActive: true,
           tokenVersion: true,
           gym: { select: { name: true, tenantStatus: true } },
         },
@@ -92,6 +93,11 @@ export function authenticateToken(
 
       if (!dbUser || !dbUser.gym) {
         sendError(res, new UnauthorizedError('User not found'));
+        return;
+      }
+
+      if (dbUser.isActive === false) {
+        sendError(res, new ForbiddenError('This account is deactivated. Contact a gym administrator.'));
         return;
       }
 
