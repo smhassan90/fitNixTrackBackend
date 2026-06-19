@@ -78,24 +78,32 @@ model City {
 }
 
 model User {
-  id           Int      @id @default(autoincrement())
+  id           Int       @id @default(autoincrement())
   name         String
-  email        String   @unique
+  email        String
   password     String
-  role         UserRole @default(STAFF)
+  phone        String?
+  role         UserRole  @default(STAFF)
   gymId        Int
   gymName      String?
-  tokenVersion Int      @default(0)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  tokenVersion Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   gym Gym @relation(fields: [gymId], references: [id], onDelete: Cascade)
 
+  @@unique([gymId, email])
+  @@index([gymId])
+  @@index([email])
   @@map("users")
 }
 
 enum UserRole {
   GYM_ADMIN
+  GYM_MANAGER
+  GYM_STAFF
   STAFF
 }
 
