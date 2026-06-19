@@ -5,9 +5,15 @@ import { requireGymId } from '../middleware/multiTenant';
 import { validate } from '../middleware/validation';
 import { sendSuccess, sendError } from '../utils/response';
 import { ValidationError } from '../utils/errors';
-import { getStartOfDay, getEndOfDay, getGymTimezone, unpaidInstallmentDisplayBucket } from '../utils/dateHelpers';
-import { getFinancialSummarySchema, getPaymentsReceivedDailySchema } from '../validations/reports';
+import { getStartOfDay, getEndOfDay, getGymTimezone, unpaidInstallmentDisplayBucket, calendarDateStringInGymTZ, startOfGymCalendarDayUtc, startOfNextGymCalendarDayUtc } from '../utils/dateHelpers';
+import { getFinancialSummarySchema, getPaymentsReceivedDailySchema, getFeeCollectionsSchema } from '../validations/reports';
 import { getFinancialSummary, getPaymentsReceivedDaily } from '../services/reportService';
+import {
+  getCollectedAmountInDateRange,
+  getRecentFeeCollections,
+  getRevenueByBillingMonth,
+  listFeeCollections,
+} from '../services/feeCollectionService';
 
 const router = Router();
 const monthKeyRegex = /^\d{4}-\d{2}$/;
@@ -51,6 +57,44 @@ router.get(
   }
 );
 
+router.get(
+  '/fee-collections',
+  validate(getFeeCollectionsSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const q = req.query as {
+        startDate?: string;
+        endDate?: string;
+        page?: number;
+        limit?: number;
+      };
+      const pageNum = typeof q.page === 'number' ? q.page : parseInt(String(q.page ?? 1), 10) || 1;
+      const limitNum =
+        typeof q.limit === 'number' ? q.limit : parseInt(String(q.limit ?? 50), 10) || 50;
+
+      const { rows, total } = await listFeeCollections(gymId, {
+        startDate: q.startDate,
+        endDate: q.endDate,
+        page: pageNum,
+        limit: limitNum,
+      });
+
+      sendSuccess(res, {
+        collections: rows,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages: Math.ceil(total / limitNum),
+        },
+      });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
 // GET /api/dashboard/revenue?startMonth=YYYY-MM&endMonth=YYYY-MM
 router.get('/revenue', async (req: AuthRequest, res: Response) => {
   try {
@@ -67,28 +111,7 @@ router.get('/revenue', async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const paidInstallments = await prisma.payment.findMany({
-      where: {
-        gymId,
-        status: 'PAID',
-        month: {
-          gte: startMonth,
-          lte: endMonth,
-        },
-      },
-      select: {
-        month: true,
-        amount: true,
-      },
-      orderBy: {
-        month: 'asc',
-      },
-    });
-
-    const revenueByMonth: Record<string, number> = {};
-    for (const row of paidInstallments) {
-      revenueByMonth[row.month] = (revenueByMonth[row.month] || 0) + row.amount;
-    }
+    const revenueByMonthRaw = await getRevenueByBillingMonth(gymId, startMonth, endMonth);
 
     const [startYear, startM] = startMonth.split('-').map((v) => parseInt(v, 10));
     const [endYear, endM] = endMonth.split('-').map((v) => parseInt(v, 10));
@@ -98,7 +121,7 @@ router.get('/revenue', async (req: AuthRequest, res: Response) => {
     let month = startM;
     while (year < endYear || (year === endYear && month <= endM)) {
       const key = `${year}-${String(month).padStart(2, '0')}`;
-      filledRevenueByMonth[key] = revenueByMonth[key] ?? 0;
+      filledRevenueByMonth[key] = revenueByMonthRaw[key] ?? 0;
       month += 1;
       if (month > 12) {
         month = 1;
@@ -121,6 +144,23 @@ router.get('/revenue', async (req: AuthRequest, res: Response) => {
 router.get('/stats', async (req: AuthRequest, res: Response) => {
   try {
     const gymId = req.gymId!;
+
+    const tz = getGymTimezone();
+    const todayStr = calendarDateStringInGymTZ(new Date(), tz);
+    const monthStartStr = `${todayStr.slice(0, 7)}-01`;
+
+    const [totalCollectedThisMonth, recentCollections, feeCollectionsForChart] = await Promise.all([
+      getCollectedAmountInDateRange(
+        gymId,
+        startOfGymCalendarDayUtc(monthStartStr, tz),
+        startOfNextGymCalendarDayUtc(todayStr, tz)
+      ),
+      getRecentFeeCollections(gymId, 10),
+      prisma.feeCollection.findMany({
+        where: { gymId, billingMonth: { not: null } },
+        select: { billingMonth: true, amount: true },
+      }),
+    ]);
 
     // Get basic counts
     const [totalMembers, totalTrainers, allPayments, attendanceRecords] = await Promise.all([
@@ -168,7 +208,6 @@ router.get('/stats', async (req: AuthRequest, res: Response) => {
     }
 
     // Same display buckets as member payment UI / financial-summary (gym TZ), not raw DB status
-    const tz = getGymTimezone();
     let pendingPayments = 0;
     let overduePayments = 0;
     for (const p of memberNextPayments.values()) {
@@ -179,22 +218,19 @@ router.get('/stats', async (req: AuthRequest, res: Response) => {
         overduePayments++;
       }
     }
-    
-    // For revenue calculation, use all payments
-    const payments = allPayments;
 
     // Calculate attendance summary
     const present = attendanceRecords.filter((r) => r.status === 'PRESENT').length;
     const absent = attendanceRecords.filter((r) => r.status === 'ABSENT').length;
 
-    // Calculate revenue by month
+    // Income by billing month from fee collection ledger
     const revenueByMonth: Record<string, number> = {};
-    payments
-      .filter((p) => p.status === 'PAID' && p.paidDate)
-      .forEach((p) => {
-        const month = p.month;
-        revenueByMonth[month] = (revenueByMonth[month] || 0) + p.amount;
-      });
+    for (const row of feeCollectionsForChart) {
+      if (!row.billingMonth) {
+        continue;
+      }
+      revenueByMonth[row.billingMonth] = (revenueByMonth[row.billingMonth] || 0) + row.amount;
+    }
 
     // Calculate attendance trend (last 7 days)
     const today = new Date();
@@ -250,6 +286,8 @@ router.get('/stats', async (req: AuthRequest, res: Response) => {
       totalTrainers,
       pendingPayments,
       overduePayments,
+      totalCollectedThisMonth,
+      recentCollections,
       attendanceSummary: {
         present,
         absent,

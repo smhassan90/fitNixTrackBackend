@@ -12,6 +12,7 @@ async function runMigration() {
       'prisma/manual_sql/add_admission_fee_and_one_time_payments.sql',
       'prisma/manual_sql/add_member_active_inactive_columns.sql',
       'prisma/manual_sql/add_platform_saas.sql',
+      'prisma/manual_sql/add_fee_collections.sql',
     ];
 
     for (const migrationFile of migrationFiles) {

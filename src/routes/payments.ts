@@ -34,6 +34,8 @@ import {
   buildReceiptPrintedBy,
   findPaidSignupOneTimeForMemberMonth,
 } from '../services/receiptService';
+import { recordOneTimeFeeCollection } from '../services/feeCollectionService';
+import { formatMonth } from '../utils/dateHelpers';
 
 const router = Router();
 
@@ -392,29 +394,61 @@ router.patch(
         return;
       }
 
-      const updated = await prisma.oneTimePayment.update({
-        where: { id },
-        data: {
-          status: 'PAID',
-          paidDate: new Date(),
-        },
-        include: {
-          member: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              phone: true,
-            },
-          },
-        },
+      if (oneTimePayment.status === 'PAID') {
+        sendError(res, new ValidationError('One-time payment is already marked paid'));
+        return;
+      }
+
+      const paidDate = new Date();
+      paidDate.setUTCHours(0, 0, 0, 0);
+
+      const memberRecord = await prisma.member.findFirst({
+        where: { id: oneTimePayment.memberId, gymId },
+        select: { membershipStart: true },
       });
 
-      await prisma.member.update({
-        where: { id: oneTimePayment.memberId },
-        data: {
-          oneTimePaymentPaid: true,
-        },
+      const updated = await prisma.$transaction(async (tx) => {
+        const row = await tx.oneTimePayment.update({
+          where: { id },
+          data: {
+            status: 'PAID',
+            paidDate,
+          },
+          include: {
+            member: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                phone: true,
+              },
+            },
+          },
+        });
+
+        await tx.member.update({
+          where: { id: oneTimePayment.memberId },
+          data: {
+            oneTimePaymentPaid: true,
+          },
+        });
+
+        await recordOneTimeFeeCollection(tx, {
+          gymId,
+          memberId: oneTimePayment.memberId,
+          memberName: oneTimePayment.member.name,
+          oneTimePaymentId: oneTimePayment.id,
+          admissionFee: oneTimePayment.admissionFee,
+          packageFee: oneTimePayment.packageFee,
+          trainerFee: oneTimePayment.trainerFee,
+          totalAmount: oneTimePayment.totalAmount,
+          collectedAt: paidDate,
+          billingMonth: memberRecord?.membershipStart
+            ? formatMonth(memberRecord.membershipStart)
+            : null,
+        });
+
+        return row;
       });
 
       await seedMonthlyBillingAfterOneTimePaid(oneTimePayment.memberId, gymId);

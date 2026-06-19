@@ -8,6 +8,7 @@ import {
   enumerateGymCalendarDaysInclusive,
   unpaidInstallmentDisplayBucket,
 } from '../utils/dateHelpers';
+import { getCollectedAmountForBillingMonth } from './feeCollectionService';
 
 const DEFAULT_CURRENCY = process.env.REPORT_CURRENCY?.trim() || 'PKR';
 
@@ -41,10 +42,10 @@ export type FinancialSummaryResult = {
    */
   expectedInstallmentRowCount: number;
   /**
-   * Sum of `Payment.amount` for **PAID** rows with `month === reportMonth` (can be multiple rows per member).
+   * Sum of fee collection ledger rows for `reportMonth` (billing month attribution).
    */
   collectedAmountThisMonth: number;
-  /** Distinct `memberId` with ≥1 PAID monthly installment for `reportMonth` (paying twice still counts as 1). */
+  /** Distinct members with ≥1 fee collection row for `reportMonth`. */
   collectedMemberCount: number;
   /**
    * Bucket totals use the **next unpaid installment per member** only (earliest `dueDate`, tie-break lower `id`),
@@ -117,14 +118,9 @@ export async function getFinancialSummary(
 
   const expectedInstallmentRowCount = monthInstallments.length;
 
-  const paidInReportMonth = monthInstallments.filter((p) => p.status === 'PAID');
-  let collectedAmountThisMonth = 0;
-  const collectedMemberIds = new Set<number>();
-  for (const p of paidInReportMonth) {
-    collectedAmountThisMonth += p.amount;
-    collectedMemberIds.add(p.memberId);
-  }
-  const collectedMemberCount = collectedMemberIds.size;
+  const collected = await getCollectedAmountForBillingMonth(gymId, reportMonth);
+  const collectedAmountThisMonth = collected.amount;
+  const collectedMemberCount = collected.memberCount;
 
   const canonicalByMember = new Map<number, { amount: number; id: number }>();
   for (const p of monthInstallments) {
@@ -214,8 +210,7 @@ export type DailyReceivedRow = {
 };
 
 /**
- * Cash received: sum of amounts for monthly installments and one-time payments marked PAID,
- * grouped by gym-local calendar date of `paidDate`.
+ * Cash received from the fee collection ledger, grouped by gym-local calendar date of `collectedAt`.
  */
 export async function getPaymentsReceivedDaily(
   gymId: number,
@@ -228,24 +223,13 @@ export async function getPaymentsReceivedDaily(
   const rangeStart = startOfGymCalendarDayUtc(startDate, tz);
   const rangeEndExclusive = startOfNextGymCalendarDayUtc(endDate, tz);
 
-  const [monthlyPaid, oneTimePaid] = await Promise.all([
-    prisma.payment.findMany({
-      where: {
-        gymId,
-        status: 'PAID',
-        paidDate: { not: null, gte: rangeStart, lt: rangeEndExclusive },
-      },
-      select: { amount: true, paidDate: true, memberId: true },
-    }),
-    prisma.oneTimePayment.findMany({
-      where: {
-        gymId,
-        status: 'PAID',
-        paidDate: { not: null, gte: rangeStart, lt: rangeEndExclusive },
-      },
-      select: { totalAmount: true, paidDate: true, memberId: true },
-    }),
-  ]);
+  const collections = await prisma.feeCollection.findMany({
+    where: {
+      gymId,
+      collectedAt: { gte: rangeStart, lt: rangeEndExclusive },
+    },
+    select: { amount: true, collectedAt: true, memberId: true },
+  });
 
   type DayAgg = { amount: number; paymentCount: number; memberIds: Set<number> };
   const byDay = new Map<string, DayAgg>();
@@ -259,26 +243,12 @@ export async function getPaymentsReceivedDaily(
     return row;
   }
 
-  for (const p of monthlyPaid) {
-    if (!p.paidDate) {
-      continue;
-    }
-    const d = calendarDateStringInGymTZ(p.paidDate, tz);
-    const row = touchDay(d);
-    row.amount += p.amount;
-    row.paymentCount += 1;
-    row.memberIds.add(p.memberId);
-  }
-
-  for (const p of oneTimePaid) {
-    if (!p.paidDate) {
-      continue;
-    }
-    const d = calendarDateStringInGymTZ(p.paidDate, tz);
-    const row = touchDay(d);
-    row.amount += p.totalAmount;
-    row.paymentCount += 1;
-    row.memberIds.add(p.memberId);
+  for (const row of collections) {
+    const d = calendarDateStringInGymTZ(row.collectedAt, tz);
+    const agg = touchDay(d);
+    agg.amount += row.amount;
+    agg.paymentCount += 1;
+    agg.memberIds.add(row.memberId);
   }
 
   const allDays = enumerateGymCalendarDaysInclusive(startDate, endDate, tz);

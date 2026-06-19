@@ -14,6 +14,10 @@ import {
   endOfCalendarMonthInGymTZ,
 } from '../utils/dateHelpers';
 import { NotFoundError, ValidationError } from '../utils/errors';
+import {
+  recordMonthlyFeeCollection,
+  removeFeeCollectionBySource,
+} from './feeCollectionService';
 
 type Tx = Prisma.TransactionClient;
 
@@ -972,6 +976,16 @@ export async function markPaymentAsPaid(paymentId: number, gymId: number): Promi
       },
     });
 
+    await recordMonthlyFeeCollection(tx, {
+      gymId,
+      memberId: payment.memberId,
+      memberName: payment.member.name,
+      paymentId,
+      amount: payment.amount,
+      billingMonth: payment.month,
+      collectedAt: paidDate,
+    });
+
     await createNextInstallmentIfNeeded(
       tx,
       gymId,
@@ -1044,6 +1058,8 @@ export async function markLastPaidInstallmentUnpaid(paymentId: number, gymId: nu
         paidDate: null,
       },
     });
+
+    await removeFeeCollectionBySource(tx, 'MONTHLY_PAYMENT', paymentId);
   });
 
   await syncMissingNextMonthlyInstallment(payment.memberId, gymId);
@@ -1113,6 +1129,16 @@ export async function markPaymentsAsPaidBulk(
       await tx.payment.update({
         where: { id: p.id },
         data: { status: 'PAID', paidDate },
+      });
+
+      await recordMonthlyFeeCollection(tx, {
+        gymId,
+        memberId: p.memberId,
+        memberName: p.member.name,
+        paymentId: p.id,
+        amount: p.amount,
+        billingMonth: p.month,
+        collectedAt: paidDate,
       });
 
       await createNextInstallmentIfNeeded(tx, gymId, {

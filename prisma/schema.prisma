@@ -40,6 +40,7 @@ model Gym {
   attendanceRecords AttendanceRecord[]
   deviceConfigs     DeviceConfig[]
   oneTimePayments   OneTimePayment[]
+  feeCollections    FeeCollection[]
   gymSubscription   GymSubscription?
   billingPayments   BillingPayment[]
 
@@ -249,6 +250,7 @@ model Member {
   attendanceRecords  AttendanceRecord[]
   deviceUserMappings DeviceUserMapping[]
   oneTimePayments    OneTimePayment[]
+  feeCollections     FeeCollection[]
 
   @@index([gymId])
   @@index([packageId])
@@ -377,6 +379,41 @@ model OneTimePayment {
   @@index([memberId])
   @@index([status])
   @@map("one_time_payments")
+}
+
+enum FeeCollectionSourceType {
+  MONTHLY_PAYMENT
+  ONE_TIME_PAYMENT
+}
+
+enum FeeCollectionCategory {
+  MONTHLY_FEE
+  SIGNUP_FEE
+  ADMISSION_ONLY
+}
+
+model FeeCollection {
+  id           Int                     @id @default(autoincrement())
+  gymId        Int
+  memberId     Int
+  amount       Float
+  collectedAt  DateTime
+  billingMonth String?                 @db.VarChar(7)
+  category     FeeCollectionCategory
+  description  String                  @db.VarChar(255)
+  sourceType   FeeCollectionSourceType
+  sourceId     Int
+  createdAt    DateTime                @default(now())
+
+  gym    Gym    @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceType, sourceId])
+  @@index([gymId])
+  @@index([memberId])
+  @@index([gymId, collectedAt])
+  @@index([gymId, billingMonth])
+  @@map("fee_collections")
 }
 
 model AttendanceRecord {
