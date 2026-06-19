@@ -91,7 +91,7 @@ function parseMemberDateOfBirth(input: unknown): Date | null {
     throw new ValidationError('dateOfBirth must be YYYY-MM-DD or ISO 8601 datetime string', [
       {
         path: 'body.dateOfBirth',
-        message: 'Expected YYYY-MM-DD or ISO 8601 datetime',
+        message: 'Expected YYYY-MM-DD or ISO 8601 datetime.',
       },
     ], 422);
   }
