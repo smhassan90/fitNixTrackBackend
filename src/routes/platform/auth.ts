@@ -20,6 +20,7 @@ import {
   recordPlatformLoginFailure,
 } from '../../services/platformLoginGuard';
 import { writePlatformAuditLog } from '../../services/platformAuditService';
+import { jwtSignOptions } from '../../utils/jwtExpiresIn';
 
 const router = Router();
 
@@ -77,7 +78,6 @@ router.post(
       });
 
       const jwtSecret = process.env.JWT_SECRET;
-      const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '8h';
       if (!jwtSecret) {
         sendError(res, new UnauthorizedError('JWT secret not configured'));
         return;
@@ -93,7 +93,7 @@ router.post(
           tokenVersion: user.tokenVersion,
         },
         jwtSecret,
-        { expiresIn: jwtExpiresIn } as jwt.SignOptions
+        jwtSignOptions(process.env.PLATFORM_JWT_EXPIRES_IN, process.env.JWT_EXPIRES_IN)
       );
 
       await writePlatformAuditLog({

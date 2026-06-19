@@ -6,6 +6,7 @@ import { validate } from '../middleware/validation';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { loginSchema, meSchema } from '../validations/auth';
 import { sendSuccess, sendError } from '../utils/response';
+import { jwtSignOptions } from '../utils/jwtExpiresIn';
 import { UnauthorizedError, NotFoundError, ForbiddenError } from '../utils/errors';
 
 const router = Router();
@@ -84,7 +85,6 @@ router.post(
         .catch(() => undefined);
 
       const jwtSecret = process.env.JWT_SECRET;
-      const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '7d';
 
       if (!jwtSecret) {
         sendError(res, new UnauthorizedError('JWT secret not configured'));
@@ -102,9 +102,7 @@ router.post(
         tokenVersion: user.tokenVersion,
       };
 
-      const token = jwt.sign(payload, jwtSecret, {
-        expiresIn: jwtExpiresIn,
-      } as jwt.SignOptions);
+      const token = jwt.sign(payload, jwtSecret, jwtSignOptions(undefined, process.env.JWT_EXPIRES_IN));
 
       const { password: _, ...userWithoutPassword } = user;
       sendSuccess(

@@ -11,8 +11,6 @@ services:
         sync: false
       - key: JWT_SECRET
         sync: false
-      - key: JWT_EXPIRES_IN
-        value: 7d
       - key: PORT
         value: 10000
       - key: CORS_ORIGIN
