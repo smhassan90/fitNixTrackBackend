@@ -20,7 +20,7 @@ import {
   recordPlatformLoginFailure,
 } from '../../services/platformLoginGuard';
 import { writePlatformAuditLog } from '../../services/platformAuditService';
-import { jwtSignOptions } from '../../utils/jwtExpiresIn';
+import { platformJwtSignOptions } from '../../utils/jwtExpiresIn';
 
 const router = Router();
 
@@ -93,7 +93,7 @@ router.post(
           tokenVersion: user.tokenVersion,
         },
         jwtSecret,
-        jwtSignOptions(process.env.PLATFORM_JWT_EXPIRES_IN, process.env.JWT_EXPIRES_IN)
+        platformJwtSignOptions()
       );
 
       await writePlatformAuditLog({

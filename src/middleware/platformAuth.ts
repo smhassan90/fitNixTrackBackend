@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma';
 import { UnauthorizedError, ForbiddenError } from '../utils/errors';
 import { sendError } from '../utils/response';
 import type { PlatformRole } from '@prisma/client';
+import { platformJwtVerifyOptions } from '../utils/jwtExpiresIn';
 
 export type PlatformRequest = Request & {
   platformUser?: {
@@ -48,7 +49,11 @@ export function authenticatePlatformToken(
     }
 
     try {
-      const decoded = jwt.verify(token, jwtSecret) as jwt.JwtPayload;
+      const decoded = jwt.verify(
+        token,
+        jwtSecret,
+        platformJwtVerifyOptions()
+      ) as jwt.JwtPayload;
       if (!isPlatformJwtPayload(decoded)) {
         sendError(res, new ForbiddenError('Invalid platform session'));
         return;
