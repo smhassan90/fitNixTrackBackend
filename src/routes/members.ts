@@ -33,6 +33,7 @@ import {
   syncMissingNextMonthlyInstallment,
   ensureMonthlyInstallmentsThroughMonthKey,
   getPendingOneTimeByMemberIds,
+  normalizeOneTimePaymentBreakdown,
 } from '../services/paymentService';
 
 const router = Router();
@@ -936,18 +937,22 @@ router.get(
 
       const formattedMonthlyPayments = monthlyPayments.map(formatMonthly);
 
-      const formattedOneTimePayments = oneTimePayments.map((payment) => ({
-        id: payment.id,
-        type: 'one-time' as const,
-        admissionFee: payment.admissionFee,
-        packageFee: payment.packageFee,
-        trainerFee: payment.trainerFee,
-        totalAmount: payment.totalAmount,
-        status: payment.status,
-        paidDate: payment.paidDate,
-        createdAt: payment.createdAt,
-        updatedAt: payment.updatedAt,
-      }));
+      const formattedOneTimePayments = oneTimePayments.map((payment) => {
+        const normalized = normalizeOneTimePaymentBreakdown(payment);
+        return {
+          id: payment.id,
+          type: 'one-time' as const,
+          admissionFee: normalized.admissionFee,
+          packageFee: normalized.packageFee,
+          trainerFee: normalized.trainerFee,
+          totalAmount: normalized.totalAmount,
+          status: payment.status,
+          paidDate: payment.paidDate,
+          createdAt: payment.createdAt,
+          updatedAt: payment.updatedAt,
+          receiptPath: `/api/payments/one-time/${payment.id}/receipt`,
+        };
+      });
 
       const allPayments = [...formattedMonthlyPayments, ...formattedOneTimePayments].sort(
         (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()

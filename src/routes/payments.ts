@@ -28,6 +28,12 @@ import {
   markLastPaidInstallmentUnpaid,
   seedMonthlyBillingAfterOneTimePaid,
 } from '../services/paymentService';
+import {
+  buildMonthlyPaymentReceipt,
+  buildOneTimePaymentReceipt,
+  buildReceiptPrintedBy,
+  findPaidSignupOneTimeForMemberMonth,
+} from '../services/receiptService';
 
 const router = Router();
 
@@ -420,6 +426,77 @@ router.patch(
   }
 );
 
+// GET /api/payments/one-time/:id/receipt - Receipt for signup/admission payment
+router.get(
+  '/one-time/:id/receipt',
+  validate(getPaymentSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const id = parseInt(req.params.id, 10);
+
+      const oneTimePayment = await prisma.oneTimePayment.findFirst({
+        where: { id, gymId },
+        include: {
+          member: {
+            include: {
+              package: {
+                include: {
+                  features: {
+                    include: { feature: { select: { name: true } } },
+                  },
+                },
+              },
+              trainers: {
+                include: {
+                  trainer: { select: { id: true, name: true, charges: true } },
+                },
+              },
+            },
+          },
+          gym: {
+            select: {
+              id: true,
+              name: true,
+              logoUrl: true,
+              address: true,
+              city: true,
+              country: true,
+              phone: true,
+              email: true,
+            },
+          },
+        },
+      });
+
+      if (!oneTimePayment) {
+        sendError(res, new NotFoundError('One-time payment', id));
+        return;
+      }
+
+      const receipt = buildOneTimePaymentReceipt({
+        oneTimePayment,
+        member: oneTimePayment.member,
+        gym: {
+          id: oneTimePayment.gym.id,
+          name: oneTimePayment.gym.name ?? '',
+          logoUrl: oneTimePayment.gym.logoUrl ?? null,
+          address: oneTimePayment.gym.address ?? null,
+          city: oneTimePayment.gym.city ?? null,
+          country: oneTimePayment.gym.country ?? null,
+          phone: oneTimePayment.gym.phone ?? null,
+          email: oneTimePayment.gym.email ?? null,
+        },
+        printedBy: buildReceiptPrintedBy(req.user),
+      });
+
+      sendSuccess(res, receipt);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
 // GET /api/payments/:id
 router.get(
   '/:id',
@@ -659,34 +736,18 @@ router.get(
       }
 
       const member = payment.member;
-      const pkg = member?.package;
-      const trainers =
-        member?.trainers?.map((mt) => ({
-          id: mt.trainer.id,
-          name: mt.trainer.name,
-          charges: mt.trainer.charges,
-        })) ?? [];
-      const trainerFeeTotal = trainers.reduce((sum, t) => sum + (t.charges ?? 0), 0);
-      const packageFeeMonthly = pkg
-        ? (() => {
-            const net = Math.max(0, pkg.price - (pkg.discount ?? 0));
-            return pkg.duration.includes('12') ? net / 12 : net;
-          })()
-        : null;
+      const signupOneTime = await findPaidSignupOneTimeForMemberMonth(
+        gymId,
+        payment.memberId,
+        payment.month,
+        member?.membershipStart
+      );
 
-      const receipt = {
-        receiptNumber: `PAY-${payment.id}`,
-        generatedAt: new Date().toISOString(),
-        printedBy: req.user
-          ? {
-              id: req.user.id,
-              name: req.user.name ?? req.user.email ?? 'Staff',
-              email: req.user.email ?? null,
-              role: req.user.role ?? null,
-            }
-          : null,
+      const receipt = buildMonthlyPaymentReceipt({
+        payment,
+        member: member!,
         gym: {
-          id: payment.gym?.id,
+          id: payment.gym?.id ?? gymId,
           name: payment.gym?.name ?? '',
           logoUrl: payment.gym?.logoUrl ?? null,
           address: payment.gym?.address ?? null,
@@ -695,41 +756,9 @@ router.get(
           phone: payment.gym?.phone ?? null,
           email: payment.gym?.email ?? null,
         },
-        member: {
-          id: member?.id,
-          name: member?.name ?? '',
-          email: member?.email ?? null,
-          phone: member?.phone ?? null,
-          cnic: member?.cnic ?? null,
-          membershipStart: member?.membershipStart ?? null,
-          membershipEnd: member?.membershipEnd ?? null,
-          monthlyPaymentAmount: member?.monthlyPaymentAmount ?? null,
-          memberDiscount: member?.discount ?? null,
-          isActive: member?.isActive ?? true,
-        },
-        package: pkg
-          ? {
-              id: pkg.id,
-              name: pkg.name,
-              duration: pkg.duration,
-              price: pkg.price,
-              discount: pkg.discount ?? 0,
-              features:
-                pkg.features?.map((pf) => pf.feature?.name).filter(Boolean) ?? [],
-            }
-          : null,
-        trainers,
-        trainerFee: trainerFeeTotal,
-        packageFeeMonthly,
-        payment: {
-          id: payment.id,
-          month: payment.month,
-          amount: payment.amount,
-          status: payment.status,
-          dueDate: payment.dueDate,
-          paidDate: payment.paidDate,
-        },
-      };
+        printedBy: buildReceiptPrintedBy(req.user),
+        signupOneTime,
+      });
 
       sendSuccess(res, receipt);
     } catch (error) {

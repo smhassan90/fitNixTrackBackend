@@ -4,6 +4,7 @@ import {
   computeMonthlyPackageFee,
   computeMemberMonthlyInstallmentAmount,
   computeSignupOneTimeFees,
+  normalizeOneTimePaymentBreakdown,
 } from './paymentService';
 
 test('computeSignupOneTimeFees uses first month package not full annual price', () => {
@@ -32,6 +33,8 @@ test('computeSignupOneTimeFees applies member discount on recurring portion', ()
 
   assert.equal(fees.firstMonthRecurring, 6100);
   assert.equal(fees.totalAmount, 6600);
+  assert.equal(fees.packageFee, 5900);
+  assert.equal(fees.admissionFee + fees.packageFee + fees.trainerFee, fees.totalAmount);
   assert.equal(
     computeMemberMonthlyInstallmentAmount(
       { price: 6000, discount: 0, duration: '1 month' },
@@ -39,6 +42,32 @@ test('computeSignupOneTimeFees applies member discount on recurring portion', ()
       100
     ),
     6100
+  );
+});
+
+test('computeSignupOneTimeFees line items always sum to totalAmount', () => {
+  const fees = computeSignupOneTimeFees({
+    admissionFeePaid: 1000,
+    packageData: { price: 12000, discount: 0, duration: '12 months' },
+    trainers: [{ charges: 500 }],
+    memberDiscount: 200,
+  });
+
+  assert.equal(fees.admissionFee + fees.packageFee + fees.trainerFee, fees.totalAmount);
+});
+
+test('normalizeOneTimePaymentBreakdown fixes legacy packageFee without discount', () => {
+  const normalized = normalizeOneTimePaymentBreakdown({
+    admissionFee: 500,
+    packageFee: 6000,
+    trainerFee: 200,
+    totalAmount: 6600,
+  });
+
+  assert.equal(normalized.packageFee, 5900);
+  assert.equal(
+    normalized.admissionFee + normalized.packageFee + normalized.trainerFee,
+    normalized.totalAmount
   );
 });
 

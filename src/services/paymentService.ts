@@ -81,14 +81,34 @@ export function computeSignupOneTimeFees(params: {
   const firstMonthRecurring =
     params.packageData || trainerFee > 0 ? monthlyInstallmentAmount : 0;
   const totalAmount = params.admissionFeePaid + firstMonthRecurring;
+  // First-month package portion after member discount so line items sum to totalAmount.
+  const packageFee = Math.max(0, monthlyInstallmentAmount - trainerFee);
 
   return {
     admissionFee: params.admissionFeePaid,
-    packageFee: monthlyPackageFee,
+    packageFee,
     trainerFee,
     firstMonthRecurring,
     totalAmount,
     monthlyInstallmentAmount,
+  };
+}
+
+/** Ensure admission + package + trainer line items match total (legacy rows may omit member discount on packageFee). */
+export function normalizeOneTimePaymentBreakdown(payment: {
+  admissionFee: number;
+  packageFee: number;
+  trainerFee: number;
+  totalAmount: number;
+}): { admissionFee: number; packageFee: number; trainerFee: number; totalAmount: number } {
+  const lineSum = payment.admissionFee + payment.packageFee + payment.trainerFee;
+  if (Math.abs(lineSum - payment.totalAmount) < 0.01) {
+    return payment;
+  }
+  const firstMonthRecurring = Math.max(0, payment.totalAmount - payment.admissionFee);
+  return {
+    ...payment,
+    packageFee: Math.max(0, firstMonthRecurring - payment.trainerFee),
   };
 }
 
@@ -128,12 +148,13 @@ export async function getPendingOneTimeByMemberIds(
   });
   for (const row of rows) {
     if (!map.has(row.memberId)) {
+      const normalized = normalizeOneTimePaymentBreakdown(row);
       map.set(row.memberId, {
         id: row.id,
-        totalAmount: row.totalAmount,
-        admissionFee: row.admissionFee,
-        packageFee: row.packageFee,
-        trainerFee: row.trainerFee,
+        totalAmount: normalized.totalAmount,
+        admissionFee: normalized.admissionFee,
+        packageFee: normalized.packageFee,
+        trainerFee: normalized.trainerFee,
         status: 'PENDING',
       });
     }
