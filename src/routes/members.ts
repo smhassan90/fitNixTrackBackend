@@ -88,7 +88,7 @@ function parseMemberDateOfBirth(input: unknown): Date | null {
   }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
-    throw new ValidationError('dateOfBirth must be YYYY-MM-DD or ISO 8601 datetime string.', [
+    throw new ValidationError('dateOfBirth must be YYYY-MM-DD or ISO 8601 datetime string', [
       {
         path: 'body.dateOfBirth',
         message: 'Expected YYYY-MM-DD or ISO 8601 datetime.',
