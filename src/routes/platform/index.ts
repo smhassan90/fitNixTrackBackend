@@ -10,10 +10,12 @@ import permissionRoutes from './permissions';
 import locationRoutes from './locations';
 import adminBillingPlanRoutes from './adminBillingPlans';
 import adminPackageFeatureRoutes from './adminPackageFeatures';
+import uploadRoutes from './upload';
 
 const router = Router();
 
 router.use('/auth', authRoutes);
+router.use('/upload', authenticatePlatformToken, uploadRoutes);
 router.use('/gyms', authenticatePlatformToken, gymRoutes);
 router.use('/billing', authenticatePlatformToken, billingRoutes);
 router.use('/reports', authenticatePlatformToken, reportRoutes);

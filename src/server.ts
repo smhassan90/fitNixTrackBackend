@@ -19,6 +19,7 @@ import reportRoutes from './routes/reports';
 import settingsRoutes from './routes/settings';
 import platformRoutes from './routes/platform';
 import gymUsersRoutes from './routes/gymUsers';
+import importRoutes from './routes/import';
 
 // Load environment variables
 dotenv.config();
@@ -133,6 +134,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/device', (req, res, next) => getDeviceRoutes()(req, res, next));
 app.use('/api/settings', settingsRoutes);
+app.use('/api/import', importRoutes);
 app.use('/api/gym', gymUsersRoutes);
 
 // 404 handler

@@ -5,7 +5,7 @@ const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD');
 
 const slugRegex = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-/** Full http(s) URL, or path returned by logo upload (`/uploads/logos/...`). */
+/** Full http(s) URL (e.g. Vercel Blob), or path returned by backend disk upload (`/uploads/logos/...`). */
 export const logoUrlSchema = z.preprocess(
   (val) => (val === '' ? undefined : val),
   z
