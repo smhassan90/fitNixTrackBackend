@@ -82,8 +82,7 @@ test('POST /:id/owner-admin creates owner admin with generated password', async 
 });
 
 test('POST /:id/owner-admin rejects when owner admin already exists', async () => {
-  mockMethod(prisma.gym as any, 'findUnique', (async () => ({ id: 1, name: 'Fit Gym' })) as any);
-  mockMethod(prisma.user as any, 'findFirst', (async () => ({
+  const existingAdmin = {
     id: 10,
     name: 'Existing',
     email: 'owner@example.com',
@@ -92,7 +91,9 @@ test('POST /:id/owner-admin rejects when owner admin already exists', async () =
     isActive: true,
     lastLoginAt: null,
     createdAt: new Date(),
-  })) as any);
+  };
+  mockMethod(prisma.gym as any, 'findUnique', (async () => ({ id: 1, name: 'Fit Gym' })) as any);
+  mockMethod(prisma.user as any, 'findFirst', (async () => existingAdmin) as any);
 
   const app = express();
   app.use(express.json());
@@ -105,6 +106,8 @@ test('POST /:id/owner-admin rejects when owner admin already exists', async () =
   });
 
   assert.equal(res.status, 409);
+  assert.equal(res.body.error.code, 'CONFLICT');
+  assert.equal(res.body.error.details.ownerAdmin.email, 'owner@example.com');
 });
 
 test('POST /:id/owner-admin/reset-password returns generated password', async () => {

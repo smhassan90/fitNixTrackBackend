@@ -13,6 +13,12 @@ import {
 import { sendSuccess, sendError } from '../../utils/response';
 import { ConflictError, NotFoundError } from '../../utils/errors';
 import { writePlatformAuditLog } from '../../services/platformAuditService';
+import {
+  findGymOwnerAdmin,
+  ownerAdminSelect,
+  OWNER_ADMIN_EXISTS_MESSAGE,
+  toOwnerAdminDto,
+} from '../../services/gymOwnerAdminService';
 
 const router = Router();
 const BCRYPT_ROUNDS = 10;
@@ -20,27 +26,8 @@ const BCRYPT_ROUNDS = 10;
 const readRoles = [PlatformRole.SUPER_ADMIN, PlatformRole.PLATFORM_SUPPORT] as const;
 const writeRoles = [PlatformRole.SUPER_ADMIN] as const;
 
-const ownerAdminSelect = {
-  id: true,
-  name: true,
-  email: true,
-  phone: true,
-  role: true,
-  isActive: true,
-  lastLoginAt: true,
-  createdAt: true,
-} as const;
-
 function normalizeEmail(email: string): string {
   return email.toLowerCase().trim();
-}
-
-export async function findGymOwnerAdmin(gymId: number) {
-  return prisma.user.findFirst({
-    where: { gymId, role: 'GYM_ADMIN' },
-    orderBy: [{ isActive: 'desc' }, { id: 'asc' }],
-    select: ownerAdminSelect,
-  });
 }
 
 router.get(
@@ -89,9 +76,7 @@ router.post(
       if (existingAdmin) {
         sendError(
           res,
-          new ConflictError(
-            'This gym already has an owner admin. Use reset password instead of creating a new account.'
-          )
+          new ConflictError(OWNER_ADMIN_EXISTS_MESSAGE, { ownerAdmin: existingAdmin })
         );
         return;
       }
@@ -99,9 +84,15 @@ router.post(
       const normEmail = normalizeEmail(email);
       const dup = await prisma.user.findFirst({
         where: { gymId, email: normEmail },
+        select: ownerAdminSelect,
       });
       if (dup) {
-        sendError(res, new ConflictError('A user with this email already exists in this gym'));
+        sendError(
+          res,
+          new ConflictError('A user with this email already exists in this gym', {
+            ...(dup.role === 'GYM_ADMIN' ? { ownerAdmin: toOwnerAdminDto(dup) } : { user: toOwnerAdminDto(dup) }),
+          })
+        );
         return;
       }
 
@@ -109,20 +100,22 @@ router.post(
         password && password.length > 0 ? password : randomBytes(14).toString('base64url');
       const passwordHash = await bcrypt.hash(plainPassword, BCRYPT_ROUNDS);
 
-      const ownerAdmin = await prisma.user.create({
-        data: {
-          name: name.trim(),
-          email: normEmail,
-          phone: phone && String(phone).trim() ? String(phone).trim() : null,
-          password: passwordHash,
-          role: 'GYM_ADMIN',
-          gymId,
-          gymName: gym.name,
-          isActive: true,
-          tokenVersion: 0,
-        },
-        select: ownerAdminSelect,
-      });
+      const ownerAdmin = toOwnerAdminDto(
+        await prisma.user.create({
+          data: {
+            name: name.trim(),
+            email: normEmail,
+            phone: phone && String(phone).trim() ? String(phone).trim() : null,
+            password: passwordHash,
+            role: 'GYM_ADMIN',
+            gymId,
+            gymName: gym.name,
+            isActive: true,
+            tokenVersion: 0,
+          },
+          select: ownerAdminSelect,
+        })
+      );
 
       await writePlatformAuditLog({
         actorUserId: actor.id,
@@ -175,6 +168,7 @@ router.post(
       const existingAdmin = await prisma.user.findFirst({
         where: { gymId, role: 'GYM_ADMIN' },
         orderBy: [{ isActive: 'desc' }, { id: 'asc' }],
+        select: { id: true },
       });
       if (!existingAdmin) {
         sendError(
@@ -188,15 +182,17 @@ router.post(
         password && password.length > 0 ? password : randomBytes(14).toString('base64url');
       const passwordHash = await bcrypt.hash(plainPassword, BCRYPT_ROUNDS);
 
-      const ownerAdmin = await prisma.user.update({
-        where: { id: existingAdmin.id },
-        data: {
-          password: passwordHash,
-          isActive: true,
-          tokenVersion: { increment: 1 },
-        },
-        select: ownerAdminSelect,
-      });
+      const ownerAdmin = toOwnerAdminDto(
+        await prisma.user.update({
+          where: { id: existingAdmin.id },
+          data: {
+            password: passwordHash,
+            isActive: true,
+            tokenVersion: { increment: 1 },
+          },
+          select: ownerAdminSelect,
+        })
+      );
 
       await writePlatformAuditLog({
         actorUserId: actor.id,

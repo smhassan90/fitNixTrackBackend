@@ -19,7 +19,8 @@ import { NotFoundError, ValidationError } from '../../utils/errors';
 import { writePlatformAuditLog } from '../../services/platformAuditService';
 import { parseDate } from '../../utils/dateHelpers';
 import { locationCatalogService } from '../../services/locationCatalogService';
-import gymOwnerAdminRoutes, { findGymOwnerAdmin } from './gymOwnerAdmin';
+import { findGymOwnerAdmin } from '../../services/gymOwnerAdminService';
+import gymOwnerAdminRoutes from './gymOwnerAdmin';
 
 const router = Router();
 
