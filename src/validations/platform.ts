@@ -218,6 +218,27 @@ export const platformGymOwnerAdminResetPasswordSchema = z.object({
   }),
 });
 
+export const platformGymOwnerAdminUpdateSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+  body: z
+    .object({
+      name: z.string().min(1).max(191).optional(),
+      email: z.string().email().max(191).optional(),
+      phone: z.string().max(40).optional().nullable(),
+      isActive: z.boolean().optional(),
+    })
+    .refine(
+      (body) =>
+        body.name !== undefined ||
+        body.email !== undefined ||
+        body.phone !== undefined ||
+        body.isActive !== undefined,
+      { message: 'At least one field is required' }
+    ),
+});
+
 export const platformReportsSummaryQuerySchema = z
   .object({
     query: z.object({

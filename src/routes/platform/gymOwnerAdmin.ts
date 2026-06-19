@@ -9,6 +9,7 @@ import {
   platformGymIdParamSchema,
   platformGymOwnerAdminCreateSchema,
   platformGymOwnerAdminResetPasswordSchema,
+  platformGymOwnerAdminUpdateSchema,
 } from '../../validations/platform';
 import { sendSuccess, sendError } from '../../utils/response';
 import { ConflictError, NotFoundError } from '../../utils/errors';
@@ -139,6 +140,99 @@ router.post(
         'Gym owner admin created',
         201
       );
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        sendError(res, new ConflictError('Email is already in use'));
+        return;
+      }
+      sendError(res, error as Error);
+    }
+  }
+);
+
+router.patch(
+  '/:id/owner-admin',
+  requirePlatformRole(...writeRoles),
+  validate(platformGymOwnerAdminUpdateSchema),
+  async (req: PlatformRequest, res: Response) => {
+    try {
+      const actor = req.platformUser!;
+      const gymId = parseInt(req.params.id, 10);
+      const body = req.body as {
+        name?: string;
+        email?: string;
+        phone?: string | null;
+        isActive?: boolean;
+      };
+
+      const gym = await prisma.gym.findUnique({ where: { id: gymId }, select: { id: true, name: true } });
+      if (!gym) {
+        sendError(res, new NotFoundError('Gym', gymId));
+        return;
+      }
+
+      const existingAdmin = await prisma.user.findFirst({
+        where: { gymId, role: 'GYM_ADMIN' },
+        orderBy: [{ isActive: 'desc' }, { id: 'asc' }],
+        select: { id: true, email: true },
+      });
+      if (!existingAdmin) {
+        sendError(
+          res,
+          new NotFoundError('Gym owner admin — create one first from the platform portal')
+        );
+        return;
+      }
+
+      const data: Prisma.UserUpdateInput = {};
+      if (body.name !== undefined) data.name = body.name.trim();
+      if (body.phone !== undefined) {
+        data.phone = body.phone && String(body.phone).trim() ? String(body.phone).trim() : null;
+      }
+      if (body.isActive !== undefined) data.isActive = body.isActive;
+
+      let emailChanged = false;
+      if (body.email !== undefined) {
+        const normEmail = normalizeEmail(body.email);
+        if (normEmail !== existingAdmin.email) {
+          const dup = await prisma.user.findFirst({
+            where: { gymId, email: normEmail, id: { not: existingAdmin.id } },
+            select: { id: true },
+          });
+          if (dup) {
+            sendError(res, new ConflictError('A user with this email already exists in this gym'));
+            return;
+          }
+          data.email = normEmail;
+          emailChanged = true;
+        }
+      }
+
+      if (emailChanged) {
+        data.tokenVersion = { increment: 1 };
+      }
+
+      const ownerAdmin = toOwnerAdminDto(
+        await prisma.user.update({
+          where: { id: existingAdmin.id },
+          data,
+          select: ownerAdminSelect,
+        })
+      );
+
+      await writePlatformAuditLog({
+        actorUserId: actor.id,
+        actorRole: actor.role,
+        actionType: 'GYM_OWNER_UPDATE',
+        targetGymId: gymId,
+        metadata: {
+          userId: ownerAdmin.id,
+          email: ownerAdmin.email,
+          fields: Object.keys(body),
+        },
+      });
+
+      sendSuccess(res, { ownerAdmin }, 'Gym owner admin updated');
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         sendError(res, new ConflictError('Email is already in use'));
