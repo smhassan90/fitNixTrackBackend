@@ -467,8 +467,8 @@ router.post(
         },
       });
 
-      // Create one-time payment record (signup / admission + first month)
-      if (signupFees.totalAmount > 0) {
+      // Create one-time payment record (signup = admission + first month)
+      if (signupFees.admissionFee > 0 || signupFees.firstMonthRecurring > 0) {
         await prisma.oneTimePayment.create({
           data: {
             gymId,
