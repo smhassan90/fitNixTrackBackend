@@ -7,10 +7,17 @@ import {
   getAttendanceReportSchema,
   getFinancialSummarySchema,
   getPaymentsReceivedDailySchema,
+  getFeeCollectionsSchema,
+  getRevenueReportSchema,
 } from '../validations/reports';
 import { sendSuccess, sendError } from '../utils/response';
 import { parseDate, getStartOfDay, getEndOfDay } from '../utils/dateHelpers';
-import { getFinancialSummary, getPaymentsReceivedDaily } from '../services/reportService';
+import {
+  getFinancialSummary,
+  getPaymentsReceivedDaily,
+  getRevenueReport,
+  listFeeCollections,
+} from '../services/reportService';
 
 const router = Router();
 
@@ -141,7 +148,7 @@ router.get(
   }
 );
 
-// GET /api/reports/payments-received-daily — collections by gym-local calendar day
+// GET /api/reports/payments-received-daily — collections by gym-local calendar day (fee_collections ledger)
 router.get(
   '/payments-received-daily',
   validate(getPaymentsReceivedDailySchema),
@@ -150,6 +157,66 @@ router.get(
       const gymId = req.gymId!;
       const { startDate, endDate } = req.query as { startDate: string; endDate: string };
       const data = await getPaymentsReceivedDaily(gymId, startDate, endDate);
+      sendSuccess(res, { gymId, ...data });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// GET /api/reports/fee-collections — paginated collection ledger for logged-in gym
+router.get(
+  '/fee-collections',
+  validate(getFeeCollectionsSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const q = req.query as {
+        startDate?: string;
+        endDate?: string;
+        billingMonth?: string;
+        category?: 'MONTHLY_FEE' | 'SIGNUP_FEE' | 'ADMISSION_ONLY';
+        page?: number;
+        limit?: number;
+      };
+      const pageNum = typeof q.page === 'number' ? q.page : parseInt(String(q.page ?? 1), 10) || 1;
+      const limitNum =
+        typeof q.limit === 'number' ? q.limit : parseInt(String(q.limit ?? 50), 10) || 50;
+
+      const { rows, total } = await listFeeCollections(gymId, {
+        startDate: q.startDate,
+        endDate: q.endDate,
+        billingMonth: q.billingMonth,
+        category: q.category,
+        page: pageNum,
+        limit: limitNum,
+      });
+
+      sendSuccess(res, {
+        gymId,
+        collections: rows,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages: Math.ceil(total / limitNum),
+        },
+      });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// GET /api/reports/revenue?startMonth=YYYY-MM&endMonth=YYYY-MM — billing-month revenue from fee_collections
+router.get(
+  '/revenue',
+  validate(getRevenueReportSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { startMonth, endMonth } = req.query as { startMonth: string; endMonth: string };
+      const data = await getRevenueReport(gymId, startMonth, endMonth);
       sendSuccess(res, data);
     } catch (error) {
       sendError(res, error as Error);

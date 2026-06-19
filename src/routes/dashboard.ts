@@ -7,12 +7,15 @@ import { sendSuccess, sendError } from '../utils/response';
 import { ValidationError } from '../utils/errors';
 import { getStartOfDay, getEndOfDay, getGymTimezone, unpaidInstallmentDisplayBucket, calendarDateStringInGymTZ, startOfGymCalendarDayUtc, startOfNextGymCalendarDayUtc } from '../utils/dateHelpers';
 import { getFinancialSummarySchema, getPaymentsReceivedDailySchema, getFeeCollectionsSchema } from '../validations/reports';
-import { getFinancialSummary, getPaymentsReceivedDaily } from '../services/reportService';
+import {
+  getFinancialSummary,
+  getPaymentsReceivedDaily,
+  getRevenueReport,
+  listFeeCollections,
+} from '../services/reportService';
 import {
   getCollectedAmountInDateRange,
   getRecentFeeCollections,
-  getRevenueByBillingMonth,
-  listFeeCollections,
 } from '../services/feeCollectionService';
 
 const router = Router();
@@ -66,6 +69,8 @@ router.get(
       const q = req.query as {
         startDate?: string;
         endDate?: string;
+        billingMonth?: string;
+        category?: 'MONTHLY_FEE' | 'SIGNUP_FEE' | 'ADMISSION_ONLY';
         page?: number;
         limit?: number;
       };
@@ -76,11 +81,14 @@ router.get(
       const { rows, total } = await listFeeCollections(gymId, {
         startDate: q.startDate,
         endDate: q.endDate,
+        billingMonth: q.billingMonth,
+        category: q.category,
         page: pageNum,
         limit: limitNum,
       });
 
       sendSuccess(res, {
+        gymId,
         collections: rows,
         pagination: {
           page: pageNum,
@@ -111,30 +119,8 @@ router.get('/revenue', async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const revenueByMonthRaw = await getRevenueByBillingMonth(gymId, startMonth, endMonth);
-
-    const [startYear, startM] = startMonth.split('-').map((v) => parseInt(v, 10));
-    const [endYear, endM] = endMonth.split('-').map((v) => parseInt(v, 10));
-
-    const filledRevenueByMonth: Record<string, number> = {};
-    let year = startYear;
-    let month = startM;
-    while (year < endYear || (year === endYear && month <= endM)) {
-      const key = `${year}-${String(month).padStart(2, '0')}`;
-      filledRevenueByMonth[key] = revenueByMonthRaw[key] ?? 0;
-      month += 1;
-      if (month > 12) {
-        month = 1;
-        year += 1;
-      }
-    }
-
-    sendSuccess(res, {
-      startMonth,
-      endMonth,
-      revenueByMonth: filledRevenueByMonth,
-      totalRevenue: Object.values(filledRevenueByMonth).reduce((sum, amount) => sum + amount, 0),
-    });
+    const data = await getRevenueReport(gymId, startMonth, endMonth);
+    sendSuccess(res, data);
   } catch (error) {
     sendError(res, error as Error);
   }
@@ -282,6 +268,7 @@ router.get('/stats', async (req: AuthRequest, res: Response) => {
     });
 
     sendSuccess(res, {
+      gymId,
       totalMembers,
       totalTrainers,
       pendingPayments,

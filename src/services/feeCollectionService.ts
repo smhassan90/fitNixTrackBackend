@@ -180,11 +180,74 @@ export async function recordOneTimeFeeCollection(
 export async function removeFeeCollectionBySource(
   db: Tx | typeof prisma,
   sourceType: FeeCollectionSourceType,
-  sourceId: number
+  sourceId: number,
+  gymId: number
 ): Promise<void> {
   await db.feeCollection.deleteMany({
-    where: { sourceType, sourceId },
+    where: { sourceType, sourceId, gymId },
   });
+}
+
+export type CollectedSummaryInRange = {
+  totalAmount: number;
+  transactionCount: number;
+  memberCount: number;
+  byCategory: Record<FeeCollectionCategory, number>;
+};
+
+/** Cash collected in date range (by collectedAt), scoped to one gym. */
+export async function getCollectedSummaryInDateRange(
+  gymId: number,
+  rangeStart: Date,
+  rangeEndExclusive: Date
+): Promise<CollectedSummaryInRange> {
+  const rows = await prisma.feeCollection.findMany({
+    where: {
+      gymId,
+      collectedAt: { gte: rangeStart, lt: rangeEndExclusive },
+    },
+    select: { amount: true, memberId: true, category: true },
+  });
+
+  const byCategory: Record<FeeCollectionCategory, number> = {
+    MONTHLY_FEE: 0,
+    SIGNUP_FEE: 0,
+    ADMISSION_ONLY: 0,
+  };
+  const memberIds = new Set<number>();
+  let totalAmount = 0;
+
+  for (const row of rows) {
+    totalAmount += row.amount;
+    memberIds.add(row.memberId);
+    byCategory[row.category] += row.amount;
+  }
+
+  return {
+    totalAmount,
+    transactionCount: rows.length,
+    memberCount: memberIds.size,
+    byCategory,
+  };
+}
+
+export async function getCollectedByCategoryForBillingMonth(
+  gymId: number,
+  billingMonth: string
+): Promise<Record<FeeCollectionCategory, number>> {
+  const rows = await prisma.feeCollection.findMany({
+    where: { gymId, billingMonth },
+    select: { amount: true, category: true },
+  });
+  const byCategory: Record<FeeCollectionCategory, number> = {
+    MONTHLY_FEE: 0,
+    SIGNUP_FEE: 0,
+    ADMISSION_ONLY: 0,
+  };
+  for (const row of rows) {
+    byCategory[row.category] += row.amount;
+  }
+  return byCategory;
 }
 
 export async function getCollectedAmountForBillingMonth(
@@ -288,11 +351,20 @@ export async function listFeeCollections(
   options: {
     startDate?: string;
     endDate?: string;
+    billingMonth?: string;
+    category?: FeeCollectionCategory;
     page: number;
     limit: number;
   }
 ): Promise<{ rows: FeeCollectionRow[]; total: number }> {
   const where: Prisma.FeeCollectionWhereInput = { gymId };
+
+  if (options.billingMonth) {
+    where.billingMonth = options.billingMonth;
+  }
+  if (options.category) {
+    where.category = options.category;
+  }
 
   if (options.startDate || options.endDate) {
     const tz = getGymTimezone();

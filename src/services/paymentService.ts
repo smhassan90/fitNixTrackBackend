@@ -1059,7 +1059,7 @@ export async function markLastPaidInstallmentUnpaid(paymentId: number, gymId: nu
       },
     });
 
-    await removeFeeCollectionBySource(tx, 'MONTHLY_PAYMENT', paymentId);
+    await removeFeeCollectionBySource(tx, 'MONTHLY_PAYMENT', paymentId, gymId);
   });
 
   await syncMissingNextMonthlyInstallment(payment.memberId, gymId);

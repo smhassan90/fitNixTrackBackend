@@ -1,3 +1,4 @@
+import { FeeCollectionCategory } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { ValidationError } from '../utils/errors';
 import {
@@ -8,7 +9,16 @@ import {
   enumerateGymCalendarDaysInclusive,
   unpaidInstallmentDisplayBucket,
 } from '../utils/dateHelpers';
-import { getCollectedAmountForBillingMonth } from './feeCollectionService';
+import {
+  getCollectedAmountForBillingMonth,
+  getCollectedByCategoryForBillingMonth,
+  getCollectedSummaryInDateRange,
+  getRevenueByBillingMonth,
+  listFeeCollections,
+  FeeCollectionRow,
+} from './feeCollectionService';
+
+export { getRevenueByBillingMonth, listFeeCollections, FeeCollectionRow };
 
 const DEFAULT_CURRENCY = process.env.REPORT_CURRENCY?.trim() || 'PKR';
 
@@ -27,6 +37,8 @@ function assertDateRangeOrder(startDate: string, endDate: string): void {
 }
 
 export type FinancialSummaryResult = {
+  /** Gym this report belongs to (logged-in tenant). */
+  gymId: number;
   newMembersInRange: number;
   newTrainersInRange: number;
   /**
@@ -42,11 +54,20 @@ export type FinancialSummaryResult = {
    */
   expectedInstallmentRowCount: number;
   /**
-   * Sum of fee collection ledger rows for `reportMonth` (billing month attribution).
+   * Sum of `fee_collections` rows for `reportMonth` (billing month), this gym only.
    */
   collectedAmountThisMonth: number;
   /** Distinct members with ≥1 fee collection row for `reportMonth`. */
   collectedMemberCount: number;
+  /** Breakdown of collections attributed to `reportMonth` by category. */
+  collectedByCategoryThisMonth: Record<FeeCollectionCategory, number>;
+  /**
+   * Cash received in `startDate`–`endDate` (by `collectedAt`, gym TZ), from `fee_collections` for this gym.
+   */
+  totalCollectedInRange: number;
+  collectedTransactionCountInRange: number;
+  collectedMemberCountInRange: number;
+  collectedByCategoryInRange: Record<FeeCollectionCategory, number>;
   /**
    * Bucket totals use the **next unpaid installment per member** only (earliest `dueDate`, tie-break lower `id`),
    * same basis as `GET /api/dashboard/stats` pending/overdue counts — not every open row in the gym.
@@ -118,7 +139,11 @@ export async function getFinancialSummary(
 
   const expectedInstallmentRowCount = monthInstallments.length;
 
-  const collected = await getCollectedAmountForBillingMonth(gymId, reportMonth);
+  const [collected, collectedByCategoryThisMonth, collectedInRange] = await Promise.all([
+    getCollectedAmountForBillingMonth(gymId, reportMonth),
+    getCollectedByCategoryForBillingMonth(gymId, reportMonth),
+    getCollectedSummaryInDateRange(gymId, rangeStart, rangeEndExclusive),
+  ]);
   const collectedAmountThisMonth = collected.amount;
   const collectedMemberCount = collected.memberCount;
 
@@ -180,6 +205,7 @@ export async function getFinancialSummary(
   }
 
   return {
+    gymId,
     newMembersInRange,
     newTrainersInRange,
     expectedRevenueThisMonth,
@@ -187,6 +213,11 @@ export async function getFinancialSummary(
     expectedInstallmentRowCount,
     collectedAmountThisMonth,
     collectedMemberCount,
+    collectedByCategoryThisMonth,
+    totalCollectedInRange: collectedInRange.totalAmount,
+    collectedTransactionCountInRange: collectedInRange.transactionCount,
+    collectedMemberCountInRange: collectedInRange.memberCount,
+    collectedByCategoryInRange: collectedInRange.byCategory,
     overdueAmount,
     pendingAmount,
     advanceAmount,
@@ -263,4 +294,52 @@ export async function getPaymentsReceivedDaily(
   });
 
   return { days };
+}
+
+export type RevenueReportResult = {
+  gymId: number;
+  startMonth: string;
+  endMonth: string;
+  revenueByMonth: Record<string, number>;
+  totalRevenue: number;
+};
+
+/** Billing-month revenue from fee_collections for one gym. */
+export async function getRevenueReport(
+  gymId: number,
+  startMonth: string,
+  endMonth: string
+): Promise<RevenueReportResult> {
+  if (!/^\d{4}-\d{2}$/.test(startMonth) || !/^\d{4}-\d{2}$/.test(endMonth)) {
+    throw new ValidationError('startMonth and endMonth must be YYYY-MM');
+  }
+  if (startMonth > endMonth) {
+    throw new ValidationError('startMonth must be on or before endMonth');
+  }
+
+  const revenueByMonthRaw = await getRevenueByBillingMonth(gymId, startMonth, endMonth);
+
+  const [startYear, startM] = startMonth.split('-').map((v) => parseInt(v, 10));
+  const [endYear, endM] = endMonth.split('-').map((v) => parseInt(v, 10));
+
+  const revenueByMonth: Record<string, number> = {};
+  let year = startYear;
+  let month = startM;
+  while (year < endYear || (year === endYear && month <= endM)) {
+    const key = `${year}-${String(month).padStart(2, '0')}`;
+    revenueByMonth[key] = revenueByMonthRaw[key] ?? 0;
+    month += 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+  }
+
+  return {
+    gymId,
+    startMonth,
+    endMonth,
+    revenueByMonth,
+    totalRevenue: Object.values(revenueByMonth).reduce((sum, amount) => sum + amount, 0),
+  };
 }
