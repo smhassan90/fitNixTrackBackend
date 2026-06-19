@@ -597,6 +597,67 @@ async function ensureOpenMonthlyInstallmentExists(params: {
 }
 
 /**
+ * Enforce chronological pay order: overdue months first, then pending/advance.
+ * Targets must be the first N unpaid installments for the member (no skipping).
+ */
+async function assertInstallmentsPayableInOrder(
+  memberId: number,
+  gymId: number,
+  paymentIds: number[]
+): Promise<void> {
+  const uniqueIds = [...new Set(paymentIds)];
+  if (uniqueIds.length === 0) {
+    throw new ValidationError('At least one payment ID is required');
+  }
+
+  const unpaid = await prisma.payment.findMany({
+    where: {
+      memberId,
+      gymId,
+      status: { in: ['PENDING', 'OVERDUE'] },
+    },
+    orderBy: { dueDate: 'asc' },
+  });
+
+  const targets = await prisma.payment.findMany({
+    where: { id: { in: uniqueIds }, gymId, memberId },
+    orderBy: { dueDate: 'asc' },
+  });
+
+  if (targets.length !== uniqueIds.length) {
+    throw new ValidationError('One or more payments were not found for this member');
+  }
+
+  const expected = unpaid.slice(0, targets.length);
+  const matchesPrefix =
+    expected.length === targets.length &&
+    expected.every((exp, idx) => exp.id === targets[idx].id);
+
+  if (matchesPrefix) return;
+
+  const tz = getGymTimezone();
+  const hasOverdue = unpaid.some(
+    (p) => p.status === 'OVERDUE' || isDueCalendarDateBeforeTodayInGymTZ(p.dueDate, tz)
+  );
+  const targetHasPendingOrAdvance = targets.some((p) => {
+    const isOverdue =
+      p.status === 'OVERDUE' || isDueCalendarDateBeforeTodayInGymTZ(p.dueDate, tz);
+    return !isOverdue;
+  });
+
+  if (hasOverdue && targetHasPendingOrAdvance) {
+    throw new ValidationError(
+      'Clear all overdue installments before paying pending or advance months.'
+    );
+  }
+
+  const earliest = unpaid[0];
+  throw new ValidationError(
+    `Pay installments in order starting from ${earliest?.month ?? 'the oldest due date'}.`
+  );
+}
+
+/**
  * Mark payment as paid and generate next payment if applicable
  */
 export async function markPaymentAsPaid(paymentId: number, gymId: number): Promise<void> {
@@ -608,6 +669,12 @@ export async function markPaymentAsPaid(paymentId: number, gymId: number): Promi
   if (!payment) {
     throw new NotFoundError('Payment', paymentId);
   }
+
+  if (payment.status === 'PAID') {
+    throw new ValidationError('Payment is already marked paid');
+  }
+
+  await assertInstallmentsPayableInOrder(payment.memberId, gymId, [paymentId]);
 
   const paidDate = new Date();
   paidDate.setUTCHours(0, 0, 0, 0);
@@ -748,6 +815,8 @@ export async function markPaymentsAsPaidBulk(
       throw new ValidationError(`Payment ${p.id} cannot be marked paid from status ${p.status}`);
     }
   }
+
+  await assertInstallmentsPayableInOrder(payments[0].memberId, gymId, uniqueIds);
 
   const sorted = [...payments].sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
 

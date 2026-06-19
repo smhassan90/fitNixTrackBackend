@@ -616,34 +616,101 @@ router.get(
       const gymId = req.gymId!;
       const id = parseInt(req.params.id, 10);
 
-      const payment = await (prisma.payment.findFirst({
-        where: { id: id as any, gymId: gymId as any },
+      const payment = await prisma.payment.findFirst({
+        where: { id, gymId },
         include: {
-          member: true,
-          gym: true,
+          member: {
+            include: {
+              package: {
+                include: {
+                  features: {
+                    include: { feature: { select: { name: true } } },
+                  },
+                },
+              },
+              trainers: {
+                include: {
+                  trainer: { select: { id: true, name: true, charges: true } },
+                },
+              },
+            },
+          },
+          gym: {
+            select: {
+              id: true,
+              name: true,
+              logoUrl: true,
+              address: true,
+              city: true,
+              country: true,
+              phone: true,
+              email: true,
+            },
+          },
         },
-      }) as any);
+      });
 
       if (!payment) {
         sendError(res, new NotFoundError('Payment', id));
         return;
       }
 
-      // Generate receipt data (JSON format - can be extended to PDF)
+      const member = payment.member;
+      const pkg = member?.package;
+      const trainers =
+        member?.trainers?.map((mt) => ({
+          id: mt.trainer.id,
+          name: mt.trainer.name,
+          charges: mt.trainer.charges,
+        })) ?? [];
+
       const receipt = {
-        receiptNumber: payment.id,
-        date: payment.paidDate || payment.createdAt,
-        member: {
-          name: payment.member?.name || '',
-          email: payment.member?.email || '',
-          phone: payment.member?.phone || '',
-        },
+        receiptNumber: `PAY-${payment.id}`,
+        generatedAt: new Date().toISOString(),
+        printedBy: req.user
+          ? {
+              id: req.user.id,
+              name: req.user.name ?? req.user.email ?? 'Staff',
+              email: req.user.email ?? null,
+              role: req.user.role ?? null,
+            }
+          : null,
         gym: {
-          name: payment.gym?.name || '',
-          address: payment.gym?.address || '',
-          phone: payment.gym?.phone || '',
+          id: payment.gym?.id,
+          name: payment.gym?.name ?? '',
+          logoUrl: payment.gym?.logoUrl ?? null,
+          address: payment.gym?.address ?? null,
+          city: payment.gym?.city ?? null,
+          country: payment.gym?.country ?? null,
+          phone: payment.gym?.phone ?? null,
+          email: payment.gym?.email ?? null,
         },
+        member: {
+          id: member?.id,
+          name: member?.name ?? '',
+          email: member?.email ?? null,
+          phone: member?.phone ?? null,
+          cnic: member?.cnic ?? null,
+          membershipStart: member?.membershipStart ?? null,
+          membershipEnd: member?.membershipEnd ?? null,
+          monthlyPaymentAmount: member?.monthlyPaymentAmount ?? null,
+          memberDiscount: member?.discount ?? null,
+          isActive: member?.isActive ?? true,
+        },
+        package: pkg
+          ? {
+              id: pkg.id,
+              name: pkg.name,
+              duration: pkg.duration,
+              price: pkg.price,
+              discount: pkg.discount ?? 0,
+              features:
+                pkg.features?.map((pf) => pf.feature?.name).filter(Boolean) ?? [],
+            }
+          : null,
+        trainers,
         payment: {
+          id: payment.id,
           month: payment.month,
           amount: payment.amount,
           status: payment.status,
