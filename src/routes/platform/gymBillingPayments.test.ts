@@ -177,6 +177,7 @@ test('gym details include billingHistory', async () => {
     _count: { members: 0, trainers: 0 },
   })) as any);
   mockMethod(prisma.payment as any, 'aggregate', (async () => ({ _sum: { amount: 0 } })) as any);
+  mockMethod(prisma.user as any, 'findFirst', (async () => null) as any);
   mockMethod(prisma as any, '$queryRaw', (async () => [
     {
       id: BigInt(4),

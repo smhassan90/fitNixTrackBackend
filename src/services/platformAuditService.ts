@@ -7,6 +7,7 @@ export type PlatformAuditAction =
   | 'GYM_SUSPEND'
   | 'GYM_ACTIVATE'
   | 'USER_CREATE'
+  | 'GYM_OWNER_PASSWORD_RESET'
   | 'DUE_DATE_EXTEND'
   | 'PLAN_CHANGE'
   | 'MARK_PAID'

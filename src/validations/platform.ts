@@ -195,6 +195,29 @@ export const platformGymBillingPaymentCreateSchema = z.object({
   }),
 });
 
+const gymOwnerAdminBody = z.object({
+  name: z.string().min(1).max(191),
+  email: z.string().email().max(191),
+  phone: z.string().max(40).optional().nullable(),
+  password: z.string().min(8).max(128).optional(),
+});
+
+export const platformGymOwnerAdminCreateSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+  body: gymOwnerAdminBody,
+});
+
+export const platformGymOwnerAdminResetPasswordSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+  body: z.object({
+    password: z.string().min(8).max(128).optional(),
+  }),
+});
+
 export const platformReportsSummaryQuerySchema = z
   .object({
     query: z.object({

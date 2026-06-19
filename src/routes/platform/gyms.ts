@@ -19,6 +19,7 @@ import { NotFoundError, ValidationError } from '../../utils/errors';
 import { writePlatformAuditLog } from '../../services/platformAuditService';
 import { parseDate } from '../../utils/dateHelpers';
 import { locationCatalogService } from '../../services/locationCatalogService';
+import gymOwnerAdminRoutes, { findGymOwnerAdmin } from './gymOwnerAdmin';
 
 const router = Router();
 
@@ -500,7 +501,7 @@ router.get(
         sendError(res, new NotFoundError('Gym', id));
         return;
       }
-      const [pendingAgg, overdueAgg] = await Promise.all([
+      const [pendingAgg, overdueAgg, ownerAdmin, billingHistory] = await Promise.all([
         prisma.payment.aggregate({
           where: { gymId: id, status: 'PENDING' },
           _sum: { amount: true },
@@ -509,8 +510,8 @@ router.get(
           where: { gymId: id, status: 'OVERDUE' },
           _sum: { amount: true },
         }),
-      ]);
-      const billingHistory = await prisma.$queryRaw<
+        findGymOwnerAdmin(id),
+        prisma.$queryRaw<
         Array<{
           id: number;
           paidAt: Date;
@@ -529,7 +530,8 @@ router.get(
         WHERE gymId = ${id}
         ORDER BY paidAt DESC, id DESC
         LIMIT 100
-      `);
+      `),
+      ]);
 
       sendSuccess(res, {
         ...gym,
@@ -537,6 +539,7 @@ router.get(
         trainersCount: gym._count.trainers,
         pendingAmount: pendingAgg._sum.amount ?? 0,
         overdueAmount: overdueAgg._sum.amount ?? 0,
+        ownerAdmin,
         billingHistory: billingHistory.map((p) => ({
           id: p.id,
           paidAt: toYmdUtc(new Date(p.paidAt)),
@@ -788,5 +791,7 @@ router.patch(
     }
   }
 );
+
+router.use(gymOwnerAdminRoutes);
 
 export default router;
