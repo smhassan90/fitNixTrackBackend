@@ -26,6 +26,249 @@ type MemberWithPackage = {
   package: { price: number; discount: number | null; duration: string } | null;
 };
 
+/** Monthly package portion (annual plans divided by 12). */
+export function computeMonthlyPackageFee(packageData: {
+  price: number;
+  discount: number | null;
+  duration: string;
+}): number {
+  const packageDiscount = packageData.discount ?? 0;
+  const net = Math.max(0, packageData.price - packageDiscount);
+  const months = parseDurationToMonths(packageData.duration);
+  return months === 12 ? net / 12 : net;
+}
+
+export function computeTrainerFeeFromTrainers(
+  trainers: { charges: number | null }[]
+): number {
+  return trainers.reduce((sum, t) => sum + (t.charges ?? 0), 0);
+}
+
+/** Package + trainer fees minus member-level discount (matches portal monthly billing). */
+export function computeMemberMonthlyInstallmentAmount(
+  packageData: { price: number; discount: number | null; duration: string } | null,
+  trainers: { charges: number | null }[],
+  memberDiscount: number | null | undefined
+): number {
+  const packageFee = packageData ? computeMonthlyPackageFee(packageData) : 0;
+  const trainerFee = computeTrainerFeeFromTrainers(trainers);
+  return Math.max(0, packageFee + trainerFee - (memberDiscount ?? 0));
+}
+
+/** Signup one-time = admission + first month (monthly package + trainer − discount). */
+export function computeSignupOneTimeFees(params: {
+  admissionFeePaid: number;
+  packageData: { price: number; discount: number | null; duration: string } | null;
+  trainers: { charges: number | null }[];
+  memberDiscount: number | null | undefined;
+}): {
+  admissionFee: number;
+  packageFee: number;
+  trainerFee: number;
+  firstMonthRecurring: number;
+  totalAmount: number;
+  monthlyInstallmentAmount: number;
+} {
+  const monthlyPackageFee = params.packageData
+    ? computeMonthlyPackageFee(params.packageData)
+    : 0;
+  const trainerFee = computeTrainerFeeFromTrainers(params.trainers);
+  const monthlyInstallmentAmount = computeMemberMonthlyInstallmentAmount(
+    params.packageData,
+    params.trainers,
+    params.memberDiscount
+  );
+  const firstMonthRecurring =
+    params.packageData || trainerFee > 0 ? monthlyInstallmentAmount : 0;
+  const totalAmount = params.admissionFeePaid + firstMonthRecurring;
+
+  return {
+    admissionFee: params.admissionFeePaid,
+    packageFee: monthlyPackageFee,
+    trainerFee,
+    firstMonthRecurring,
+    totalAmount,
+    monthlyInstallmentAmount,
+  };
+}
+
+export type PendingOneTimeSummary = {
+  id: number;
+  totalAmount: number;
+  admissionFee: number;
+  packageFee: number;
+  trainerFee: number;
+  status: 'PENDING';
+};
+
+export async function getPendingOneTimeByMemberIds(
+  gymId: number,
+  memberIds: number[]
+): Promise<Map<number, PendingOneTimeSummary>> {
+  const map = new Map<number, PendingOneTimeSummary>();
+  if (memberIds.length === 0) {
+    return map;
+  }
+  const rows = await prisma.oneTimePayment.findMany({
+    where: {
+      gymId,
+      memberId: { in: memberIds },
+      status: 'PENDING',
+    },
+    orderBy: { createdAt: 'asc' },
+    select: {
+      id: true,
+      memberId: true,
+      totalAmount: true,
+      admissionFee: true,
+      packageFee: true,
+      trainerFee: true,
+      status: true,
+    },
+  });
+  for (const row of rows) {
+    if (!map.has(row.memberId)) {
+      map.set(row.memberId, {
+        id: row.id,
+        totalAmount: row.totalAmount,
+        admissionFee: row.admissionFee,
+        packageFee: row.packageFee,
+        trainerFee: row.trainerFee,
+        status: 'PENDING',
+      });
+    }
+  }
+  return map;
+}
+
+export async function assertNoPendingOneTimeBeforeMonthlyPay(
+  memberId: number,
+  gymId: number
+): Promise<void> {
+  const pending = await prisma.oneTimePayment.findFirst({
+    where: { memberId, gymId, status: 'PENDING' },
+    select: { id: true },
+  });
+  if (pending) {
+    throw new ValidationError(
+      'Pay the signup one-time payment before monthly installments.'
+    );
+  }
+}
+
+/** After signup one-time is paid, record month 1 as paid and open month 2+. */
+export async function seedMonthlyBillingAfterOneTimePaid(
+  memberId: number,
+  gymId: number
+): Promise<void> {
+  const member = await prisma.member.findFirst({
+    where: { id: memberId, gymId },
+    include: { package: true },
+  });
+  if (!member?.packageId || !member.membershipStart || !member.package) {
+    return;
+  }
+
+  const amount = await refreshMemberOpenInstallmentAmounts(memberId, gymId);
+  const anchorDay = getBillingAnchorDayUTC(member.membershipStart);
+  const month1Key = formatMonth(member.membershipStart);
+  const dueDate = new Date(member.membershipStart);
+  dueDate.setUTCHours(0, 0, 0, 0);
+
+  const paidDate = new Date();
+  paidDate.setUTCHours(0, 0, 0, 0);
+
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.payment.findFirst({
+      where: { memberId, gymId, month: month1Key },
+    });
+
+    let month1Paid = existing;
+    if (!existing) {
+      month1Paid = await tx.payment.create({
+        data: {
+          gymId,
+          memberId,
+          month: month1Key,
+          amount,
+          status: 'PAID',
+          dueDate,
+          paidDate,
+        },
+      });
+    } else if (existing.status !== 'PAID') {
+      month1Paid = await tx.payment.update({
+        where: { id: existing.id },
+        data: { status: 'PAID', paidDate, amount },
+      });
+    }
+
+    if (month1Paid) {
+      await createNextInstallmentIfNeeded(tx, gymId, {
+        memberId,
+        dueDate: month1Paid.dueDate,
+        amount: month1Paid.amount,
+        member: {
+          packageId: member.packageId,
+          membershipEnd: member.membershipEnd,
+          membershipStart: member.membershipStart,
+          isActive: member.isActive,
+          billingResumeFrom: member.billingResumeFrom,
+          package: member.package,
+        },
+      });
+    }
+  });
+
+  await syncMissingNextMonthlyInstallment(memberId, gymId);
+  await markOverduePayments(gymId);
+}
+
+async function resolveMonthlyInstallmentAmount(
+  db: Tx | typeof prisma,
+  memberId: number,
+  gymId: number
+): Promise<number> {
+  const member = await db.member.findFirst({
+    where: { id: memberId, gymId },
+    include: {
+      package: true,
+      trainers: {
+        include: {
+          trainer: { select: { charges: true } },
+        },
+      },
+    },
+  });
+  if (!member) {
+    return 0;
+  }
+  const trainerList = member.trainers.map((mt) => mt.trainer);
+  return computeMemberMonthlyInstallmentAmount(member.package, trainerList, member.discount);
+}
+
+/** Align open installment amounts and stored monthly fee with package + trainer + discount. */
+export async function refreshMemberOpenInstallmentAmounts(
+  memberId: number,
+  gymId: number,
+  db: Tx | typeof prisma = prisma
+): Promise<number> {
+  const amount = await resolveMonthlyInstallmentAmount(db, memberId, gymId);
+  await db.member.update({
+    where: { id: memberId },
+    data: { monthlyPaymentAmount: amount },
+  });
+  await db.payment.updateMany({
+    where: {
+      memberId,
+      gymId,
+      status: { in: ['PENDING', 'OVERDUE'] },
+    },
+    data: { amount },
+  });
+  return amount;
+}
+
 function normalizeUtcDay(d: Date): Date {
   const x = new Date(d);
   x.setUTCHours(0, 0, 0, 0);
@@ -102,6 +345,8 @@ export async function syncMissingNextMonthlyInstallment(
     return;
   }
 
+  const amount = await refreshMemberOpenInstallmentAmounts(memberId, gymId);
+
   const anchorDay = getBillingAnchorDayUTC(member.membershipStart);
   const tz = getGymTimezone();
   const syncCap = resolveInstallmentSyncCapDay(
@@ -127,10 +372,6 @@ export async function syncMissingNextMonthlyInstallment(
 
   const todayStr = calendarDateStringInGymTZ(new Date(), tz);
   const todayYm = todayStr.slice(0, 7);
-
-  const packagePrice = member.package.price;
-  const discount = member.package.discount ?? 0;
-  const amount = Math.max(0, packagePrice - discount);
 
   let d = nextBillingDueDate(lastPaid.dueDate, anchorDay);
   d = shiftToBillableDate(d, anchorDay, member.billingResumeFrom);
@@ -238,9 +479,7 @@ export async function ensureMonthlyInstallmentsThroughMonthKey(
     return;
   }
 
-  const packagePrice = member.package.price;
-  const discount = member.package.discount ?? 0;
-  const amount = Math.max(0, packagePrice - discount);
+  const amount = await refreshMemberOpenInstallmentAmounts(memberId, gymId);
 
   let d = nextBillingDueDate(lastPaid.dueDate, anchorDay);
   d = shiftToBillableDate(d, anchorDay, member.billingResumeFrom);
@@ -319,6 +558,8 @@ export async function markMonthlyInstallmentByYearMonth(
     throw new ValidationError(`Month ${monthKey} is already marked paid`);
   }
 
+  await assertNoPendingOneTimeBeforeMonthlyPay(memberId, gymId);
+
   await markPaymentAsPaid(payment.id, gymId);
 
   const updated = await prisma.payment.findFirst({
@@ -389,9 +630,7 @@ export async function createNextInstallmentIfNeeded(
     return;
   }
 
-  const packagePrice = member.package?.price ?? paidPayment.amount;
-  const discount = member.package?.discount ?? 0;
-  const amount = Math.max(0, packagePrice - discount);
+  const amount = await resolveMonthlyInstallmentAmount(db, paidPayment.memberId, gymId);
 
   const status = initialOpenInstallmentStatus(nextDueDate, tz);
 
@@ -415,7 +654,8 @@ export async function generatePaymentsForMember(
   memberId: number,
   gymId: number,
   packageId: number | null,
-  membershipStart: Date | null
+  membershipStart: Date | null,
+  options?: { skipFirstInstallment?: boolean }
 ): Promise<void> {
   if (!packageId || !membershipStart) {
     return;
@@ -428,6 +668,17 @@ export async function generatePaymentsForMember(
   if (!packageData) {
     return;
   }
+
+  const member = await prisma.member.findFirst({
+    where: { id: memberId, gymId },
+    include: {
+      trainers: {
+        include: {
+          trainer: { select: { charges: true } },
+        },
+      },
+    },
+  });
 
   const durationMonths = parseDurationToMonths(packageData.duration);
   if (durationMonths === 0) {
@@ -450,13 +701,19 @@ export async function generatePaymentsForMember(
   const currentDueDate = new Date(membershipStart);
   currentDueDate.setUTCHours(0, 0, 0, 0);
 
-  const discount = packageData.discount ?? 0;
-  const amount = Math.max(0, packageData.price - discount);
+  const trainerList = member?.trainers?.map((mt) => mt.trainer) ?? [];
+  const amount = computeMemberMonthlyInstallmentAmount(
+    packageData,
+    trainerList,
+    member?.discount
+  );
 
   const membershipEndNorm = new Date(membershipEnd);
   membershipEndNorm.setUTCHours(0, 0, 0, 0);
 
-  if (currentDueDate <= membershipEndNorm) {
+  const skipFirstInstallment = options?.skipFirstInstallment === true;
+
+  if (!skipFirstInstallment && currentDueDate <= membershipEndNorm) {
     const currentMonth = formatMonth(currentDueDate);
 
     const existingPayment = await prisma.payment.findFirst({
@@ -499,12 +756,16 @@ export async function generatePaymentsForMember(
     },
   });
 
-  await ensureOpenMonthlyInstallmentExists({
-    memberId,
-    gymId,
-    membershipEnd,
-    amount,
-  });
+  if (!skipFirstInstallment) {
+    await ensureOpenMonthlyInstallmentExists({
+      memberId,
+      gymId,
+      membershipEnd,
+      amount,
+    });
+  }
+
+  await refreshMemberOpenInstallmentAmounts(memberId, gymId);
 }
 
 /**
@@ -674,6 +935,8 @@ export async function markPaymentAsPaid(paymentId: number, gymId: number): Promi
     throw new ValidationError('Payment is already marked paid');
   }
 
+  await assertNoPendingOneTimeBeforeMonthlyPay(payment.memberId, gymId);
+
   await assertInstallmentsPayableInOrder(payment.memberId, gymId, [paymentId]);
 
   const paidDate = new Date();
@@ -817,6 +1080,7 @@ export async function markPaymentsAsPaidBulk(
   }
 
   await assertInstallmentsPayableInOrder(payments[0].memberId, gymId, uniqueIds);
+  await assertNoPendingOneTimeBeforeMonthlyPay(payments[0].memberId, gymId);
 
   const sorted = [...payments].sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
 
@@ -896,6 +1160,7 @@ export type MemberPaymentSummaryRow = {
     displayBucket: 'overdue' | 'pending' | 'advance';
   };
   overdueMonthCount: number;
+  nextOneTime: PendingOneTimeSummary | null;
 };
 
 /**
@@ -963,6 +1228,9 @@ export async function getMemberPaymentSummaries(
     (m) =>
       membersWithSomePaid.has(m.id) && m.packageId != null && m.membershipStart != null
   );
+  for (const m of members.filter((row) => row.packageId != null)) {
+    await refreshMemberOpenInstallmentAmounts(m.id, gymId);
+  }
   for (const m of membersToChainSync) {
     await syncMissingNextMonthlyInstallment(m.id, gymId);
   }
@@ -978,6 +1246,8 @@ export async function getMemberPaymentSummaries(
     },
     orderBy: { dueDate: 'asc' },
   });
+
+  const pendingOneTimeByMember = await getPendingOneTimeByMemberIds(gymId, memberIds);
 
   const tz = getGymTimezone();
 
@@ -1011,11 +1281,12 @@ export async function getMemberPaymentSummaries(
           }
         : null,
       overdueMonthCount,
+      nextOneTime: pendingOneTimeByMember.get(member.id) ?? null,
     };
   });
 
   if (onlyWithOpenInstallments) {
-    rows = rows.filter((r) => r.nextUnpaid !== null);
+    rows = rows.filter((r) => r.nextUnpaid !== null || r.nextOneTime !== null);
   }
 
   const collator = sortOrder === 'asc' ? 1 : -1;

@@ -95,6 +95,7 @@ The server will start on `http://localhost:3001` (or the port specified in `.env
 - `GET /api/members/:id` - Get single member
 - `POST /api/members` - Create member
 - `PUT /api/members/:id` - Update member
+- `PATCH /api/members/:id` - Partial update member (same as PUT)
 - `DELETE /api/members/:id` - Delete member
 
 ### Trainers

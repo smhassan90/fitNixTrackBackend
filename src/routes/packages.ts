@@ -203,7 +203,7 @@ router.get(
 router.post(
   '/',
   validate(createPackageSchema),
-  requireRole('GYM_ADMIN'),
+  requireRole('GYM_ADMIN', 'GYM_MANAGER'),
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
@@ -304,7 +304,7 @@ router.post(
 router.put(
   '/:id',
   validate(updatePackageSchema),
-  requireRole('GYM_ADMIN'),
+  requireRole('GYM_ADMIN', 'GYM_MANAGER'),
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
@@ -372,7 +372,7 @@ router.put(
 router.delete(
   '/:id',
   validate(deletePackageSchema),
-  requireRole('GYM_ADMIN'),
+  requireRole('GYM_ADMIN', 'GYM_MANAGER'),
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;

@@ -26,6 +26,7 @@ import {
   markPaymentsAsPaidBulk,
   markMonthlyInstallmentByYearMonth,
   markLastPaidInstallmentUnpaid,
+  seedMonthlyBillingAfterOneTimePaid,
 } from '../services/paymentService';
 
 const router = Router();
@@ -410,6 +411,8 @@ router.patch(
         },
       });
 
+      await seedMonthlyBillingAfterOneTimePaid(oneTimePayment.memberId, gymId);
+
       sendSuccess(res, updated, 'One-time payment marked as paid');
     } catch (error) {
       sendError(res, error as Error);
@@ -663,6 +666,13 @@ router.get(
           name: mt.trainer.name,
           charges: mt.trainer.charges,
         })) ?? [];
+      const trainerFeeTotal = trainers.reduce((sum, t) => sum + (t.charges ?? 0), 0);
+      const packageFeeMonthly = pkg
+        ? (() => {
+            const net = Math.max(0, pkg.price - (pkg.discount ?? 0));
+            return pkg.duration.includes('12') ? net / 12 : net;
+          })()
+        : null;
 
       const receipt = {
         receiptNumber: `PAY-${payment.id}`,
@@ -709,6 +719,8 @@ router.get(
             }
           : null,
         trainers,
+        trainerFee: trainerFeeTotal,
+        packageFeeMonthly,
         payment: {
           id: payment.id,
           month: payment.month,

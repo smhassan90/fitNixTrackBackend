@@ -26,10 +26,13 @@ import {
 } from '../utils/dateHelpers';
 import {
   generatePaymentsForMember,
+  computeSignupOneTimeFees,
+  refreshMemberOpenInstallmentAmounts,
   markOverduePayments,
   markMonthlyInstallmentByYearMonth,
   syncMissingNextMonthlyInstallment,
   ensureMonthlyInstallmentsThroughMonthKey,
+  getPendingOneTimeByMemberIds,
 } from '../services/paymentService';
 
 const router = Router();
@@ -421,23 +424,15 @@ router.post(
       const dob = parseMemberDateOfBirth(dateOfBirth);
       const membershipStart = new Date();
 
-      // Calculate payment amounts
+      // Calculate payment amounts (one-time = admission + first month; monthly = package + trainer − discount)
       const admissionFeePaid = admissionFeeWaived ? 0 : admissionFee;
-      
-      // Package fee (after discount)
-      const packageDiscount = discount ?? packageData?.discount ?? 0;
-      const packageFee = packageData ? Math.max(0, packageData.price - packageDiscount) : 0;
-      
-      // Trainer fees (sum of all trainer charges)
-      const trainerFee = trainers.reduce((sum, trainer) => sum + (trainer.charges ?? 0), 0);
-      
-      // Total one-time payment
-      const oneTimePaymentAmount = admissionFeePaid + packageFee + trainerFee;
-      
-      // Monthly payment amount (package fee only, for recurring payments)
-      const monthlyPaymentAmount = packageFee;
+      const signupFees = computeSignupOneTimeFees({
+        admissionFeePaid,
+        packageData: packageData ?? null,
+        trainers,
+        memberDiscount: discount,
+      });
 
-      // Create member (ID will be auto-generated)
       const member: any = await prisma.member.create({
         data: {
           gymId,
@@ -454,8 +449,8 @@ router.post(
           billingResumeFrom: membershipStart,
           admissionFeeWaived,
           admissionFeePaid,
-          oneTimePaymentAmount,
-          monthlyPaymentAmount,
+          oneTimePaymentAmount: signupFees.totalAmount,
+          monthlyPaymentAmount: signupFees.monthlyInstallmentAmount,
           trainers: {
             create: trainerIds.map((trainerId: string) => ({
               trainerId,
@@ -472,24 +467,26 @@ router.post(
         },
       });
 
-      // Create one-time payment record
-      if (oneTimePaymentAmount > 0) {
+      // Create one-time payment record (signup / admission + first month)
+      if (signupFees.totalAmount > 0) {
         await prisma.oneTimePayment.create({
           data: {
             gymId,
             memberId: member.id,
-            admissionFee: admissionFeePaid,
-            packageFee,
-            trainerFee,
-            totalAmount: oneTimePaymentAmount,
+            admissionFee: signupFees.admissionFee,
+            packageFee: signupFees.packageFee,
+            trainerFee: signupFees.trainerFee,
+            totalAmount: signupFees.totalAmount,
             status: 'PENDING',
           },
         });
       }
 
-      // Generate monthly payments if package is assigned
+      // Monthly installments start after first month (covered by one-time when applicable)
       if (packageId) {
-        await generatePaymentsForMember(member.id, gymId, packageId, membershipStart);
+        await generatePaymentsForMember(member.id, gymId, packageId, membershipStart, {
+          skipFirstInstallment: signupFees.firstMonthRecurring > 0,
+        });
       }
 
       // Get one-time payment record
@@ -521,14 +518,9 @@ router.post(
   }
 );
 
-// PUT /api/members/:id
-router.put(
-  '/:id',
-  validate(updateMemberSchema),
-  async (req: AuthRequest, res: Response) => {
+async function updateMemberHandler(req: AuthRequest, res: Response): Promise<void> {
     try {
       const gymId = req.gymId!;
-      await ensureMemberStatusColumnsOrThrow();
       const { id } = req.params;
       // id is transformed to number by validation middleware
       const memberId = typeof id === 'number' ? id : parseInt(id as string, 10);
@@ -627,6 +619,12 @@ router.put(
       // Regenerate payments if package changed and new package is assigned
       if (packageId !== undefined && packageId !== existingMember.packageId && packageId) {
         await generatePaymentsForMember(member.id, gymId, packageId, membershipStart);
+      } else if (
+        packageId !== undefined ||
+        trainerIds !== undefined ||
+        discount !== undefined
+      ) {
+        await refreshMemberOpenInstallmentAmounts(member.id, gymId);
       }
 
       // Get one-time payment record
@@ -654,8 +652,13 @@ router.put(
     } catch (error) {
       sendError(res, error as Error);
     }
-  }
-);
+}
+
+// PUT /api/members/:id — full or partial update
+router.put('/:id', validate(updateMemberSchema), updateMemberHandler);
+
+// PATCH /api/members/:id — same as PUT (partial update for edit forms)
+router.patch('/:id', validate(updateMemberSchema), updateMemberHandler);
 
 // PATCH /api/members/:id/deactivate
 router.patch(
@@ -846,7 +849,11 @@ router.get(
 
       await markOverduePayments(gymId);
 
+      const pendingOneTimeMap = await getPendingOneTimeByMemberIds(gymId, [memberId]);
+      const pendingOneTime = pendingOneTimeMap.get(memberId) ?? null;
+
       if (type === 'all' || type === 'monthly') {
+        await refreshMemberOpenInstallmentAmounts(memberId, gymId);
         await syncMissingNextMonthlyInstallment(memberId, gymId);
         await markOverduePayments(gymId);
       }
@@ -953,6 +960,7 @@ router.get(
           id: member.id,
           name: member.name,
         },
+        pendingOneTime,
         monthlyInstallments,
         monthlyGrouped,
         payments: allPayments,
