@@ -28,6 +28,7 @@ model Gym {
   phone          String?
   email          String?
   admissionFee   Float?           @default(0) // Admission fee configured in settings
+  syncApiKey     String?          @unique @db.VarChar(128) // Permanent per-gym tablet sync key (no expiry)
   tenantStatus   GymTenantStatus  @default(ACTIVE)
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt

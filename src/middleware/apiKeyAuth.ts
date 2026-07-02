@@ -50,7 +50,7 @@ export async function authenticateApiKey(
 
     const gym = await prisma.gym.findUnique({
       where: { id: device.gymId },
-      select: { tenantStatus: true },
+      select: { tenantStatus: true, syncApiKey: true },
     });
     if (!gym) {
       sendError(res, new UnauthorizedError('Gym not found for this device'));
@@ -64,19 +64,29 @@ export async function authenticateApiKey(
       return;
     }
 
-    // Validate API key
-    // Option 1: Use environment variable (simple)
-    const validApiKey = process.env.OFFLINE_SYNC_API_KEY;
-    if (validApiKey && apiKey !== validApiKey) {
-      sendError(res, new UnauthorizedError('Invalid API key'));
+    // Per-gym permanent key (preferred). Global env key is legacy fallback only.
+    const gymKey = gym.syncApiKey;
+    const envKey = process.env.OFFLINE_SYNC_API_KEY;
+
+    if (gymKey) {
+      if (apiKey !== gymKey) {
+        sendError(res, new UnauthorizedError('Invalid API key'));
+        return;
+      }
+    } else if (envKey) {
+      if (apiKey !== envKey) {
+        sendError(res, new UnauthorizedError('Invalid API key'));
+        return;
+      }
+    } else {
+      sendError(
+        res,
+        new UnauthorizedError(
+          'Tablet sync is not configured for this gym. Generate a sync key in gym settings.'
+        )
+      );
       return;
     }
-
-    // Option 2: If you want per-device API keys, add apiKey field to DeviceConfig
-    // if (device.apiKey && apiKey !== device.apiKey) {
-    //   sendError(res, new UnauthorizedError('Invalid API key'));
-    //   return;
-    // }
 
     // Attach device info to request
     req.deviceId = device.id;

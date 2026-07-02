@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import { randomBytes } from 'crypto';
+import { generateSyncApiKey } from '../../utils/syncApiKey';
 import bcrypt from 'bcryptjs';
 import { Prisma, PlatformRole } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
@@ -406,6 +407,11 @@ router.post(
             phone: ownerAdmin.phone ?? null,
             tenantStatus,
           },
+        });
+
+        await tx.gym.update({
+          where: { id: gym.id },
+          data: { syncApiKey: generateSyncApiKey(gym.id) },
         });
 
         await tx.gymSubscription.create({

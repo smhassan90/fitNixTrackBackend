@@ -56,6 +56,15 @@ const MEMBER_ALIASES: Record<string, string[]> = {
   comments: ['comments', 'notes', 'remarks'],
 };
 
+const PAYMENT_ALIASES: Record<string, string[]> = {
+  memberName: ['member name', 'name', 'full name', 'member'],
+  legacyMemberId: ['member id', 'id', 'serial', 'sr no', 'sr', 's no', 'sno'],
+  phone: ['phone', 'mobile', 'mobile no', 'mobile number', 'contact', 'contact no', 'cell'],
+  amount: ['amount', 'amount rs', 'amount rs.', 'fee', 'monthly fee', 'payment amount'],
+  dueDate: ['due date', 'due', 'payment due', 'installment due'],
+  paidDate: ['paid date', 'date paid', 'payment date', 'received date', 'paid on'],
+};
+
 function buildReverseMap(aliases: Record<string, string[]>): Map<string, string> {
   const map = new Map<string, string>();
   for (const [field, keys] of Object.entries(aliases)) {
@@ -69,16 +78,26 @@ function buildReverseMap(aliases: Record<string, string[]>): Map<string, string>
 const PACKAGE_MAP = buildReverseMap(PACKAGE_ALIASES);
 const TRAINER_MAP = buildReverseMap(TRAINER_ALIASES);
 const MEMBER_MAP = buildReverseMap(MEMBER_ALIASES);
+const PAYMENT_MAP = buildReverseMap(PAYMENT_ALIASES);
 
 function isSkippableCell(value: string): boolean {
-  const v = value.trim().toLowerCase();
+  const v = value
+    .replace(/\u00a0/g, ' ')
+    .trim()
+    .toLowerCase()
+    .replace(/[.,;]+$/g, '');
   return (
     v === '' ||
     v === 'n/a' ||
     v === 'na' ||
     v === '-' ||
     v === 'none' ||
-    v === 'not assigned'
+    v === 'not assigned' ||
+    v === 'unassigned' ||
+    v === 'no trainer' ||
+    v === 'no' ||
+    v === 'nil' ||
+    v === 'null'
   );
 }
 
@@ -105,10 +124,16 @@ export function mapMemberRow(row: CsvRow): MappedRow {
   return mapRow(row, MEMBER_MAP);
 }
 
+export function mapPaymentRow(row: CsvRow): MappedRow {
+  return mapRow(row, PAYMENT_MAP);
+}
+
 export const IMPORT_TEMPLATES = {
   packages: 'name,price,discount,duration\nMonthly Plan,5000,0,1 month\nQuarterly Plan,14000,0,3 months\nAnnual Plan,50000,0,12 months',
   trainers:
     'Full Name,Gender,Specialization,Charges,Available Timings\nAli Warsi,Male,Strength training (Body building),Rs. 2000,Mon-Sat 7PM to 12AM',
   members:
     'Member ID,Name,Gender,Phone,Joining Date,Expiry Date,Package,Trainer,Status\n1,Ali Khan,Male,03001234567,15-05-2023,15-06-2023,1 Month,John Trainer,Active',
+  payments:
+    'Member ID,Member Name,Amount (Rs.),Due Date,Paid Date\n10,Blank 10,5000.00,04-Mar-2026,25-Feb-2026\n11,Shan Naseem,1000.00,04-Apr-2026,04-Mar-2026',
 } as const;

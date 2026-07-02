@@ -19,6 +19,6 @@ export const importQuerySchema = z.object({
 
 export const importTemplateSchema = z.object({
   params: z.object({
-    type: z.enum(['packages', 'trainers', 'members']),
+    type: z.enum(['packages', 'trainers', 'members', 'payments']),
   }),
 });

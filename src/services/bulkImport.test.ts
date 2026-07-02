@@ -2,8 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseCsv } from '../utils/csvParse';
 import { mapMemberRow } from '../utils/importColumnMap';
-import { parseFlexibleDate, parseAvailabilityTimings } from '../services/bulkImportService';
-import { mapTrainerRow } from '../utils/importColumnMap';
+import {
+  parseFlexibleDate,
+  parseAvailabilityTimings,
+  normalizeImportNameKey,
+} from '../services/bulkImportService';
+import { mapTrainerRow, mapPaymentRow } from '../utils/importColumnMap';
 
 function normalizeDuration(value: string): string | null {
   const VALID = new Set(['1 month', '3 months', '6 months', '12 months']);
@@ -22,6 +26,42 @@ function normalizeDuration(value: string): string | null {
   };
   return map[v] ?? null;
 }
+
+test('mapPaymentRow accepts legacy payment export headers', () => {
+  const mapped = mapPaymentRow({
+    'Member ID': '11',
+    'Member Name': 'Shan Naseem',
+    'Amount (Rs.)': '1,000.00',
+    'Due Date': '04-Apr-2026',
+    'Paid Date': '04-Mar-2026',
+  });
+  assert.equal(mapped.legacyMemberId, '11');
+  assert.equal(mapped.memberName, 'Shan Naseem');
+  assert.equal(mapped.amount, '1,000.00');
+  assert.equal(mapped.dueDate, '04-Apr-2026');
+  assert.equal(mapped.paidDate, '04-Mar-2026');
+});
+
+test('parseFlexibleDate supports DD-Mon-YYYY used in payment exports', () => {
+  const d = parseFlexibleDate('04-Mar-2026');
+  assert.equal(d?.getUTCFullYear(), 2026);
+  assert.equal(d?.getUTCMonth(), 2);
+  assert.equal(d?.getUTCDate(), 4);
+});
+
+test('normalizeImportNameKey handles Excel spacing and punctuation', () => {
+  assert.equal(normalizeImportNameKey('  Ali\u00a0Warsi  '), 'ali warsi');
+  assert.equal(normalizeImportNameKey('Ali Warsi,'), 'ali warsi');
+  assert.equal(normalizeImportNameKey('ALI  WARSI'), 'ali warsi');
+});
+
+test('mapMemberRow skips additional empty trainer labels', () => {
+  const mapped = mapMemberRow({
+    Name: 'Test Member',
+    Trainer: 'Unassigned',
+  });
+  assert.equal(mapped.trainerName, undefined);
+});
 
 test('parseCsv reads header and rows', () => {
   const csv = 'name,phone\nAli,03001234567\nSara,03007654321';

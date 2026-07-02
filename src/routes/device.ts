@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { prisma, retryDatabaseOperation } from '../lib/prisma';
 import { validate } from '../middleware/validation';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { authenticateToken, AuthRequest, requireRole } from '../middleware/auth';
 import { authenticateApiKey, ApiKeyAuthRequest } from '../middleware/apiKeyAuth';
 import { requireGymId } from '../middleware/multiTenant';
 import {
@@ -23,6 +23,8 @@ import {
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, BadRequestError } from '../utils/errors';
 import { ZKTService, syncAttendanceFromDevice, syncUsersFromDevice, autoCheckoutIncompleteRecords } from '../services/zktService';
+import { ensureGymSyncApiKey } from '../services/gymSyncApiKeyService';
+import { generateSyncApiKey } from '../utils/syncApiKey';
 import { parseDate } from '../utils/dateHelpers';
 
 const router = Router();
@@ -364,6 +366,69 @@ router.post(
 // All routes below require JWT authentication and gymId
 router.use(authenticateToken);
 router.use(requireGymId);
+
+// GET /api/device/tablet-sync-setup — per-gym API key + devices (for Android tablet config)
+router.get('/tablet-sync-setup', async (req: AuthRequest, res: Response) => {
+  try {
+    const gymId = req.gymId!;
+    const syncApiKey = await ensureGymSyncApiKey(gymId);
+
+    const devices = await prisma.deviceConfig.findMany({
+      where: { gymId },
+      select: {
+        id: true,
+        name: true,
+        ipAddress: true,
+        port: true,
+        serialNumber: true,
+        isActive: true,
+        lastSyncAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    sendSuccess(res, {
+      syncApiKey,
+      gymId,
+      expires: null,
+      authMode: 'API_KEY',
+      devices,
+      instructions: {
+        androidApp: 'Settings → Auth mode: API Key → paste syncApiKey → set Device Config ID',
+        note: 'This key does not expire. Store it on the tablet once. Regenerate only if compromised.',
+      },
+    });
+  } catch (error) {
+    sendError(res, error as Error);
+  }
+});
+
+// POST /api/device/tablet-sync/regenerate-key — new permanent key (invalidates old tablets until reconfigured)
+router.post(
+  '/tablet-sync/regenerate-key',
+  requireRole('GYM_ADMIN'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const syncApiKey = generateSyncApiKey(gymId);
+
+      await prisma.gym.update({
+        where: { id: gymId },
+        data: { syncApiKey },
+      });
+
+      sendSuccess(res, {
+        syncApiKey,
+        gymId,
+        expires: null,
+        message:
+          'New sync API key generated. Update every tablet for this gym with the new key.',
+      });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
 
 // ============ Device Configuration Routes ============
 

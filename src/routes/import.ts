@@ -10,6 +10,8 @@ import {
   importMembersFromCsv,
   importPackagesFromCsv,
   importTrainersFromCsv,
+  assignMemberTrainersFromCsv,
+  importPaymentsFromCsv,
 } from '../services/bulkImportService';
 
 const router = Router();
@@ -22,7 +24,7 @@ router.get(
   validate(importTemplateSchema),
   async (req: AuthRequest, res: Response) => {
     try {
-      const { type } = req.params as { type: 'packages' | 'trainers' | 'members' };
+      const { type } = req.params as { type: 'packages' | 'trainers' | 'members' | 'payments' };
       const csv = IMPORT_TEMPLATES[type];
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="${type}-import-template.csv"`);
@@ -70,6 +72,32 @@ router.post(
 );
 
 router.post(
+  '/members/assign-trainers',
+  requireRole('GYM_ADMIN', 'GYM_MANAGER'),
+  uploadCsvSingle('file'),
+  validate(importQuerySchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const q = req.query as {
+        dryRun?: boolean;
+        createMissingTrainers?: boolean;
+      };
+      const dryRun = q.dryRun === true;
+      const createMissingTrainers = q.createMissingTrainers === true;
+      const csvText = readUploadedCsv(req);
+      const result = await assignMemberTrainersFromCsv(gymId, csvText, {
+        dryRun,
+        createMissingTrainers,
+      });
+      sendSuccess(res, result, dryRun ? 'Dry run completed' : 'Trainer assignments updated');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+router.post(
   '/members',
   requireRole('GYM_ADMIN', 'GYM_MANAGER'),
   uploadCsvSingle('file'),
@@ -92,6 +120,24 @@ router.post(
         createMissingTrainers,
       });
       sendSuccess(res, result, dryRun ? 'Dry run completed' : 'Members imported');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+router.post(
+  '/payments',
+  requireRole('GYM_ADMIN', 'GYM_MANAGER'),
+  uploadCsvSingle('file'),
+  validate(importQuerySchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const dryRun = (req.query as { dryRun?: boolean }).dryRun === true;
+      const csvText = readUploadedCsv(req);
+      const result = await importPaymentsFromCsv(gymId, csvText, dryRun);
+      sendSuccess(res, result, dryRun ? 'Dry run completed' : 'Payments imported');
     } catch (error) {
       sendError(res, error as Error);
     }

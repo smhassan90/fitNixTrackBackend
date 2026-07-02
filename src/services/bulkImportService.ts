@@ -1,13 +1,20 @@
 import { prisma } from '../lib/prisma';
 import { ValidationError } from '../utils/errors';
 import { parseCsv } from '../utils/csvParse';
-import { mapMemberRow, mapPackageRow, mapTrainerRow } from '../utils/importColumnMap';
-import { parseDate, formatMonth } from '../utils/dateHelpers';
+import { mapMemberRow, mapPackageRow, mapPaymentRow, mapTrainerRow } from '../utils/importColumnMap';
+import {
+  parseDate,
+  formatMonth,
+  getGymTimezone,
+  initialOpenInstallmentStatus,
+} from '../utils/dateHelpers';
 import {
   computeSignupOneTimeFees,
   generatePaymentsForMember,
   syncMissingNextMonthlyInstallment,
   seedMonthlyBillingAfterOneTimePaid,
+  markOverduePayments,
+  refreshMemberOpenInstallmentAmounts,
 } from './paymentService';
 import { recordMonthlyFeeCollection, recordOneTimeFeeCollection } from './feeCollectionService';
 
@@ -220,8 +227,118 @@ function normalizeStatus(value: string | undefined): boolean {
   );
 }
 
+/** Normalize names for import matching (Excel NBSP, extra spaces, trailing punctuation). */
+export function normalizeImportNameKey(value: string): string {
+  return value
+    .replace(/\u00a0/g, ' ')
+    .trim()
+    .toLowerCase()
+    .replace(/[.,;]+$/g, '')
+    .replace(/\s+/g, ' ');
+}
+
 function normalizeNameKey(value: string): string {
-  return value.trim().toLowerCase();
+  return normalizeImportNameKey(value);
+}
+
+function normalizePhoneKey(phone: string): string {
+  return phone.replace(/\D/g, '');
+}
+
+type TrainerLookup = {
+  id: number;
+  name: string;
+  charges: number | null;
+};
+
+function resolveTrainerByName(
+  trainerName: string,
+  trainerByName: Map<string, TrainerLookup>,
+  trainers: TrainerLookup[]
+): TrainerLookup | undefined {
+  const key = normalizeNameKey(trainerName);
+  const exact = trainerByName.get(key);
+  if (exact) {
+    return exact;
+  }
+
+  const withoutPrefix = key.replace(/^(mr|mrs|ms|miss|dr)\.?\s+/, '');
+  if (withoutPrefix !== key) {
+    const prefixed = trainerByName.get(withoutPrefix);
+    if (prefixed) {
+      return prefixed;
+    }
+  }
+
+  const fuzzy = trainers.filter((t) => {
+    const tn = normalizeNameKey(t.name);
+    return tn === key || tn === withoutPrefix || key.includes(tn) || tn.includes(key);
+  });
+  if (fuzzy.length === 1) {
+    return fuzzy[0];
+  }
+
+  return undefined;
+}
+
+type MemberLookup = {
+  id: number;
+  name: string;
+  phone: string | null;
+};
+
+function buildMemberLookupIndexes(members: MemberLookup[]): {
+  byPhone: Map<string, MemberLookup[]>;
+  byName: Map<string, MemberLookup[]>;
+} {
+  const byPhone = new Map<string, MemberLookup[]>();
+  const byName = new Map<string, MemberLookup[]>();
+
+  for (const member of members) {
+    if (member.phone) {
+      const phoneKey = normalizePhoneKey(member.phone);
+      if (phoneKey.length >= 7) {
+        const list = byPhone.get(phoneKey) ?? [];
+        list.push(member);
+        byPhone.set(phoneKey, list);
+      }
+    }
+    const nameKey = normalizeNameKey(member.name);
+    const list = byName.get(nameKey) ?? [];
+    list.push(member);
+    byName.set(nameKey, list);
+  }
+
+  return { byPhone, byName };
+}
+
+function resolveMemberForTrainerAssign(
+  name: string,
+  phone: string | null,
+  indexes: ReturnType<typeof buildMemberLookupIndexes>
+): { member: MemberLookup } | { error: string } {
+  if (phone) {
+    const phoneKey = normalizePhoneKey(phone);
+    if (phoneKey.length >= 7) {
+      const byPhone = indexes.byPhone.get(phoneKey) ?? [];
+      if (byPhone.length === 1) {
+        return { member: byPhone[0] };
+      }
+      if (byPhone.length > 1) {
+        return { error: `Multiple members share phone ${phone}` };
+      }
+    }
+  }
+
+  const byName = indexes.byName.get(normalizeNameKey(name)) ?? [];
+  if (byName.length === 1) {
+    return { member: byName[0] };
+  }
+  if (byName.length > 1) {
+    return { error: `Multiple members named "${name}" — include a unique phone in CSV` };
+  }
+
+  return { error: `Member not found: ${name}` };
 }
 
 type PackageLookup = {
@@ -529,7 +646,7 @@ export async function importMembersFromCsv(
     }
 
     let trainer = mapped.trainerName
-      ? trainerByName.get(normalizeNameKey(mapped.trainerName))
+      ? resolveTrainerByName(mapped.trainerName, trainerByName, trainers)
       : undefined;
     if (mapped.trainerName && !trainer) {
       const trainerName = mapped.trainerName.trim();
@@ -672,6 +789,304 @@ export async function importMembersFromCsv(
         message: e instanceof Error ? e.message : 'Import failed',
       });
     }
+  }
+
+  return summarize(results, gymId, dryRun);
+}
+
+export async function assignMemberTrainersFromCsv(
+  gymId: number,
+  csvText: string,
+  options: Pick<MemberImportOptions, 'dryRun' | 'createMissingTrainers'> = {}
+): Promise<BulkImportResult> {
+  const dryRun = options.dryRun === true;
+  const createMissingTrainers = options.createMissingTrainers === true;
+  const { rows } = parseCsv(csvText);
+  const results: ImportRowResult[] = [];
+
+  const [trainers, members] = await Promise.all([
+    prisma.trainer.findMany({ where: { gymId }, select: { id: true, name: true, charges: true } }),
+    prisma.member.findMany({
+      where: { gymId },
+      select: { id: true, name: true, phone: true },
+    }),
+  ]);
+
+  const trainerByName = new Map(trainers.map((t) => [normalizeNameKey(t.name), t]));
+  const memberIndexes = buildMemberLookupIndexes(members);
+
+  for (let i = 0; i < rows.length; i++) {
+    const rowNum = i + 2;
+    const mapped = mapMemberRow(rows[i]);
+    const name = mapped.name?.trim();
+
+    if (!name) {
+      results.push({ row: rowNum, status: 'failed', message: 'Member name is required' });
+      continue;
+    }
+
+    if (!mapped.trainerName) {
+      results.push({ row: rowNum, status: 'skipped', name, message: 'No trainer in row' });
+      continue;
+    }
+
+    const phoneRaw = mapped.phone?.trim() || null;
+    const memberResult = resolveMemberForTrainerAssign(name, phoneRaw, memberIndexes);
+    if ('error' in memberResult) {
+      results.push({ row: rowNum, status: 'failed', name, message: memberResult.error });
+      continue;
+    }
+
+    let trainer = resolveTrainerByName(mapped.trainerName, trainerByName, trainers);
+    if (!trainer) {
+      const trainerName = mapped.trainerName.trim();
+      if (createMissingTrainers) {
+        if (dryRun) {
+          results.push({
+            row: rowNum,
+            status: 'created',
+            name,
+            message: `Would assign trainer "${trainerName}"`,
+          });
+          continue;
+        }
+        const createdTrainer = await prisma.trainer.create({
+          data: { gymId, name: trainerName },
+          select: { id: true, name: true, charges: true },
+        });
+        trainer = createdTrainer;
+        trainers.push(createdTrainer);
+        trainerByName.set(normalizeNameKey(trainerName), createdTrainer);
+      } else {
+        results.push({
+          row: rowNum,
+          status: 'failed',
+          name,
+          message: `Trainer not found: ${trainerName}. Import trainers first or use ?createMissingTrainers=true.`,
+        });
+        continue;
+      }
+    }
+
+    if (dryRun) {
+      results.push({
+        row: rowNum,
+        status: 'created',
+        name,
+        message: `Would assign ${trainer.name}`,
+      });
+      continue;
+    }
+
+    try {
+      await prisma.memberTrainer.deleteMany({ where: { memberId: memberResult.member.id } });
+      await prisma.memberTrainer.create({
+        data: {
+          memberId: memberResult.member.id,
+          trainerId: trainer.id,
+        },
+      });
+      results.push({
+        row: rowNum,
+        status: 'created',
+        name,
+        id: memberResult.member.id,
+        message: `Assigned ${trainer.name}`,
+      });
+    } catch (e) {
+      results.push({
+        row: rowNum,
+        status: 'failed',
+        name,
+        message: e instanceof Error ? e.message : 'Trainer assignment failed',
+      });
+    }
+  }
+
+  return summarize(results, gymId, dryRun);
+}
+
+function resolveImportedPaymentStatus(
+  dueDate: Date,
+  paidDate: Date | null,
+  timeZone: string
+): { status: 'PAID' | 'PENDING' | 'OVERDUE'; paidDate: Date | null } {
+  if (paidDate) {
+    return { status: 'PAID', paidDate };
+  }
+  return {
+    status: initialOpenInstallmentStatus(dueDate, timeZone),
+    paidDate: null,
+  };
+}
+
+export async function importPaymentsFromCsv(
+  gymId: number,
+  csvText: string,
+  dryRun = false
+): Promise<BulkImportResult> {
+  const { rows } = parseCsv(csvText);
+  const results: ImportRowResult[] = [];
+  const tz = getGymTimezone();
+  const affectedMemberIds = new Set<number>();
+
+  const members = await prisma.member.findMany({
+    where: { gymId },
+    select: { id: true, name: true, phone: true },
+  });
+  const memberIndexes = buildMemberLookupIndexes(members);
+
+  for (let i = 0; i < rows.length; i++) {
+    const rowNum = i + 2;
+    const mapped = mapPaymentRow(rows[i]);
+    const name = mapped.memberName?.trim();
+
+    if (!name) {
+      results.push({ row: rowNum, status: 'failed', message: 'Member name is required' });
+      continue;
+    }
+
+    const phoneRaw = mapped.phone?.trim() || null;
+    const memberResult = resolveMemberForTrainerAssign(name, phoneRaw, memberIndexes);
+    if ('error' in memberResult) {
+      results.push({ row: rowNum, status: 'failed', name, message: memberResult.error });
+      continue;
+    }
+
+    let dueDate: Date;
+    let paidDate: Date | null = null;
+    try {
+      const parsedDue = parseFlexibleDate(mapped.dueDate);
+      if (!parsedDue) {
+        results.push({ row: rowNum, status: 'failed', name, message: 'Due date is required' });
+        continue;
+      }
+      dueDate = parsedDue;
+      dueDate.setUTCHours(0, 0, 0, 0);
+      paidDate = parseFlexibleDate(mapped.paidDate);
+      if (paidDate) {
+        paidDate.setUTCHours(0, 0, 0, 0);
+      }
+    } catch (e) {
+      results.push({
+        row: rowNum,
+        status: 'failed',
+        name,
+        message: e instanceof Error ? e.message : 'Invalid date',
+      });
+      continue;
+    }
+
+    const amount = parseAmount(mapped.amount);
+    if (amount < 0) {
+      results.push({ row: rowNum, status: 'failed', name, message: 'Amount cannot be negative' });
+      continue;
+    }
+    if (amount === 0 && !paidDate) {
+      results.push({
+        row: rowNum,
+        status: 'skipped',
+        name,
+        message: 'Zero amount with no paid date — skipped',
+      });
+      continue;
+    }
+
+    const month = formatMonth(dueDate);
+    const { status, paidDate: resolvedPaidDate } = resolveImportedPaymentStatus(
+      dueDate,
+      paidDate,
+      tz
+    );
+
+    if (dryRun) {
+      results.push({
+        row: rowNum,
+        status: 'created',
+        name,
+        message: `Would import ${status} payment for ${month} (Rs. ${amount})`,
+      });
+      continue;
+    }
+
+    try {
+      const memberId = memberResult.member.id;
+      const existing = await prisma.payment.findFirst({
+        where: { gymId, memberId, month },
+      });
+
+      let paymentId: number;
+      if (existing) {
+        const updated = await prisma.payment.update({
+          where: { id: existing.id },
+          data: {
+            amount,
+            dueDate,
+            status,
+            paidDate: resolvedPaidDate,
+          },
+        });
+        paymentId = updated.id;
+        results.push({
+          row: rowNum,
+          status: 'created',
+          name,
+          id: paymentId,
+          message: `Updated ${status} payment for ${month}`,
+        });
+      } else {
+        const created = await prisma.payment.create({
+          data: {
+            gymId,
+            memberId,
+            month,
+            amount,
+            dueDate,
+            status,
+            paidDate: resolvedPaidDate,
+          },
+        });
+        paymentId = created.id;
+        results.push({
+          row: rowNum,
+          status: 'created',
+          name,
+          id: paymentId,
+          message: `Imported ${status} payment for ${month}`,
+        });
+      }
+
+      if (status === 'PAID' && resolvedPaidDate) {
+        await prisma.$transaction(async (tx) => {
+          await recordMonthlyFeeCollection(tx, {
+            gymId,
+            memberId,
+            memberName: name,
+            paymentId,
+            amount,
+            billingMonth: month,
+            collectedAt: resolvedPaidDate,
+          });
+        });
+      }
+
+      affectedMemberIds.add(memberId);
+    } catch (e) {
+      results.push({
+        row: rowNum,
+        status: 'failed',
+        name,
+        message: e instanceof Error ? e.message : 'Payment import failed',
+      });
+    }
+  }
+
+  if (!dryRun && affectedMemberIds.size > 0) {
+    for (const memberId of affectedMemberIds) {
+      await refreshMemberOpenInstallmentAmounts(memberId, gymId);
+      await syncMissingNextMonthlyInstallment(memberId, gymId);
+    }
+    await markOverduePayments(gymId);
   }
 
   return summarize(results, gymId, dryRun);
