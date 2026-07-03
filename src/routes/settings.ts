@@ -14,6 +14,7 @@ import {
   DEFAULT_AUTO_CHECKOUT_HOURS,
   getGymAttendancePolicy,
 } from '../services/attendancePolicyService';
+import { DEFAULT_MAX_MEMBER_DISCOUNT } from '../services/memberDiscountPolicy';
 
 const router = Router();
 
@@ -27,6 +28,7 @@ function formatSettingsResponse(gym: {
   phone: string | null;
   email: string | null;
   admissionFee: number | null;
+  maxMemberDiscount: number | null;
   autoCheckoutHours: number;
   absenceInactiveDays: number | null;
 }) {
@@ -35,6 +37,7 @@ function formatSettingsResponse(gym: {
 
   return {
     admissionFee: gym.admissionFee ?? 0,
+    maxMemberDiscount: gym.maxMemberDiscount ?? DEFAULT_MAX_MEMBER_DISCOUNT,
     autoCheckoutHours,
     absenceInactiveDays,
     attendancePolicy: {
@@ -69,6 +72,7 @@ router.get(
           phone: true,
           email: true,
           admissionFee: true,
+          maxMemberDiscount: true,
           autoCheckoutHours: true,
           absenceInactiveDays: true,
         },
@@ -94,7 +98,7 @@ router.put(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { admissionFee, autoCheckoutHours, absenceInactiveDays } = req.body;
+      const { admissionFee, maxMemberDiscount, autoCheckoutHours, absenceInactiveDays } = req.body;
 
       const gym = await prisma.gym.findUnique({
         where: { id: gymId },
@@ -107,12 +111,16 @@ router.put(
 
       const updateData: {
         admissionFee?: number;
+        maxMemberDiscount?: number;
         autoCheckoutHours?: number;
         absenceInactiveDays?: number | null;
       } = {};
 
       if (admissionFee !== undefined) {
         updateData.admissionFee = admissionFee;
+      }
+      if (maxMemberDiscount !== undefined) {
+        updateData.maxMemberDiscount = maxMemberDiscount;
       }
       if (autoCheckoutHours !== undefined) {
         updateData.autoCheckoutHours = autoCheckoutHours;
@@ -131,6 +139,7 @@ router.put(
           phone: true,
           email: true,
           admissionFee: true,
+          maxMemberDiscount: true,
           autoCheckoutHours: true,
           absenceInactiveDays: true,
         },

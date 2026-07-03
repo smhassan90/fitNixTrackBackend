@@ -33,7 +33,7 @@ export const createMemberSchema = z.object({
         ])
       )
       .optional(),
-    discount: z.number().min(0).max(100).optional().nullable(),
+    discount: z.number().min(0).optional().nullable(),
     admissionFeeWaived: z.boolean().optional().default(false), // Whether admission fee is waived
     trainerIds: z
       .preprocess(
@@ -79,7 +79,7 @@ export const updateMemberSchema = z.object({
         ])
       )
       .optional(),
-    discount: z.number().min(0).max(100).optional().nullable(),
+    discount: z.number().min(0).optional().nullable(),
     trainerIds: z
       .preprocess(
         (val) => {

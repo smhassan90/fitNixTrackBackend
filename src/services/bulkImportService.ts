@@ -17,6 +17,7 @@ import {
   refreshMemberOpenInstallmentAmounts,
 } from './paymentService';
 import { recordMonthlyFeeCollection, recordOneTimeFeeCollection } from './feeCollectionService';
+import { resolveMaxMemberDiscount } from './memberDiscountPolicy';
 
 export type ImportRowResult = {
   row: number;
@@ -592,8 +593,13 @@ export async function importMembersFromCsv(
       select: { id: true, name: true, price: true, discount: true, duration: true },
     }),
     prisma.trainer.findMany({ where: { gymId }, select: { id: true, name: true, charges: true } }),
-    prisma.gym.findUnique({ where: { id: gymId }, select: { admissionFee: true } }),
+    prisma.gym.findUnique({
+      where: { id: gymId },
+      select: { admissionFee: true, maxMemberDiscount: true },
+    }),
   ]);
+
+  const maxMemberDiscount = resolveMaxMemberDiscount(gym ?? { maxMemberDiscount: null });
 
   const packageByName = new Map(packages.map((p) => [normalizeNameKey(p.name), p]));
   const packageByDuration = new Map(packages.map((p) => [p.duration, p]));
@@ -678,6 +684,15 @@ export async function importMembersFromCsv(
     }
 
     const discount = parseAmount(mapped.discount) || null;
+    if (discount != null && discount > maxMemberDiscount) {
+      results.push({
+        row: rowNum,
+        status: 'failed',
+        name,
+        message: `Member discount cannot exceed ${maxMemberDiscount}`,
+      });
+      continue;
+    }
     const paidAmount = parseAmount(mapped.paidAmount);
     const isActive = normalizeStatus(mapped.status);
     const trainerList = trainer ? [trainer] : [];

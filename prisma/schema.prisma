@@ -28,6 +28,7 @@ model Gym {
   phone          String?
   email          String?
   admissionFee          Float?           @default(0) // Admission fee configured in settings
+  maxMemberDiscount     Float?           @default(100) // Max flat discount (PKR) allowed per member in settings
   autoCheckoutHours     Int              @default(6) // Auto sign-out if no checkout after N hours
   absenceInactiveDays   Int?             // Mark member inactive after N days without check-in (null = disabled)
   syncApiKey            String?          @unique @db.VarChar(128) // Permanent per-gym tablet sync key (no expiry)

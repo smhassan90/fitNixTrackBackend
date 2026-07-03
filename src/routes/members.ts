@@ -15,6 +15,10 @@ import {
   deactivateMemberSchema,
   reactivateMemberSchema,
 } from '../validations/members';
+import {
+  assertMemberDiscountWithinLimit,
+  resolveMaxMemberDiscount,
+} from '../services/memberDiscountPolicy';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import {
@@ -88,7 +92,7 @@ function parseMemberDateOfBirth(input: unknown): Date | null {
   }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
-    throw new ValidationError('dateOfBirth must be YYYY-MM-DD or ISO 8601 datetime string', [
+    throw new ValidationError('dateOfBirth must be YYYY-MM-DD or ISO 8601 datetime stringwhen', [
       {
         path: 'body.dateOfBirth',
         message: 'Expected YYYY-MM-DD or ISO 8601 datetime.',
@@ -117,7 +121,7 @@ router.get(
   validate(getMembersSchema),
   async (req: AuthRequest, res: Response) => {
     try {
-      const gymId = req.gymId!;
+      const gymId = req.gymId!; 
       const {
         search,
         sortBy = 'createdAt',
@@ -384,10 +388,10 @@ router.post(
         trainerIds = [],
       } = req.body;
 
-      // Get gym settings (admission fee)
+      // Get gym settings (admission fee, discount cap)
       const gym = await prisma.gym.findUnique({
         where: { id: gymId },
-        select: { admissionFee: true },
+        select: { admissionFee: true, maxMemberDiscount: true },
       });
 
       if (!gym) {
@@ -396,6 +400,8 @@ router.post(
       }
 
       const admissionFee = gym.admissionFee ?? 0;
+      const maxMemberDiscount = resolveMaxMemberDiscount(gym);
+      assertMemberDiscountWithinLimit(discount, maxMemberDiscount);
 
       // Validate package exists if provided
       let packageData = null;
@@ -546,6 +552,18 @@ async function updateMemberHandler(req: AuthRequest, res: Response): Promise<voi
       if (!existingMember) {
         sendError(res, new NotFoundError('Member', String(memberId)));
         return;
+      }
+
+      if (discount !== undefined) {
+        const gym = await prisma.gym.findUnique({
+          where: { id: gymId },
+          select: { maxMemberDiscount: true },
+        });
+        if (!gym) {
+          sendError(res, new NotFoundError('Gym', gymId));
+          return;
+        }
+        assertMemberDiscountWithinLimit(discount, resolveMaxMemberDiscount(gym));
       }
 
       // Validate package exists if provided

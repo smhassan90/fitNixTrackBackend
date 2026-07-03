@@ -7,6 +7,10 @@ export const getSettingsSchema = z.object({
 export const updateSettingsSchema = z.object({
   body: z.object({
     admissionFee: z.number().min(0, 'Admission fee must be 0 or greater').optional(),
+    maxMemberDiscount: z
+      .number()
+      .min(0, 'Max member discount must be 0 or greater')
+      .optional(),
     autoCheckoutHours: z
       .number()
       .int()
