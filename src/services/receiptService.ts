@@ -101,9 +101,9 @@ function buildPackageReceiptSection(
     coverageMonthKey?.trim() || (dueDate ? formatMonth(dueDate) : null);
 
   const coverage =
-    monthKey &&
-    membershipStart &&
-    computeReceiptPackageCoverage(monthKey, membershipStart, billingResumeFrom);
+    monthKey && membershipStart
+      ? computeReceiptPackageCoverage(monthKey, membershipStart, billingResumeFrom)
+      : null;
 
   return {
     id: pkg.id,
