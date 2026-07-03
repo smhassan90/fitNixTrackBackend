@@ -26,6 +26,8 @@ import { ZKTService, syncAttendanceFromDevice, syncUsersFromDevice, autoCheckout
 import { ensureGymSyncApiKey } from '../services/gymSyncApiKeyService';
 import { generateSyncApiKey } from '../utils/syncApiKey';
 import { parseDate } from '../utils/dateHelpers';
+import { formatDeviceForPortal, formatSyncResultDto } from '../utils/deviceDto';
+import { applyAttendancePolicies } from '../services/attendancePolicyService';
 
 const router = Router();
 
@@ -368,10 +370,13 @@ router.use(authenticateToken);
 router.use(requireGymId);
 
 // GET /api/device/tablet-sync-setup — per-gym API key + devices (for Android tablet config)
-router.get('/tablet-sync-setup', async (req: AuthRequest, res: Response) => {
+router.get(
+  '/tablet-sync-setup',
+  requireRole('GYM_ADMIN', 'GYM_MANAGER'),
+  async (req: AuthRequest, res: Response) => {
   try {
     const gymId = req.gymId!;
-    const syncApiKey = await ensureGymSyncApiKey(gymId);
+    const apiKey = await ensureGymSyncApiKey(gymId);
 
     const devices = await prisma.deviceConfig.findMany({
       where: { gymId },
@@ -388,20 +393,22 @@ router.get('/tablet-sync-setup', async (req: AuthRequest, res: Response) => {
     });
 
     sendSuccess(res, {
-      syncApiKey,
+      apiKey,
+      syncApiKey: apiKey,
       gymId,
       expires: null,
       authMode: 'API_KEY',
-      devices,
+      devices: devices.map(formatDeviceForPortal),
       instructions: {
-        androidApp: 'Settings → Auth mode: API Key → paste syncApiKey → set Device Config ID',
+        androidApp: 'Settings → Auth mode: API Key → paste apiKey → set Device Config ID',
         note: 'This key does not expire. Store it on the tablet once. Regenerate only if compromised.',
       },
     });
   } catch (error) {
     sendError(res, error as Error);
   }
-});
+  }
+);
 
 // POST /api/device/tablet-sync/regenerate-key — new permanent key (invalidates old tablets until reconfigured)
 router.post(
@@ -418,6 +425,7 @@ router.post(
       });
 
       sendSuccess(res, {
+        apiKey: syncApiKey,
         syncApiKey,
         gymId,
         expires: null,
@@ -447,7 +455,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       },
     });
 
-    sendSuccess(res, devices);
+    sendSuccess(res, devices.map((d) => ({
+      ...formatDeviceForPortal(d),
+      _count: (d as { _count?: { userMappings: number } })._count,
+    })));
   } catch (error) {
     sendError(res, error as Error);
   }
@@ -456,6 +467,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 // POST /api/device - Create a new device configuration
 router.post(
   '/',
+  requireRole('GYM_ADMIN', 'GYM_MANAGER'),
   validate(createDeviceConfigSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -491,7 +503,12 @@ router.post(
         },
       });
 
-      sendSuccess(res, device, undefined, 201);
+      sendSuccess(
+        res,
+        { device: formatDeviceForPortal(device) },
+        undefined,
+        201
+      );
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -1222,10 +1239,15 @@ router.post(
 
       const result = await syncAttendanceFromDevice(id, gymId, start, end);
 
-      sendSuccess(res, {
-        ...result,
-        message: `Synced ${result.synced} attendance records. ${result.errors} errors encountered.`,
-      });
+      sendSuccess(
+        res,
+        formatSyncResultDto({
+          syncedRecords: result.synced,
+          autoCheckedOut: result.autoCheckedOut,
+          markedInactive: result.markedInactive,
+        }),
+        'Attendance synced'
+      );
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -1252,6 +1274,13 @@ router.post(
 
       const result = await syncUsersFromDevice(id, gymId);
 
+      await prisma.deviceConfig.update({
+        where: { id },
+        data: { lastSyncAt: new Date() },
+      });
+
+      const policies = await applyAttendancePolicies(gymId);
+
       // Get existing mappings to identify unmapped device users
       const existingMappings = await prisma.deviceUserMapping.findMany({
         where: {
@@ -1268,16 +1297,23 @@ router.post(
         (user) => !mappedDeviceUserIds.has(user.uid.toString())
       );
 
-      sendSuccess(res, {
-        ...result,
-        unmappedDeviceUsers: unmappedDeviceUsers.map((u) => ({
-          uid: u.uid,
-          name: u.name,
-          userId: u.userId,
-        })),
-        unmappedCount: unmappedDeviceUsers.length,
-        message: `Found ${result.users.length} users on device. Mapped ${result.mapped} users to members. ${unmappedDeviceUsers.length} users remain unmapped.`,
-      });
+      sendSuccess(
+        res,
+        {
+          ...formatSyncResultDto({
+            syncedRecords: result.mapped,
+            autoCheckedOut: policies.autoCheckedOut,
+            markedInactive: policies.markedInactive,
+          }),
+          unmappedDeviceUsers: unmappedDeviceUsers.map((u) => ({
+            uid: u.uid,
+            name: u.name,
+            userId: u.userId,
+          })),
+          unmappedCount: unmappedDeviceUsers.length,
+        },
+        'Users synced successfully'
+      );
     } catch (error) {
       sendError(res, error as Error);
     }

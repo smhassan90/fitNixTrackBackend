@@ -339,7 +339,12 @@ export async function syncAttendanceFromDevice(
   gymId: number,
   startDate?: Date,
   endDate?: Date
-): Promise<{ synced: number; errors: number }> {
+): Promise<{
+  synced: number;
+  errors: number;
+  autoCheckedOut: number;
+  markedInactive: number;
+}> {
   const deviceConfig = await prisma.deviceConfig.findUnique({
     where: { id: deviceConfigId },
     include: {
@@ -364,6 +369,8 @@ export async function syncAttendanceFromDevice(
 
   let synced = 0;
   let errors = 0;
+  let autoCheckedOut = 0;
+  let markedInactive = 0;
 
   try {
     const connected = await zktService.connect();
@@ -557,7 +564,9 @@ export async function syncAttendanceFromDevice(
     });
 
     // Auto-checkout open sessions and apply absence-based inactive rules
-    await applyAttendancePolicies(gymId);
+    const policies = await applyAttendancePolicies(gymId);
+    autoCheckedOut = policies.autoCheckedOut;
+    markedInactive = policies.markedInactive;
   } catch (error) {
     console.error('Error syncing attendance:', error);
     throw error;
@@ -565,7 +574,12 @@ export async function syncAttendanceFromDevice(
     await zktService.disconnect();
   }
 
-  return { synced, errors };
+  return {
+    synced,
+    errors,
+    autoCheckedOut,
+    markedInactive,
+  };
 }
 
 /**
