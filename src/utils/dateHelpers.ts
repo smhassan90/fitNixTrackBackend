@@ -5,6 +5,19 @@ export function formatDate(date: Date): string {
   return date.toISOString().split('T')[0];
 }
 
+/** Normalize Prisma/JSON date values to UTC midnight. */
+export function coerceUtcDate(value: Date | string | null | undefined): Date | null {
+  if (value == null) {
+    return null;
+  }
+  const d = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  if (Number.isNaN(d.getTime())) {
+    return null;
+  }
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+}
+
 /**
  * Parse YYYY-MM-DD string to Date
  */
@@ -157,19 +170,16 @@ export function resolveReceiptAnchorDay(
   billingResumeFrom: Date | null | undefined,
   paymentMonthKey: string
 ): number | null {
-  if (!membershipStart) {
+  const join = coerceUtcDate(membershipStart);
+  if (!join) {
     return null;
   }
 
-  const joinDay = getBillingAnchorDayUTC(membershipStart);
-  if (!billingResumeFrom) {
+  const joinDay = getBillingAnchorDayUTC(join);
+  const resume = coerceUtcDate(billingResumeFrom);
+  if (!resume) {
     return joinDay;
   }
-
-  const resume = new Date(billingResumeFrom);
-  resume.setUTCHours(0, 0, 0, 0);
-  const join = new Date(membershipStart);
-  join.setUTCHours(0, 0, 0, 0);
 
   if (resume.getTime() <= join.getTime()) {
     return joinDay;
@@ -198,12 +208,26 @@ export function computeReceiptPackageCoverage(
   membershipStart: Date | null | undefined,
   billingResumeFrom: Date | null | undefined
 ): { startDate: string; expiryDate: string } | null {
-  const anchorDay = resolveReceiptAnchorDay(membershipStart, billingResumeFrom, paymentMonthKey);
+  const normalizedMonthKey = paymentMonthKey?.trim();
+  if (!normalizedMonthKey || !/^\d{4}-\d{2}$/.test(normalizedMonthKey)) {
+    return null;
+  }
+
+  const start = coerceUtcDate(membershipStart);
+  if (!start) {
+    return null;
+  }
+
+  const anchorDay = resolveReceiptAnchorDay(
+    start,
+    coerceUtcDate(billingResumeFrom),
+    normalizedMonthKey
+  );
   if (anchorDay === null) {
     return null;
   }
 
-  const startDate = dateInMonthWithAnchorDay(paymentMonthKey, anchorDay);
+  const startDate = dateInMonthWithAnchorDay(normalizedMonthKey, anchorDay);
   const expiryDate = nextBillingDueDate(startDate, anchorDay);
 
   return {

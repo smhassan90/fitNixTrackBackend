@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma';
 import {
+  coerceUtcDate,
   computeReceiptPackageCoverage,
   formatMonth,
 } from '../utils/dateHelpers';
@@ -86,18 +87,23 @@ function buildMemberReceiptSection(member: MemberWithRelations) {
 function buildPackageReceiptSection(
   pkg: NonNullable<MemberWithRelations['package']> | null | undefined,
   coverageMonthKey: string | null | undefined,
-  member: Pick<MemberWithRelations, 'membershipStart' | 'billingResumeFrom'>
+  member: Pick<MemberWithRelations, 'membershipStart' | 'billingResumeFrom'>,
+  installmentDueDate?: Date | string | null
 ) {
   if (!pkg) {
     return null;
   }
+
+  const dueDate = coerceUtcDate(installmentDueDate);
+  const membershipStart = coerceUtcDate(member.membershipStart) ?? dueDate;
+  const billingResumeFrom = coerceUtcDate(member.billingResumeFrom);
+  const monthKey =
+    coverageMonthKey?.trim() || (dueDate ? formatMonth(dueDate) : null);
+
   const coverage =
-    coverageMonthKey &&
-    computeReceiptPackageCoverage(
-      coverageMonthKey,
-      member.membershipStart,
-      member.billingResumeFrom
-    );
+    monthKey &&
+    membershipStart &&
+    computeReceiptPackageCoverage(monthKey, membershipStart, billingResumeFrom);
 
   return {
     id: pkg.id,
@@ -165,6 +171,9 @@ export function buildOneTimePaymentReceipt(params: {
   const normalized = normalizeOneTimePaymentBreakdown(oneTimePayment);
   const trainers = buildTrainersReceiptSection(member);
   const pkg = member.package ?? null;
+  const membershipStart = coerceUtcDate(member.membershipStart);
+  const coverageAnchorDate =
+    oneTimePayment.paidDate ?? oneTimePayment.createdAt;
 
   return {
     receiptType: 'one-time' as const,
@@ -175,8 +184,9 @@ export function buildOneTimePaymentReceipt(params: {
     member: buildMemberReceiptSection(member),
     package: buildPackageReceiptSection(
       pkg,
-      member.membershipStart ? formatMonth(member.membershipStart) : null,
-      member
+      membershipStart ? formatMonth(membershipStart) : null,
+      member,
+      coverageAnchorDate
     ),
     trainers,
     trainerFee: normalized.trainerFee,
@@ -243,7 +253,7 @@ export function buildMonthlyPaymentReceipt(params: {
     printedBy,
     gym,
     member: buildMemberReceiptSection(member),
-    package: buildPackageReceiptSection(pkg, payment.month, member),
+    package: buildPackageReceiptSection(pkg, payment.month, member, payment.dueDate),
     trainers,
     trainerFee: normalizedSignup ? normalizedSignup.trainerFee : trainerFeeTotal,
     packageFeeMonthly: computePackageFeeMonthly(pkg),
