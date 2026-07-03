@@ -36,17 +36,18 @@ model Gym {
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
-  users             User[]
-  members           Member[]
-  trainers          Trainer[]
-  packages          Package[]
-  payments          Payment[]
-  attendanceRecords AttendanceRecord[]
-  deviceConfigs     DeviceConfig[]
-  oneTimePayments   OneTimePayment[]
-  feeCollections    FeeCollection[]
-  gymSubscription   GymSubscription?
-  billingPayments   BillingPayment[]
+  users                  User[]
+  members                Member[]
+  trainers               Trainer[]
+  packages               Package[]
+  payments               Payment[]
+  attendanceRecords      AttendanceRecord[]
+  deviceConfigs          DeviceConfig[]
+  oneTimePayments        OneTimePayment[]
+  feeCollections         FeeCollection[]
+  gymSubscription        GymSubscription?
+  billingPayments        BillingPayment[]
+  pendingAttendanceLogs  PendingAttendanceLog[]
 
   @@map("gyms")
 }
@@ -480,13 +481,54 @@ model DeviceConfig {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  gym          Gym                 @relation(fields: [gymId], references: [id], onDelete: Cascade)
-  userMappings DeviceUserMapping[]
+  gym                   Gym                    @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  userMappings          DeviceUserMapping[]
+  deviceUsers           DeviceUser[]
+  pendingAttendanceLogs PendingAttendanceLog[]
 
   @@unique([gymId, ipAddress, port])
   @@index([gymId])
   @@index([isActive])
   @@map("device_configs")
+}
+
+/// Users enrolled on a biometric device (may be unmapped to members).
+model DeviceUser {
+  id             Int      @id @default(autoincrement())
+  deviceConfigId Int
+  deviceUserId   String // User ID / uid on the ZKTeco device
+  deviceUserName String?
+  deviceBadgeId  String? // Badge / userId field from device
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  deviceConfig DeviceConfig @relation(fields: [deviceConfigId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceConfigId, deviceUserId])
+  @@index([deviceConfigId])
+  @@index([deviceUserName])
+  @@map("device_users")
+}
+
+/// Attendance punches for device users not yet mapped to members.
+model PendingAttendanceLog {
+  id                 Int      @id @default(autoincrement())
+  gymId              Int
+  deviceConfigId     Int
+  deviceUserId       String
+  recordTime         DateTime
+  type               Int?
+  state              Int?
+  deviceSerialNumber String?
+  createdAt          DateTime @default(now())
+
+  gym          Gym          @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  deviceConfig DeviceConfig @relation(fields: [deviceConfigId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceConfigId, deviceUserId, recordTime])
+  @@index([gymId])
+  @@index([deviceConfigId, deviceUserId])
+  @@map("pending_attendance_logs")
 }
 
 model DeviceUserMapping {

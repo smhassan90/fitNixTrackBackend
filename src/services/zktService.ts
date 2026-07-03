@@ -1,5 +1,10 @@
 import { prisma } from '../lib/prisma';
 import { applyAttendancePolicies } from './attendancePolicyService';
+import {
+  applyPunchToAttendance,
+  storePendingAttendanceLog,
+  upsertDeviceUsers,
+} from './deviceMappingService';
 
 // Import node-zklib - it's a constructor function
 import ZKLibConstructor from 'node-zklib';
@@ -341,6 +346,7 @@ export async function syncAttendanceFromDevice(
   endDate?: Date
 ): Promise<{
   synced: number;
+  pending: number;
   errors: number;
   autoCheckedOut: number;
   markedInactive: number;
@@ -368,6 +374,7 @@ export async function syncAttendanceFromDevice(
   });
 
   let synced = 0;
+  let pending = 0;
   let errors = 0;
   let autoCheckedOut = 0;
   let markedInactive = 0;
@@ -390,7 +397,8 @@ export async function syncAttendanceFromDevice(
         if (log.recordTime) {
           logDate = new Date(log.recordTime);
         } else if (log.timestamp) {
-          logDate = new Date(log.timestamp * 1000);
+          const ts = Number(log.timestamp);
+          logDate = new Date(ts > 1e12 ? ts : ts * 1000);
         } else {
           return false; // Skip logs without timestamp
         }
@@ -421,6 +429,8 @@ export async function syncAttendanceFromDevice(
           deviceUserId = log.id.toString();
         } else if (log.uid !== undefined && log.uid !== null) {
           deviceUserId = log.uid.toString();
+        } else if (log.userSn !== undefined && log.userSn !== null) {
+          deviceUserId = log.userSn.toString();
         }
 
         if (!deviceUserId) {
@@ -434,7 +444,8 @@ export async function syncAttendanceFromDevice(
         if (log.recordTime) {
           logDate = new Date(log.recordTime);
         } else if (log.timestamp) {
-          logDate = new Date(log.timestamp * 1000);
+          const ts = Number(log.timestamp);
+          logDate = new Date(ts > 1e12 ? ts : ts * 1000);
         } else {
           console.warn(`Log entry missing timestamp/recordTime:`, JSON.stringify(log));
           errors++;
@@ -451,106 +462,31 @@ export async function syncAttendanceFromDevice(
         const memberId = deviceUserToMemberMap.get(deviceUserId);
 
         if (!memberId) {
-          console.warn(`No member mapping found for device user ID: ${deviceUserId}`);
-          errors++;
+          // Keep punches for later — mapping window will apply them
+          const stored = await storePendingAttendanceLog({
+            gymId,
+            deviceConfigId,
+            deviceUserId,
+            recordTime: logDate,
+            type: log.type,
+            state: log.state,
+            deviceSerialNumber: deviceConfig.serialNumber,
+          });
+          if (stored) pending++;
+          else errors++;
           continue;
         }
-        const dateOnly = new Date(logDate.getFullYear(), logDate.getMonth(), logDate.getDate());
 
-        // Find or create attendance record for this date
-        const existingRecord = await prisma.attendanceRecord.findUnique({
-          where: {
-            gymId_memberId_date: {
-              gymId,
-              memberId,
-              date: dateOnly,
-            },
-          },
+        const wrote = await applyPunchToAttendance({
+          gymId,
+          memberId,
+          deviceUserId,
+          logDate,
+          type: log.type,
+          state: log.state,
+          deviceSerialNumber: deviceConfig.serialNumber,
         });
-
-        // Determine if this is check-in or check-out
-        let isCheckIn: boolean;
-        if (log.type !== undefined || log.state !== undefined) {
-          // Old format: type 0 = Check-in, type 1 = Check-out
-          isCheckIn = log.type === 0 || (log.type === undefined && log.state === 0);
-        } else {
-          // New format: Check existing record to determine
-          if (!existingRecord || !existingRecord.checkInTime) {
-            isCheckIn = true;
-          } else if (!existingRecord.checkOutTime) {
-            isCheckIn = false;
-          } else {
-            isCheckIn = logDate < existingRecord.checkInTime;
-          }
-        }
-
-        if (existingRecord) {
-          // Update existing record
-          // If we have check-in time but not check-out, and this is later, treat as check-out
-          // If we have check-out but this is earlier check-in, update check-in
-          // Otherwise, use type/state to determine
-          const updateData: any = {
-            deviceUserId,
-            deviceSerialNumber: deviceConfig.serialNumber || undefined,
-            status: 'PRESENT',
-          };
-
-          if (isCheckIn) {
-            // This is a check-in - update if we don't have one or this is earlier
-            if (!existingRecord.checkInTime || logDate < existingRecord.checkInTime) {
-              updateData.checkInTime = logDate;
-            }
-          } else {
-            // This is a check-out - update if we don't have one or this is later
-            if (!existingRecord.checkOutTime || logDate > existingRecord.checkOutTime) {
-              updateData.checkOutTime = logDate;
-            }
-          }
-
-          // If we can't determine from type/state, use timing logic
-          if (log.type === undefined && log.state === undefined) {
-            if (!existingRecord.checkInTime) {
-              updateData.checkInTime = logDate;
-            } else if (!existingRecord.checkOutTime && logDate > existingRecord.checkInTime) {
-              updateData.checkOutTime = logDate;
-            } else if (logDate < existingRecord.checkInTime) {
-              // Earlier entry, treat as check-in
-              updateData.checkInTime = logDate;
-            }
-          }
-
-          // Only update if we have changes
-          if (updateData.checkInTime || updateData.checkOutTime) {
-            await prisma.attendanceRecord.update({
-              where: { id: existingRecord.id },
-              data: updateData,
-            });
-            synced++;
-          }
-        } else {
-          // Only create new record if we have a valid timestamp
-          // Device sync should never create records without check-in or check-out times
-          if (!logDate || isNaN(logDate.getTime())) {
-            console.warn(`Skipping record creation: invalid timestamp for member ${memberId} on ${dateOnly.toISOString()}`);
-            errors++;
-            continue;
-          }
-
-          // Create new record with timestamp
-          await prisma.attendanceRecord.create({
-            data: {
-              gymId,
-              memberId,
-              date: dateOnly,
-              status: 'PRESENT',
-              checkInTime: isCheckIn ? logDate : undefined,
-              checkOutTime: !isCheckIn ? logDate : undefined,
-              deviceUserId,
-              deviceSerialNumber: deviceConfig.serialNumber || undefined,
-            },
-          });
-          synced++;
-        }
+        if (wrote) synced++;
       } catch (error) {
         console.error(`Error processing log entry:`, error);
         errors++;
@@ -576,6 +512,7 @@ export async function syncAttendanceFromDevice(
 
   return {
     synced,
+    pending,
     errors,
     autoCheckedOut,
     markedInactive,
@@ -591,12 +528,13 @@ export async function autoCheckoutIncompleteRecords(gymId: number): Promise<numb
 }
 
 /**
- * Sync users from device and create mappings
+ * Sync users from device into device_users.
+ * Does not auto-create member mappings — use the mapping window to confirm.
  */
 export async function syncUsersFromDevice(
   deviceConfigId: number,
   gymId: number
-): Promise<{ users: DeviceUser[]; mapped: number }> {
+): Promise<{ users: DeviceUser[]; stored: number }> {
   const deviceConfig = await prisma.deviceConfig.findUnique({
     where: { id: deviceConfigId },
   });
@@ -633,55 +571,16 @@ export async function syncUsersFromDevice(
 
     console.log(`Found ${deviceUsers.length} users on device`);
 
-    // Map device users to members by member ID (userId field from device)
-    let mapped = 0;
-    for (const deviceUser of deviceUsers) {
-      // Use userId from device as member ID
-      const memberId = parseInt(deviceUser.userId, 10);
-      
-      if (isNaN(memberId)) {
-        console.log(`Skipping device user "${deviceUser.name}" (uid: ${deviceUser.uid}): userId "${deviceUser.userId}" is not a valid number`);
-        continue;
-      }
+    const stored = await upsertDeviceUsers(
+      deviceConfigId,
+      deviceUsers.map((deviceUser) => ({
+        deviceUserId: deviceUser.uid.toString(),
+        deviceUserName: deviceUser.name || null,
+        deviceBadgeId: deviceUser.userId?.toString() || null,
+      }))
+    );
 
-      // Check if member exists in the database for this gym
-      const member = await prisma.member.findFirst({
-        where: {
-          id: memberId,
-          gymId,
-        },
-        select: { id: true },
-      });
-
-      if (member) {
-        // Create or update mapping using device userId (uid) and member ID
-        await prisma.deviceUserMapping.upsert({
-          where: {
-            deviceConfigId_deviceUserId: {
-              deviceConfigId,
-              deviceUserId: deviceUser.uid.toString(),
-            },
-          },
-          create: {
-            deviceConfigId,
-            memberId: member.id,
-            deviceUserId: deviceUser.uid.toString(),
-            deviceUserName: null, // Don't save device name
-            isActive: true,
-          },
-          update: {
-            isActive: true,
-            // Don't update deviceUserName - keep it null
-          },
-        });
-        console.log(`Mapped device user (uid: ${deviceUser.uid}, userId: ${deviceUser.userId}) to member ID: ${member.id}`);
-        mapped++;
-      } else {
-        console.log(`No member found with ID ${memberId} for gym ${gymId} (device user uid: ${deviceUser.uid}, userId: ${deviceUser.userId})`);
-      }
-    }
-
-    return { users: deviceUsers, mapped };
+    return { users: deviceUsers, stored };
   } catch (error) {
     console.error('Error syncing users:', error);
     throw error;

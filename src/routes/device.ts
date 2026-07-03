@@ -19,6 +19,7 @@ import {
   getDeviceAttendanceLogsSchema,
   syncUsersOfflineSchema,
   syncAttendanceOfflineSchema,
+  confirmUserMappingsSchema,
 } from '../validations/device';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, BadRequestError } from '../utils/errors';
@@ -28,6 +29,14 @@ import { generateSyncApiKey } from '../utils/syncApiKey';
 import { parseDate } from '../utils/dateHelpers';
 import { formatDeviceForPortal, formatSyncResultDto } from '../utils/deviceDto';
 import { applyAttendancePolicies } from '../services/attendancePolicyService';
+import {
+  applyPunchToAttendance,
+  confirmDeviceUserMappings,
+  getMappingCandidates,
+  processPendingLogsForDeviceUser,
+  storePendingAttendanceLog,
+  upsertDeviceUsers,
+} from '../services/deviceMappingService';
 
 const router = Router();
 
@@ -55,45 +64,35 @@ router.post(
         return;
       }
 
-      // Map device users to members by member ID (userId field from device)
-      let mapped = 0;
-      for (const deviceUser of users) {
-        const memberId = parseInt(deviceUser.userId, 10);
-        
-        if (isNaN(memberId)) {
-          continue;
-        }
+      // Store device users only — member mapping is confirmed in the mapping window
+      const stored = await upsertDeviceUsers(
+        deviceId,
+        users.map((deviceUser: { uid: number; name: string; userId: string }) => ({
+          deviceUserId: deviceUser.uid.toString(),
+          deviceUserName: deviceUser.name || null,
+          deviceBadgeId: deviceUser.userId?.toString() || null,
+        }))
+      );
 
-        const member = await prisma.member.findFirst({
-          where: { id: memberId, gymId },
-          select: { id: true },
-        });
-
-        if (member) {
-          await prisma.deviceUserMapping.upsert({
-            where: {
-              deviceConfigId_deviceUserId: {
-                deviceConfigId: deviceId,
-                deviceUserId: deviceUser.uid.toString(),
-              },
-            },
-            create: {
-              deviceConfigId: deviceId,
-              memberId: member.id,
-              deviceUserId: deviceUser.uid.toString(),
-              deviceUserName: null,
-              isActive: true,
-            },
-            update: { isActive: true },
-          });
-          mapped++;
-        }
-      }
+      const [activeMappings, totalDeviceUsers] = await Promise.all([
+        prisma.deviceUserMapping.count({
+          where: { deviceConfigId: deviceId, isActive: true },
+        }),
+        prisma.deviceUser.count({
+          where: { deviceConfigId: deviceId },
+        }),
+      ]);
+      const unmappedCount = Math.max(0, totalDeviceUsers - activeMappings);
 
       sendSuccess(res, {
-        users: users,
-        mapped,
-        message: `Synced ${users.length} users. Mapped ${mapped} users to members.`,
+        users,
+        stored,
+        mapped: activeMappings,
+        unmappedCount,
+        message:
+          unmappedCount > 0
+            ? `Synced ${stored} device users. ${unmappedCount} need mapping confirmation.`
+            : `Synced ${stored} device users. All users are mapped.`,
       });
     } catch (error) {
       sendError(res, error as Error);
@@ -132,16 +131,12 @@ router.post(
         deviceUserToMemberMap.set(mapping.deviceUserId, mapping.memberId);
       });
 
-      // Process logs (same logic as syncAttendanceFromDevice)
-      interface ProcessedLog {
-        deviceUserId: string;
-        memberId: number;
-        date: Date;
-        logDate: Date;
-        isCheckIn: boolean | null;
-      }
-
-      const processedLogs: ProcessedLog[] = [];
+      let synced = 0;
+      let pending = 0;
+      let errors = 0;
+      let skippedNoUserId = 0;
+      let skippedNoTimestamp = 0;
+      const pendingDeviceUserIds = new Set<string>();
 
       for (const log of logs) {
         try {
@@ -152,196 +147,62 @@ router.post(
             deviceUserId = log.id.toString();
           } else if (log.uid !== undefined && log.uid !== null) {
             deviceUserId = log.uid.toString();
+          } else if (log.userSn !== undefined && log.userSn !== null) {
+            deviceUserId = log.userSn.toString();
           }
 
-          if (!deviceUserId) continue;
+          if (!deviceUserId) {
+            skippedNoUserId++;
+            continue;
+          }
 
           let logDate: Date;
           if (log.recordTime) {
             logDate = new Date(log.recordTime);
           } else if (log.timestamp) {
-            logDate = new Date(log.timestamp * 1000);
+            const ts = Number(log.timestamp);
+            logDate = new Date(ts > 1e12 ? ts : ts * 1000);
           } else {
+            skippedNoTimestamp++;
             continue;
           }
 
-          if (isNaN(logDate.getTime())) continue;
+          if (isNaN(logDate.getTime())) {
+            skippedNoTimestamp++;
+            continue;
+          }
 
           const memberId = deviceUserToMemberMap.get(deviceUserId);
-          if (!memberId) continue;
 
-          const dateOnly = new Date(logDate.getFullYear(), logDate.getMonth(), logDate.getDate());
-
-          let isCheckIn: boolean | null = null;
-          if (log.type !== undefined) {
-            isCheckIn = log.type === 0;
-          } else if (log.state !== undefined) {
-            isCheckIn = log.state === 0;
+          if (!memberId) {
+            const stored = await storePendingAttendanceLog({
+              gymId,
+              deviceConfigId: deviceId,
+              deviceUserId,
+              recordTime: logDate,
+              type: log.type,
+              state: log.state,
+              deviceSerialNumber: device.serialNumber,
+            });
+            if (stored) {
+              pending++;
+              pendingDeviceUserIds.add(deviceUserId);
+            } else {
+              errors++;
+            }
+            continue;
           }
 
-          processedLogs.push({
-            deviceUserId,
+          const wrote = await applyPunchToAttendance({
+            gymId,
             memberId,
-            date: dateOnly,
-            logDate,
-            isCheckIn,
-          });
-        } catch (error) {
-          continue;
-        }
-      }
-
-      // Group by member and date
-      const logsByMemberAndDate = new Map<string, ProcessedLog[]>();
-      for (const log of processedLogs) {
-        const key = `${log.memberId}_${log.date.toISOString()}`;
-        if (!logsByMemberAndDate.has(key)) {
-          logsByMemberAndDate.set(key, []);
-        }
-        logsByMemberAndDate.get(key)!.push(log);
-      }
-
-      let synced = 0;
-      let errors = 0;
-
-      for (const [key, groupLogs] of logsByMemberAndDate.entries()) {
-        try {
-          if (groupLogs.length === 0) continue;
-
-          const firstLog = groupLogs[0];
-          const memberId = firstLog.memberId;
-          const dateOnly = firstLog.date;
-          const deviceUserId = firstLog.deviceUserId;
-
-          const checkIns: Date[] = [];
-          const checkOuts: Date[] = [];
-          const unknownLogs: Date[] = [];
-
-          for (const log of groupLogs) {
-            if (log.isCheckIn === true) {
-              checkIns.push(log.logDate);
-            } else if (log.isCheckIn === false) {
-              checkOuts.push(log.logDate);
-            } else {
-              unknownLogs.push(log.logDate);
-            }
-          }
-
-          const allLogsSorted = [...groupLogs].sort((a, b) => a.logDate.getTime() - b.logDate.getTime());
-
-          for (const unknownLog of unknownLogs) {
-            const earliestKnownCheckIn = checkIns.length > 0 ? checkIns[0] : null;
-            const latestKnownCheckOut = checkOuts.length > 0 ? checkOuts[checkOuts.length - 1] : null;
-
-            if (earliestKnownCheckIn && unknownLog < earliestKnownCheckIn) {
-              checkIns.push(unknownLog);
-            } else if (latestKnownCheckOut && unknownLog > latestKnownCheckOut) {
-              checkOuts.push(unknownLog);
-            } else if (earliestKnownCheckIn && latestKnownCheckOut) {
-              const distToCheckIn = Math.abs(unknownLog.getTime() - earliestKnownCheckIn.getTime());
-              const distToCheckOut = Math.abs(unknownLog.getTime() - latestKnownCheckOut.getTime());
-              if (distToCheckIn < distToCheckOut) {
-                checkIns.push(unknownLog);
-              } else {
-                checkOuts.push(unknownLog);
-              }
-            } else if (earliestKnownCheckIn) {
-              const latestCheckIn = checkIns[checkIns.length - 1];
-              if (unknownLog > latestCheckIn) {
-                checkOuts.push(unknownLog);
-              } else {
-                checkIns.push(unknownLog);
-              }
-            } else if (latestKnownCheckOut) {
-              const sortedCheckOuts = [...checkOuts].sort((a, b) => a.getTime() - b.getTime());
-              const earliestCheckOut = sortedCheckOuts[0];
-              if (unknownLog < earliestCheckOut) {
-                checkIns.push(unknownLog);
-              } else {
-                checkOuts.push(unknownLog);
-              }
-            } else {
-              const earliestLog = allLogsSorted[0].logDate;
-              const latestLog = allLogsSorted[allLogsSorted.length - 1].logDate;
-              if (unknownLog.getTime() === earliestLog.getTime()) {
-                checkIns.push(unknownLog);
-              } else if (unknownLog.getTime() === latestLog.getTime() && allLogsSorted.length > 1) {
-                checkOuts.push(unknownLog);
-              } else {
-                checkIns.push(unknownLog);
-              }
-            }
-          }
-
-          checkIns.sort((a, b) => a.getTime() - b.getTime());
-          checkOuts.sort((a, b) => a.getTime() - b.getTime());
-
-          let finalCheckIn: Date | null = checkIns.length > 0 ? checkIns[0] : null;
-          let finalCheckOut: Date | null = checkOuts.length > 0 ? checkOuts[checkOuts.length - 1] : null;
-
-          if (finalCheckIn && !finalCheckOut) {
-            finalCheckOut = new Date(finalCheckIn);
-            finalCheckOut.setHours(finalCheckOut.getHours() + 1);
-          }
-
-          if (finalCheckOut && !finalCheckIn) {
-            finalCheckIn = new Date(finalCheckOut);
-            finalCheckIn.setHours(finalCheckIn.getHours() - 1);
-          }
-
-          if (!finalCheckIn && !finalCheckOut) {
-            errors++;
-            continue;
-          }
-
-          if (finalCheckIn && isNaN(finalCheckIn.getTime())) {
-            errors++;
-            continue;
-          }
-          if (finalCheckOut && isNaN(finalCheckOut.getTime())) {
-            errors++;
-            continue;
-          }
-
-          if (finalCheckIn && finalCheckOut && finalCheckOut <= finalCheckIn) {
-            finalCheckOut = new Date(finalCheckIn);
-            finalCheckOut.setHours(finalCheckOut.getHours() + 1);
-          }
-
-          const existingRecord = await prisma.attendanceRecord.findUnique({
-            where: {
-              gymId_memberId_date: {
-                gymId,
-                memberId,
-                date: dateOnly,
-              },
-            },
-          });
-
-          const updateData: any = {
             deviceUserId,
-            deviceSerialNumber: device.serialNumber || undefined,
-            status: 'PRESENT',
-            checkInTime: finalCheckIn,
-            checkOutTime: finalCheckOut,
-          };
-
-          if (existingRecord) {
-            await prisma.attendanceRecord.update({
-              where: { id: existingRecord.id },
-              data: updateData,
-            });
-          } else {
-            await prisma.attendanceRecord.create({
-              data: {
-                gymId,
-                memberId,
-                date: dateOnly,
-                ...updateData,
-              },
-            });
-          }
-          synced++;
+            logDate,
+            type: log.type,
+            state: log.state,
+            deviceSerialNumber: device.serialNumber,
+          });
+          if (wrote) synced++;
         } catch (error) {
           errors++;
         }
@@ -354,10 +215,34 @@ router.post(
 
       await autoCheckoutIncompleteRecords(gymId);
 
+      const totalReceived = logs.length;
+      let message = `Synced ${synced} attendance records`;
+      if (pending > 0) {
+        message += `, stored ${pending} pending punches for unmapped users`;
+      }
+      message += `. ${errors} errors encountered.`;
+      if (pending > 0) {
+        message +=
+          ' Open the mapping window to link device users to members; pending punches will apply automatically.';
+      }
+      if (totalReceived === 0) {
+        message = 'Synced 0 attendance records. No logs were sent from the device/tablet.';
+      } else if (skippedNoUserId > 0 || skippedNoTimestamp > 0) {
+        message += ` Skipped: ${skippedNoUserId} missing user ID, ${skippedNoTimestamp} missing/invalid timestamp.`;
+      }
+
       sendSuccess(res, {
         synced,
+        pending,
         errors,
-        message: `Synced ${synced} attendance records. ${errors} errors encountered.`,
+        received: totalReceived,
+        activeMappings: deviceUserToMemberMap.size,
+        pendingDeviceUserIds: [...pendingDeviceUserIds],
+        skipped: {
+          noUserId: skippedNoUserId,
+          noTimestamp: skippedNoTimestamp,
+        },
+        message,
       });
     } catch (error) {
       sendError(res, error as Error);
@@ -1239,14 +1124,25 @@ router.post(
 
       const result = await syncAttendanceFromDevice(id, gymId, start, end);
 
+      let message = 'Attendance synced';
+      if (result.pending > 0) {
+        message =
+          `Attendance synced (${result.synced} applied, ${result.pending} pending unmapped). ` +
+          'Open the mapping window to link device users to members.';
+      }
+
       sendSuccess(
         res,
-        formatSyncResultDto({
-          syncedRecords: result.synced,
-          autoCheckedOut: result.autoCheckedOut,
-          markedInactive: result.markedInactive,
-        }),
-        'Attendance synced'
+        {
+          ...formatSyncResultDto({
+            syncedRecords: result.synced,
+            autoCheckedOut: result.autoCheckedOut,
+            markedInactive: result.markedInactive,
+          }),
+          pending: result.pending,
+          errors: result.errors,
+        },
+        message
       );
     } catch (error) {
       sendError(res, error as Error);
@@ -1301,10 +1197,12 @@ router.post(
         res,
         {
           ...formatSyncResultDto({
-            syncedRecords: result.mapped,
+            syncedRecords: result.stored,
             autoCheckedOut: policies.autoCheckedOut,
             markedInactive: policies.markedInactive,
           }),
+          stored: result.stored,
+          mappedCount: existingMappings.length,
           unmappedDeviceUsers: unmappedDeviceUsers.map((u) => ({
             uid: u.uid,
             name: u.name,
@@ -1312,7 +1210,9 @@ router.post(
           })),
           unmappedCount: unmappedDeviceUsers.length,
         },
-        'Users synced successfully'
+        unmappedDeviceUsers.length > 0
+          ? `Synced ${result.stored} device users. ${unmappedDeviceUsers.length} need mapping confirmation.`
+          : 'Users synced successfully'
       );
     } catch (error) {
       sendError(res, error as Error);
@@ -1432,6 +1332,77 @@ router.delete(
 );
 
 // ============ User Mapping Routes ============
+
+// GET /api/device/:id/mapping-candidates — data for the mapping window
+// Exact name matches include suggestedMember (still requires confirm).
+// unmappedMembers is the dropdown list (members not yet mapped on this device).
+router.get(
+  '/:id/mapping-candidates',
+  validate(getDeviceConfigSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const id = parseInt(req.params.id, 10);
+
+      const device = await prisma.deviceConfig.findFirst({
+        where: { id, gymId },
+      });
+
+      if (!device) {
+        sendError(res, new NotFoundError('Device configuration', id));
+        return;
+      }
+
+      const candidates = await getMappingCandidates(id, gymId);
+      sendSuccess(res, candidates);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// POST /api/device/:id/mappings/confirm — confirm mappings (exact suggestions or dropdown picks)
+// Applies any pending attendance punches for each confirmed device user.
+router.post(
+  '/:id/mappings/confirm',
+  validate(confirmUserMappingsSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const id = parseInt(req.params.id, 10);
+      const { mappings } = req.body as {
+        mappings: Array<{ deviceUserId: string; memberId: number }>;
+      };
+
+      const device = await prisma.deviceConfig.findFirst({
+        where: { id, gymId },
+      });
+
+      if (!device) {
+        sendError(res, new NotFoundError('Device configuration', id));
+        return;
+      }
+
+      const result = await confirmDeviceUserMappings(
+        id,
+        gymId,
+        mappings,
+        device.serialNumber
+      );
+
+      await autoCheckoutIncompleteRecords(gymId);
+
+      sendSuccess(res, {
+        ...result,
+        message:
+          `Mapped ${result.mapped} users. Applied ${result.attendanceSynced} pending attendance punches.` +
+          (result.errors.length > 0 ? ` ${result.errors.length} issues.` : ''),
+      });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
 
 // GET /api/device/:id/unmapped-members - Get members without device mappings
 router.get(
@@ -1586,6 +1557,15 @@ router.post(
         return;
       }
 
+      // Check member is not already mapped on this device
+      const memberAlreadyMapped = await prisma.deviceUserMapping.findFirst({
+        where: { deviceConfigId: id, memberId, isActive: true },
+      });
+      if (memberAlreadyMapped) {
+        sendError(res, new BadRequestError('This member is already mapped to another device user'));
+        return;
+      }
+
       const mapping = await prisma.deviceUserMapping.create({
         data: {
           deviceConfigId: id,
@@ -1605,7 +1585,24 @@ router.post(
         },
       });
 
-      sendSuccess(res, mapping, undefined, 201);
+      const attendanceSynced = await processPendingLogsForDeviceUser(
+        gymId,
+        id,
+        deviceUserId,
+        memberId,
+        device.serialNumber
+      );
+
+      await autoCheckoutIncompleteRecords(gymId);
+
+      sendSuccess(
+        res,
+        { ...mapping, attendanceSynced },
+        attendanceSynced > 0
+          ? `Mapping created. Applied ${attendanceSynced} pending attendance punches.`
+          : undefined,
+        201
+      );
     } catch (error) {
       sendError(res, error as Error);
     }

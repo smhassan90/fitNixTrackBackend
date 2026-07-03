@@ -73,6 +73,22 @@ export const createUserMappingSchema = z.object({
   }),
 });
 
+export const confirmUserMappingsSchema = z.object({
+  params: z.object({
+    id: z.string().regex(/^\d+$/, 'Device ID must be a number').transform((val) => parseInt(val, 10)),
+  }),
+  body: z.object({
+    mappings: z
+      .array(
+        z.object({
+          deviceUserId: z.string().min(1, 'Device user ID is required'),
+          memberId: z.number().int().positive(),
+        })
+      )
+      .min(1, 'At least one mapping is required'),
+  }),
+});
+
 export const updateUserMappingSchema = z.object({
   params: z.object({
     id: z.string().regex(/^\d+$/, 'Mapping ID must be a number').transform((val) => parseInt(val, 10)), // mapping id
