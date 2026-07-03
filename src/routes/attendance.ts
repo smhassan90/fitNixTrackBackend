@@ -6,16 +6,61 @@ import { requireGymId } from '../middleware/multiTenant';
 import {
   getAttendanceSchema,
   getAttendanceRecordSchema,
+  getNoSignInMembersSchema,
+  applyAttendancePoliciesSchema,
 } from '../validations/attendance';
 import { sendSuccess, sendError } from '../utils/response';
-import { NotFoundError } from '../utils/errors';
+import { NotFoundError, ValidationError } from '../utils/errors';
 import { parseDate, getStartOfDay, getEndOfDay } from '../utils/dateHelpers';
+import {
+  applyAttendancePolicies,
+  listMembersWithoutSignInSince,
+} from '../services/attendancePolicyService';
+import { requireRole } from '../middleware/auth';
 
 const router = Router();
 
 // All routes require authentication and gymId
 router.use(authenticateToken);
 router.use(requireGymId);
+
+// GET /api/attendance/no-sign-in?days=2 — members who have not checked in for N days
+router.get(
+  '/no-sign-in',
+  validate(getNoSignInMembersSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const days = Number((req.query as { days?: number }).days ?? 2);
+
+      if (days < 1) {
+        sendError(res, new ValidationError('days must be at least 1'));
+        return;
+      }
+
+      const data = await listMembersWithoutSignInSince(gymId, days);
+      sendSuccess(res, data);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// POST /api/attendance/apply-policies — run auto-checkout + absence inactive (GYM_ADMIN)
+router.post(
+  '/apply-policies',
+  validate(applyAttendancePoliciesSchema),
+  requireRole('GYM_ADMIN'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const result = await applyAttendancePolicies(gymId);
+      sendSuccess(res, result, 'Attendance policies applied');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
 
 // GET /api/attendance
 router.get(

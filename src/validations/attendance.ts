@@ -18,3 +18,14 @@ export const getAttendanceRecordSchema = z.object({
   }),
 });
 
+export const getNoSignInMembersSchema = z.object({
+  query: z.object({
+    days: z
+      .string()
+      .regex(/^\d+$/, 'days must be a positive integer')
+      .optional()
+      .transform((val) => (val ? parseInt(val, 10) : 2)),
+  }),
+});
+
+export const applyAttendancePoliciesSchema = z.object({});

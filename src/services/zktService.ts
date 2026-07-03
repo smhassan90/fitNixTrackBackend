@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma';
+import { applyAttendancePolicies } from './attendancePolicyService';
 
 // Import node-zklib - it's a constructor function
 import ZKLibConstructor from 'node-zklib';
@@ -555,8 +556,8 @@ export async function syncAttendanceFromDevice(
       data: { lastSyncAt: new Date() },
     });
 
-    // Auto-checkout members who checked in on previous dates but didn't check out
-    await autoCheckoutIncompleteRecords(gymId);
+    // Auto-checkout open sessions and apply absence-based inactive rules
+    await applyAttendancePolicies(gymId);
   } catch (error) {
     console.error('Error syncing attendance:', error);
     throw error;
@@ -568,63 +569,11 @@ export async function syncAttendanceFromDevice(
 }
 
 /**
- * Auto-checkout members who checked in on previous dates but didn't check out
- * Sets checkout time to 1 hour after check-in time
- * Only processes records that are at least 1 day old to avoid interfering with recent syncs
+ * @deprecated Prefer applyAttendancePolicies. Kept for existing imports.
  */
 export async function autoCheckoutIncompleteRecords(gymId: number): Promise<number> {
-  try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    // Only auto-checkout records that are at least 1 day old
-    // This prevents interfering with records that might still have check-out logs to be synced
-    const oneDayAgo = new Date(today);
-    oneDayAgo.setDate(oneDayAgo.getDate() - 1);
-
-    // Find all records where:
-    // - checkInTime exists
-    // - checkOutTime is null
-    // - date is at least 1 day before today (to avoid interfering with recent syncs)
-    const incompleteRecords = await prisma.attendanceRecord.findMany({
-      where: {
-        gymId,
-        checkInTime: { not: null },
-        checkOutTime: null,
-        date: { lt: oneDayAgo }, // Only records older than 1 day
-      },
-    });
-
-    let autoCheckedOut = 0;
-
-    for (const record of incompleteRecords) {
-      if (record.checkInTime) {
-        // Set checkout time to 1 hour after check-in time
-        const checkOutTime = new Date(record.checkInTime);
-        checkOutTime.setHours(checkOutTime.getHours() + 1);
-
-        await prisma.attendanceRecord.update({
-          where: { id: record.id },
-          data: { checkOutTime },
-        });
-
-        console.log(
-          `Auto-checked out member ${record.memberId} for date ${record.date.toISOString().split('T')[0]}. ` +
-          `Check-in: ${record.checkInTime.toISOString()}, Check-out: ${checkOutTime.toISOString()}`
-        );
-        autoCheckedOut++;
-      }
-    }
-
-    if (autoCheckedOut > 0) {
-      console.log(`Auto-checked out ${autoCheckedOut} incomplete attendance records from previous dates`);
-    }
-
-    return autoCheckedOut;
-  } catch (error) {
-    console.error('Error auto-checking out incomplete records:', error);
-    return 0;
-  }
+  const result = await applyAttendancePolicies(gymId);
+  return result.autoCheckedOut;
 }
 
 /**

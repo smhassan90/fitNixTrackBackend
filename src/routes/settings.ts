@@ -10,12 +10,47 @@ import {
 } from '../validations/settings';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError } from '../utils/errors';
+import {
+  DEFAULT_AUTO_CHECKOUT_HOURS,
+  getGymAttendancePolicy,
+} from '../services/attendancePolicyService';
 
 const router = Router();
 
-// All routes require authentication and gymId
 router.use(authenticateToken);
 router.use(requireGymId);
+
+function formatSettingsResponse(gym: {
+  id: number;
+  name: string;
+  address: string | null;
+  phone: string | null;
+  email: string | null;
+  admissionFee: number | null;
+  autoCheckoutHours: number;
+  absenceInactiveDays: number | null;
+}) {
+  const autoCheckoutHours = gym.autoCheckoutHours ?? DEFAULT_AUTO_CHECKOUT_HOURS;
+  const absenceInactiveDays = gym.absenceInactiveDays ?? null;
+
+  return {
+    admissionFee: gym.admissionFee ?? 0,
+    autoCheckoutHours,
+    absenceInactiveDays,
+    attendancePolicy: {
+      autoCheckoutHours,
+      absenceInactiveDays,
+      absenceInactiveEnabled: absenceInactiveDays != null && absenceInactiveDays > 0,
+    },
+    gym: {
+      id: gym.id,
+      name: gym.name,
+      address: gym.address,
+      phone: gym.phone,
+      email: gym.email,
+    },
+  };
+}
 
 // GET /api/settings - Get gym settings
 router.get(
@@ -34,6 +69,8 @@ router.get(
           phone: true,
           email: true,
           admissionFee: true,
+          autoCheckoutHours: true,
+          absenceInactiveDays: true,
         },
       });
 
@@ -42,16 +79,7 @@ router.get(
         return;
       }
 
-      sendSuccess(res, {
-        admissionFee: gym.admissionFee ?? 0,
-        gym: {
-          id: gym.id,
-          name: gym.name,
-          address: gym.address,
-          phone: gym.phone,
-          email: gym.email,
-        },
-      });
+      sendSuccess(res, formatSettingsResponse(gym));
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -66,7 +94,7 @@ router.put(
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { admissionFee } = req.body;
+      const { admissionFee, autoCheckoutHours, absenceInactiveDays } = req.body;
 
       const gym = await prisma.gym.findUnique({
         where: { id: gymId },
@@ -77,9 +105,20 @@ router.put(
         return;
       }
 
-      const updateData: any = {};
+      const updateData: {
+        admissionFee?: number;
+        autoCheckoutHours?: number;
+        absenceInactiveDays?: number | null;
+      } = {};
+
       if (admissionFee !== undefined) {
         updateData.admissionFee = admissionFee;
+      }
+      if (autoCheckoutHours !== undefined) {
+        updateData.autoCheckoutHours = autoCheckoutHours;
+      }
+      if (absenceInactiveDays !== undefined) {
+        updateData.absenceInactiveDays = absenceInactiveDays;
       }
 
       const updatedGym = await prisma.gym.update({
@@ -92,33 +131,27 @@ router.put(
           phone: true,
           email: true,
           admissionFee: true,
+          autoCheckoutHours: true,
+          absenceInactiveDays: true,
         },
       });
 
-      sendSuccess(res, {
-        admissionFee: updatedGym.admissionFee ?? 0,
-        gym: {
-          id: updatedGym.id,
-          name: updatedGym.name,
-          address: updatedGym.address,
-          phone: updatedGym.phone,
-          email: updatedGym.email,
-        },
-      }, 'Settings updated successfully');
+      sendSuccess(res, formatSettingsResponse(updatedGym), 'Settings updated successfully');
     } catch (error) {
       sendError(res, error as Error);
     }
   }
 );
 
+// GET /api/settings/attendance-policy - Attendance automation settings
+router.get('/attendance-policy', async (req: AuthRequest, res: Response) => {
+  try {
+    const gymId = req.gymId!;
+    const policy = await getGymAttendancePolicy(gymId);
+    sendSuccess(res, policy);
+  } catch (error) {
+    sendError(res, error as Error);
+  }
+});
+
 export default router;
-
-
-
-
-
-
-
-
-
-

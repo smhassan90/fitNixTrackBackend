@@ -5,7 +5,7 @@ import { requireGymId } from '../middleware/multiTenant';
 import { validate } from '../middleware/validation';
 import { sendSuccess, sendError } from '../utils/response';
 import { ValidationError } from '../utils/errors';
-import { getStartOfDay, getEndOfDay, getGymTimezone, unpaidInstallmentDisplayBucket, calendarDateStringInGymTZ, startOfGymCalendarDayUtc, startOfNextGymCalendarDayUtc } from '../utils/dateHelpers';
+import { getGymTimezone, unpaidInstallmentDisplayBucket, calendarDateStringInGymTZ, startOfGymCalendarDayUtc, startOfNextGymCalendarDayUtc } from '../utils/dateHelpers';
 import { getFinancialSummarySchema, getPaymentsReceivedDailySchema, getFeeCollectionsSchema } from '../validations/reports';
 import {
   getFinancialSummary,
@@ -17,6 +17,9 @@ import {
   getCollectedAmountInDateRange,
   getRecentFeeCollections,
 } from '../services/feeCollectionService';
+import {
+  getCurrentlyInGymMembers,
+} from '../services/attendancePolicyService';
 
 const router = Router();
 const monthKeyRegex = /^\d{4}-\d{2}$/;
@@ -252,20 +255,10 @@ router.get('/stats', async (req: AuthRequest, res: Response) => {
     // Calculate workout stats (total present records)
     const workoutStats = present;
 
-    // Calculate currently in gym (members with attendance today)
-    const todayStart = getStartOfDay(today);
-    const todayEnd = getEndOfDay(today);
-
-    const todayAttendance = await prisma.attendanceRecord.count({
-      where: {
-        gymId,
-        date: {
-          gte: todayStart,
-          lte: todayEnd,
-        },
-        status: 'PRESENT',
-      },
-    });
+    // Currently in gym: checked in today, not checked out, within auto-checkout window
+    const inGym = await getCurrentlyInGymMembers(gymId);
+    const attendancePolicy = inGym.policy;
+    const overdueInGymCount = inGym.members.filter((m) => m.hasOverduePayment).length;
 
     sendSuccess(res, {
       gymId,
@@ -282,7 +275,10 @@ router.get('/stats', async (req: AuthRequest, res: Response) => {
       revenueByMonth,
       attendanceTrend,
       workoutStats,
-      currentlyInGym: todayAttendance,
+      currentlyInGym: inGym.count,
+      currentlyInGymOverdueCount: overdueInGymCount,
+      recentCheckInsWithOverdue: inGym.members.filter((m) => m.hasOverduePayment),
+      attendancePolicy,
     });
   } catch (error) {
     sendError(res, error as Error);
@@ -293,86 +289,13 @@ router.get('/stats', async (req: AuthRequest, res: Response) => {
 router.get('/currently-in-gym', async (req: AuthRequest, res: Response) => {
   try {
     const gymId = req.gymId!;
-    const today = new Date();
-    const todayStart = getStartOfDay(today);
-    const todayEnd = getEndOfDay(today);
-
-    // Get attendance records for today where:
-    // - checkInTime exists (member checked in)
-    // - checkOutTime is null (member hasn't checked out)
-    const records = await prisma.attendanceRecord.findMany({
-      where: {
-        gymId,
-        date: {
-          gte: todayStart,
-          lte: todayEnd,
-        },
-        checkInTime: {
-          not: null,
-        },
-        checkOutTime: null,
-      },
-      include: {
-        member: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-            email: true,
-          },
-        },
-      },
-      orderBy: {
-        checkInTime: 'asc',
-      },
-    });
-
-    // Format the response
-    const membersInGym = records.map((record: any) => {
-      const checkInTime = record.checkInTime as Date | null;
-      
-      // Calculate duration (time since check-in)
-      let durationMinutes: number | null = null;
-      let durationFormatted: string | null = null;
-      
-      if (checkInTime) {
-        const now = new Date();
-        const diffMs = now.getTime() - checkInTime.getTime();
-        durationMinutes = Math.round(diffMs / (1000 * 60));
-        
-        const hours = Math.floor(durationMinutes / 60);
-        const minutes = durationMinutes % 60;
-        if (hours > 0) {
-          durationFormatted = `${hours}h ${minutes}m`;
-        } else {
-          durationFormatted = `${minutes}m`;
-        }
-      }
-
-      return {
-        memberId: record.member.id,
-        memberName: record.member.name,
-        contact: record.member.phone || record.member.email || 'N/A',
-        checkInTime: checkInTime ? checkInTime.toISOString() : null,
-        checkInFormatted: checkInTime
-          ? new Date(checkInTime).toLocaleString('en-US', {
-              year: 'numeric',
-              month: '2-digit',
-              day: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit',
-              hour12: true,
-            })
-          : null,
-        durationMinutes: durationMinutes,
-        durationFormatted: durationFormatted,
-        attendanceRecordId: record.id,
-      };
-    });
+    const inGym = await getCurrentlyInGymMembers(gymId);
 
     sendSuccess(res, {
-      count: membersInGym.length,
-      members: membersInGym,
+      count: inGym.count,
+      members: inGym.members,
+      overdueCount: inGym.members.filter((m) => m.hasOverduePayment).length,
+      policy: inGym.policy,
     });
   } catch (error) {
     sendError(res, error as Error);

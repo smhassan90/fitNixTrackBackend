@@ -27,8 +27,10 @@ model Gym {
   country        String?
   phone          String?
   email          String?
-  admissionFee   Float?           @default(0) // Admission fee configured in settings
-  syncApiKey     String?          @unique @db.VarChar(128) // Permanent per-gym tablet sync key (no expiry)
+  admissionFee          Float?           @default(0) // Admission fee configured in settings
+  autoCheckoutHours     Int              @default(6) // Auto sign-out if no checkout after N hours
+  absenceInactiveDays   Int?             // Mark member inactive after N days without check-in (null = disabled)
+  syncApiKey            String?          @unique @db.VarChar(128) // Permanent per-gym tablet sync key (no expiry)
   tenantStatus   GymTenantStatus  @default(ACTIVE)
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
