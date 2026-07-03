@@ -149,6 +149,70 @@ export function initialOpenInstallmentStatus(
 }
 
 /**
+ * Billing day-of-month for receipt package coverage.
+ * Uses reactivation date when the paid month is on/after billing resume (post freeze/inactive).
+ */
+export function resolveReceiptAnchorDay(
+  membershipStart: Date | null | undefined,
+  billingResumeFrom: Date | null | undefined,
+  paymentMonthKey: string
+): number | null {
+  if (!membershipStart) {
+    return null;
+  }
+
+  const joinDay = getBillingAnchorDayUTC(membershipStart);
+  if (!billingResumeFrom) {
+    return joinDay;
+  }
+
+  const resume = new Date(billingResumeFrom);
+  resume.setUTCHours(0, 0, 0, 0);
+  const join = new Date(membershipStart);
+  join.setUTCHours(0, 0, 0, 0);
+
+  if (resume.getTime() <= join.getTime()) {
+    return joinDay;
+  }
+
+  if (paymentMonthKey >= formatMonth(resume)) {
+    return getBillingAnchorDayUTC(resume);
+  }
+
+  return joinDay;
+}
+
+/** UTC date on `yearMonthKey` (YYYY-MM) using anchor day, clamped to month length. */
+export function dateInMonthWithAnchorDay(yearMonthKey: string, anchorDay: number): Date {
+  const [y, mo] = yearMonthKey.split('-').map(Number);
+  const lastDay = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  const day = Math.min(anchorDay, lastDay);
+  return new Date(Date.UTC(y, mo - 1, day));
+}
+
+/**
+ * Package coverage on a receipt: start = anchor day in the paid month; expiry = same day next month.
+ */
+export function computeReceiptPackageCoverage(
+  paymentMonthKey: string,
+  membershipStart: Date | null | undefined,
+  billingResumeFrom: Date | null | undefined
+): { startDate: string; expiryDate: string } | null {
+  const anchorDay = resolveReceiptAnchorDay(membershipStart, billingResumeFrom, paymentMonthKey);
+  if (anchorDay === null) {
+    return null;
+  }
+
+  const startDate = dateInMonthWithAnchorDay(paymentMonthKey, anchorDay);
+  const expiryDate = nextBillingDueDate(startDate, anchorDay);
+
+  return {
+    startDate: formatDate(startDate),
+    expiryDate: formatDate(expiryDate),
+  };
+}
+
+/**
  * Last scheduled monthly due date for a package: N payments at anchor rhythm starting membershipStart.
  * Inclusive end of the billing schedule (used so the next installment after the last payment is not created).
  */

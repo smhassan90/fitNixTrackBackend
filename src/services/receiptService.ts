@@ -1,5 +1,8 @@
 import { prisma } from '../lib/prisma';
-import { formatMonth } from '../utils/dateHelpers';
+import {
+  computeReceiptPackageCoverage,
+  formatMonth,
+} from '../utils/dateHelpers';
 import { normalizeOneTimePaymentBreakdown } from './paymentService';
 
 type ReceiptPrintedBy = {
@@ -28,6 +31,7 @@ type MemberWithRelations = {
   cnic: string | null;
   membershipStart: Date | null;
   membershipEnd: Date | null;
+  billingResumeFrom?: Date | null;
   monthlyPaymentAmount: number | null;
   discount: number | null;
   isActive: boolean;
@@ -80,11 +84,21 @@ function buildMemberReceiptSection(member: MemberWithRelations) {
 }
 
 function buildPackageReceiptSection(
-  pkg: NonNullable<MemberWithRelations['package']> | null | undefined
+  pkg: NonNullable<MemberWithRelations['package']> | null | undefined,
+  coverageMonthKey: string | null | undefined,
+  member: Pick<MemberWithRelations, 'membershipStart' | 'billingResumeFrom'>
 ) {
   if (!pkg) {
     return null;
   }
+  const coverage =
+    coverageMonthKey &&
+    computeReceiptPackageCoverage(
+      coverageMonthKey,
+      member.membershipStart,
+      member.billingResumeFrom
+    );
+
   return {
     id: pkg.id,
     name: pkg.name,
@@ -92,6 +106,8 @@ function buildPackageReceiptSection(
     price: pkg.price,
     discount: pkg.discount ?? 0,
     features: pkg.features?.map((pf) => pf.feature?.name).filter(Boolean) ?? [],
+    startDate: coverage?.startDate ?? null,
+    expiryDate: coverage?.expiryDate ?? null,
   };
 }
 
@@ -157,7 +173,11 @@ export function buildOneTimePaymentReceipt(params: {
     printedBy,
     gym,
     member: buildMemberReceiptSection(member),
-    package: buildPackageReceiptSection(pkg),
+    package: buildPackageReceiptSection(
+      pkg,
+      member.membershipStart ? formatMonth(member.membershipStart) : null,
+      member
+    ),
     trainers,
     trainerFee: normalized.trainerFee,
     packageFeeMonthly: computePackageFeeMonthly(pkg),
@@ -223,7 +243,7 @@ export function buildMonthlyPaymentReceipt(params: {
     printedBy,
     gym,
     member: buildMemberReceiptSection(member),
-    package: buildPackageReceiptSection(pkg),
+    package: buildPackageReceiptSection(pkg, payment.month, member),
     trainers,
     trainerFee: normalizedSignup ? normalizedSignup.trainerFee : trainerFeeTotal,
     packageFeeMonthly: computePackageFeeMonthly(pkg),
