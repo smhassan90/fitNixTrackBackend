@@ -1679,7 +1679,25 @@ router.get(
         orderBy: { createdAt: 'desc' },
       });
 
-      sendSuccess(res, mappings);
+      const deviceUserRows = await prisma.deviceUser.findMany({
+        where: { deviceConfigId: id },
+        select: { deviceUserId: true, deviceUserName: true, deviceBadgeId: true },
+      });
+      const deviceUserById = new Map(deviceUserRows.map((row) => [row.deviceUserId, row]));
+
+      const enriched = mappings.map((mapping) => {
+        const fromDeviceUsers = deviceUserById.get(mapping.deviceUserId);
+        const resolvedName =
+          mapping.deviceUserName ?? fromDeviceUsers?.deviceUserName ?? null;
+        return {
+          ...mapping,
+          deviceUserName: resolvedName,
+          name: resolvedName,
+          deviceBadgeId: fromDeviceUsers?.deviceBadgeId ?? null,
+        };
+      });
+
+      sendSuccess(res, enriched);
     } catch (error) {
       sendError(res, error as Error);
     }

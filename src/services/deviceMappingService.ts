@@ -247,11 +247,20 @@ export async function processPendingLogsForDeviceUser(
 export interface MappingCandidate {
   deviceUserId: string;
   deviceUserName: string | null;
+  /** Alias for deviceUserName — portal/sync UI expects `name` (same as sync-users response). */
+  name: string | null;
   deviceBadgeId: string | null;
   pendingLogCount: number;
   /** Exact name match only; still requires explicit confirmation. */
   suggestedMember: { id: number; name: string } | null;
   matchType: 'exact' | null;
+}
+
+function toMappingCandidateDto(input: Omit<MappingCandidate, 'name'>): MappingCandidate {
+  return {
+    ...input,
+    name: input.deviceUserName,
+  };
 }
 
 export async function getMappingCandidates(
@@ -289,6 +298,7 @@ export async function getMappingCandidates(
   const pendingByUser = new Map(
     pendingCounts.map((row) => [row.deviceUserId, row._count._all])
   );
+  const deviceUserById = new Map(deviceUsers.map((u) => [u.deviceUserId, u]));
 
   const unmappedMembers = members.filter((m) => !mappedMemberIds.has(m.id));
 
@@ -317,28 +327,31 @@ export async function getMappingCandidates(
         }
       }
 
-      return {
+      return toMappingCandidateDto({
         deviceUserId: u.deviceUserId,
         deviceUserName: u.deviceUserName,
         deviceBadgeId: u.deviceBadgeId,
         pendingLogCount,
         suggestedMember,
         matchType,
-      };
+      });
     });
 
   // Include device users that only appear in pending logs (no DeviceUser row yet)
   for (const [deviceUserId, count] of pendingByUser) {
     if (mappedDeviceUserIds.has(deviceUserId)) continue;
     if (unmappedDeviceUsers.some((u) => u.deviceUserId === deviceUserId)) continue;
-    unmappedDeviceUsers.push({
-      deviceUserId,
-      deviceUserName: null,
-      deviceBadgeId: null,
-      pendingLogCount: count,
-      suggestedMember: null,
-      matchType: null,
-    });
+    const du = deviceUserById.get(deviceUserId);
+    unmappedDeviceUsers.push(
+      toMappingCandidateDto({
+        deviceUserId,
+        deviceUserName: du?.deviceUserName ?? null,
+        deviceBadgeId: du?.deviceBadgeId ?? null,
+        pendingLogCount: count,
+        suggestedMember: null,
+        matchType: null,
+      })
+    );
   }
 
   const totalPending = pendingCounts.reduce((sum, row) => sum + row._count._all, 0);

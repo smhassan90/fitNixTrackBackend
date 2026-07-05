@@ -535,9 +535,9 @@ model PendingAttendanceLog {
   gym          Gym          @relation(fields: [gymId], references: [id], onDelete: Cascade)
   deviceConfig DeviceConfig @relation(fields: [deviceConfigId], references: [id], onDelete: Cascade)
 
-  @@unique([deviceConfigId, deviceUserId, recordTime])
-  @@index([gymId])
-  @@index([deviceConfigId, deviceUserId])
+  @@unique([deviceConfigId, deviceUserId, recordTime], map: "pal_cfg_user_time_uniq")
+  @@index([gymId], map: "pal_gymId_idx")
+  @@index([deviceConfigId, deviceUserId], map: "pal_cfg_user_idx")
   @@map("pending_attendance_logs")
 }
 
