@@ -5,6 +5,10 @@ const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD');
 
 const slugRegex = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+/** Platform subscription prepaid cycles (YEARLY kept as alias input → prefer ANNUAL). */
+const billingCycleZ = z.enum(['MONTHLY', 'BIANNUAL', 'ANNUAL', 'QUARTERLY', 'YEARLY']);
+const subscriptionBillingCycleZ = z.enum(['MONTHLY', 'BIANNUAL', 'ANNUAL']);
+
 /** Full http(s) URL (e.g. Vercel Blob), or path returned by backend disk upload (`/uploads/logos/...`). */
 export const logoUrlSchema = z.preprocess(
   (val) => (val === '' ? undefined : val),
@@ -53,23 +57,34 @@ export const platformGymIdParamSchema = z.object({
 });
 
 export const platformCreateGymSchema = z.object({
-  body: z.object({
-    name: z.string().min(1).max(191),
-    slug: z.string().min(2).max(64).regex(slugRegex),
-    logoUrl: logoUrlSchema,
-    address: z.string().max(500).optional().nullable(),
-    city: z.string().min(1).max(120),
-    country: z.string().min(1).max(120),
-    ownerAdmin: z.object({
+  body: z
+    .object({
       name: z.string().min(1).max(191),
-      email: z.string().email().max(191),
-      phone: z.string().max(40).optional().nullable(),
-      password: z.string().min(8).max(128).optional(),
+      slug: z.string().min(2).max(64).regex(slugRegex),
+      logoUrl: logoUrlSchema,
+      address: z.string().max(500).optional().nullable(),
+      city: z.string().min(1).max(120),
+      country: z.string().min(1).max(120),
+      ownerAdmin: z.object({
+        name: z.string().min(1).max(191),
+        email: z.string().email().max(191),
+        phone: z.string().max(40).optional().nullable(),
+        password: z.string().min(8).max(128).optional(),
+      }),
+      planId: z.coerce.number().int().positive(),
+      dueDate: ymd.optional(),
+      billingCycle: subscriptionBillingCycleZ.optional().default('MONTHLY'),
+      isActive: z.boolean().optional().default(true),
+    })
+    .superRefine((body, ctx) => {
+      if (!body.dueDate && !body.billingCycle) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'dueDate or billingCycle is required',
+          path: ['dueDate'],
+        });
+      }
     }),
-    planId: z.coerce.number().int().positive(),
-    dueDate: ymd,
-    isActive: z.boolean().optional().default(true),
-  }),
 });
 
 export const platformPatchGymSchema = z.object({
@@ -98,6 +113,7 @@ export const platformSubscriptionPatchSchema = z.object({
     .object({
       planId: z.coerce.number().int().positive().optional(),
       dueDate: ymd.optional(),
+      billingCycle: subscriptionBillingCycleZ.optional(),
       markPaidAt: ymd.optional(),
       notes: z.string().max(2000).optional().nullable(),
     })
@@ -105,9 +121,10 @@ export const platformSubscriptionPatchSchema = z.object({
       (b) =>
         b.planId !== undefined ||
         b.dueDate !== undefined ||
+        b.billingCycle !== undefined ||
         b.markPaidAt !== undefined ||
         b.notes !== undefined,
-      { message: 'At least one of planId, dueDate, markPaidAt, notes is required' }
+      { message: 'At least one of planId, dueDate, billingCycle, markPaidAt, notes is required' }
     ),
 });
 
@@ -268,7 +285,6 @@ export const platformTopMembersQuerySchema = z.object({
 
 const platformRoleZ = z.enum(['SUPER_ADMIN', 'PLATFORM_SUPPORT']);
 const billingPlanCodeRegex = /^[A-Z0-9_]+$/;
-const billingCycleZ = z.enum(['MONTHLY', 'QUARTERLY', 'YEARLY']);
 const featureCodeRegex = /^[A-Z0-9_]+$/;
 
 const permissionKeysBody = z
@@ -336,9 +352,12 @@ export const platformBillingPlanCreateSchema = z.object({
     name: z.string().min(1).max(191),
     code: z.string().min(1).max(64).regex(billingPlanCodeRegex),
     description: z.string().max(2000).optional().nullable(),
+    /** Monthly base price */
     price: z.coerce.number().min(0),
     currency: z.string().min(1).max(10),
-    billingCycle: billingCycleZ,
+    billingCycle: billingCycleZ.optional().default('MONTHLY'),
+    maxMembers: z.coerce.number().int().positive().optional().nullable(),
+    features: z.unknown().optional().nullable(),
     isActive: z.boolean().optional().default(true),
     sortOrder: z.coerce.number().int().optional().default(0),
   }),
@@ -356,6 +375,8 @@ export const platformBillingPlanPatchSchema = z.object({
       price: z.coerce.number().min(0).optional(),
       currency: z.string().min(1).max(10).optional(),
       billingCycle: billingCycleZ.optional(),
+      maxMembers: z.coerce.number().int().positive().optional().nullable(),
+      features: z.unknown().optional().nullable(),
       isActive: z.boolean().optional(),
       sortOrder: z.coerce.number().int().optional(),
     })

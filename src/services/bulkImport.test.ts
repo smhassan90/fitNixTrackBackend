@@ -90,7 +90,7 @@ test('mapMemberRow accepts gym spreadsheet headers (Member ID, Joining Date, etc
   assert.equal(mapped.packageName, '1 Month');
   assert.equal(mapped.trainerName, 'John Trainer');
   assert.equal(mapped.status, 'Active');
-  assert.equal(mapped.memberId, '42');
+  assert.equal(mapped.legacyMemberId, '42');
 });
 
 test('mapMemberRow accepts Admission Date, Current Package, and skips Not Assigned / N/A', () => {

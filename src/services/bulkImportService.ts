@@ -286,16 +286,22 @@ type MemberLookup = {
   id: number;
   name: string;
   phone: string | null;
+  legacyMemberId: string | null;
 };
 
 function buildMemberLookupIndexes(members: MemberLookup[]): {
   byPhone: Map<string, MemberLookup[]>;
   byName: Map<string, MemberLookup[]>;
+  byLegacyId: Map<string, MemberLookup>;
 } {
   const byPhone = new Map<string, MemberLookup[]>();
   const byName = new Map<string, MemberLookup[]>();
+  const byLegacyId = new Map<string, MemberLookup>();
 
   for (const member of members) {
+    if (member.legacyMemberId) {
+      byLegacyId.set(member.legacyMemberId.trim(), member);
+    }
     if (member.phone) {
       const phoneKey = normalizePhoneKey(member.phone);
       if (phoneKey.length >= 7) {
@@ -310,14 +316,23 @@ function buildMemberLookupIndexes(members: MemberLookup[]): {
     byName.set(nameKey, list);
   }
 
-  return { byPhone, byName };
+  return { byPhone, byName, byLegacyId };
 }
 
 function resolveMemberForTrainerAssign(
   name: string,
   phone: string | null,
-  indexes: ReturnType<typeof buildMemberLookupIndexes>
+  indexes: ReturnType<typeof buildMemberLookupIndexes>,
+  legacyMemberId?: string | null
 ): { member: MemberLookup } | { error: string } {
+  if (legacyMemberId?.trim()) {
+    const byLegacy = indexes.byLegacyId.get(legacyMemberId.trim());
+    if (byLegacy) {
+      return { member: byLegacy };
+    }
+    return { error: `Member not found for legacy ID ${legacyMemberId.trim()}` };
+  }
+
   if (phone) {
     const phoneKey = normalizePhoneKey(phone);
     if (phoneKey.length >= 7) {
@@ -605,6 +620,17 @@ export async function importMembersFromCsv(
   const packageByDuration = new Map(packages.map((p) => [p.duration, p]));
   const trainerByName = new Map(trainers.map((t) => [normalizeNameKey(t.name), t]));
 
+  const existingLegacyIds = new Set(
+    (
+      await prisma.member.findMany({
+        where: { gymId, legacyMemberId: { not: null } },
+        select: { legacyMemberId: true },
+      })
+    )
+      .map((m) => m.legacyMemberId?.trim())
+      .filter((id): id is string => Boolean(id))
+  );
+
   for (let i = 0; i < rows.length; i++) {
     const rowNum = i + 2;
     const mapped = mapMemberRow(rows[i]);
@@ -616,6 +642,17 @@ export async function importMembersFromCsv(
     }
 
     const phoneRaw = mapped.phone?.trim() || null;
+    const legacyMemberId = mapped.legacyMemberId?.trim() || null;
+
+    if (legacyMemberId && existingLegacyIds.has(legacyMemberId)) {
+      results.push({
+        row: rowNum,
+        status: 'failed',
+        name,
+        message: `Member ID ${legacyMemberId} is already assigned in this gym`,
+      });
+      continue;
+    }
 
     let joiningDate: Date;
     let expiryDate: Date | null = null;
@@ -717,6 +754,7 @@ export async function importMembersFromCsv(
       const member = await prisma.member.create({
         data: {
           gymId,
+          legacyMemberId,
           name,
           phone: phoneRaw,
           email: mapped.email?.trim() || null,
@@ -740,6 +778,10 @@ export async function importMembersFromCsv(
         } as any,
         select: { id: true },
       });
+
+      if (legacyMemberId) {
+        existingLegacyIds.add(legacyMemberId);
+      }
 
       if (signupFees.admissionFee > 0 || signupFees.firstMonthRecurring > 0) {
         const oneTime = await prisma.oneTimePayment.create({
@@ -823,7 +865,7 @@ export async function assignMemberTrainersFromCsv(
     prisma.trainer.findMany({ where: { gymId }, select: { id: true, name: true, charges: true } }),
     prisma.member.findMany({
       where: { gymId },
-      select: { id: true, name: true, phone: true },
+      select: { id: true, name: true, phone: true, legacyMemberId: true },
     }),
   ]);
 
@@ -846,7 +888,12 @@ export async function assignMemberTrainersFromCsv(
     }
 
     const phoneRaw = mapped.phone?.trim() || null;
-    const memberResult = resolveMemberForTrainerAssign(name, phoneRaw, memberIndexes);
+    const memberResult = resolveMemberForTrainerAssign(
+      name,
+      phoneRaw,
+      memberIndexes,
+      mapped.legacyMemberId
+    );
     if ('error' in memberResult) {
       results.push({ row: rowNum, status: 'failed', name, message: memberResult.error });
       continue;
@@ -947,7 +994,7 @@ export async function importPaymentsFromCsv(
 
   const members = await prisma.member.findMany({
     where: { gymId },
-    select: { id: true, name: true, phone: true },
+    select: { id: true, name: true, phone: true, legacyMemberId: true },
   });
   const memberIndexes = buildMemberLookupIndexes(members);
 
@@ -956,13 +1003,18 @@ export async function importPaymentsFromCsv(
     const mapped = mapPaymentRow(rows[i]);
     const name = mapped.memberName?.trim();
 
-    if (!name) {
-      results.push({ row: rowNum, status: 'failed', message: 'Member name is required' });
+    if (!name && !mapped.legacyMemberId?.trim()) {
+      results.push({ row: rowNum, status: 'failed', message: 'Member name or Member ID is required' });
       continue;
     }
 
     const phoneRaw = mapped.phone?.trim() || null;
-    const memberResult = resolveMemberForTrainerAssign(name, phoneRaw, memberIndexes);
+    const memberResult = resolveMemberForTrainerAssign(
+      name ?? '',
+      phoneRaw,
+      memberIndexes,
+      mapped.legacyMemberId
+    );
     if ('error' in memberResult) {
       results.push({ row: rowNum, status: 'failed', name, message: memberResult.error });
       continue;

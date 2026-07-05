@@ -21,6 +21,10 @@ import { writePlatformAuditLog } from '../../services/platformAuditService';
 import { parseDate } from '../../utils/dateHelpers';
 import { locationCatalogService } from '../../services/locationCatalogService';
 import { findGymOwnerAdmin } from '../../services/gymOwnerAdminService';
+import {
+  addPlanBillingCycle,
+  normalizePlanBillingCycle,
+} from '../../utils/planPricing';
 import gymOwnerAdminRoutes from './gymOwnerAdmin';
 
 const router = Router();
@@ -33,16 +37,20 @@ function toYmdUtc(date: Date): string {
 }
 
 function addBillingCycle(ymd: string, billingCycle: string): string {
-  const base = new Date(`${ymd}T00:00:00.000Z`);
   const normalized = (billingCycle || '').trim().toUpperCase();
+  // Free-form durations e.g. "3 MONTHS" (legacy)
   const match = normalized.match(/^(\d+)\s*(DAY|DAYS|WEEK|WEEKS|MONTH|MONTHS|YEAR|YEARS)$/);
-  const quantity = match ? parseInt(match[1], 10) : 1;
-  const unit = match ? match[2] : 'MONTH';
-  if (unit.startsWith('DAY')) base.setUTCDate(base.getUTCDate() + quantity);
-  else if (unit.startsWith('WEEK')) base.setUTCDate(base.getUTCDate() + quantity * 7);
-  else if (unit.startsWith('YEAR')) base.setUTCFullYear(base.getUTCFullYear() + quantity);
-  else base.setUTCMonth(base.getUTCMonth() + quantity);
-  return toYmdUtc(base);
+  if (match) {
+    const base = new Date(`${ymd}T00:00:00.000Z`);
+    const quantity = parseInt(match[1], 10);
+    const unit = match[2];
+    if (unit.startsWith('DAY')) base.setUTCDate(base.getUTCDate() + quantity);
+    else if (unit.startsWith('WEEK')) base.setUTCDate(base.getUTCDate() + quantity * 7);
+    else if (unit.startsWith('YEAR')) base.setUTCFullYear(base.getUTCFullYear() + quantity);
+    else base.setUTCMonth(base.getUTCMonth() + quantity);
+    return toYmdUtc(base);
+  }
+  return addPlanBillingCycle(ymd, billingCycle);
 }
 
 async function generateUniqueReceiptNo(): Promise<string> {
@@ -265,7 +273,10 @@ router.post(
       const paidAtDate = parseDate(body.paidAt);
       const normalizedCurrency = body.currency.trim().toUpperCase();
       const normalizedNotes = body.notes?.trim() || null;
-      const nextDueDate = addBillingCycle(body.paidAt, gym.gymSubscription.plan.billingCycle);
+      const subscriptionCycle =
+        (gym.gymSubscription as { billingCycle?: string }).billingCycle ||
+        gym.gymSubscription.plan.billingCycle;
+      const nextDueDate = addBillingCycle(body.paidAt, subscriptionCycle);
 
       await prisma.$executeRaw(Prisma.sql`
         INSERT INTO billing_payments
@@ -358,8 +369,12 @@ router.post(
         ownerAdmin,
         planId,
         dueDate,
+        billingCycle: billingCycleRaw,
         isActive,
       } = req.body;
+      const billingCycle = normalizePlanBillingCycle(billingCycleRaw || 'MONTHLY');
+      const resolvedDueDate =
+        dueDate || addPlanBillingCycle(toYmdUtc(new Date()), billingCycle);
 
       const plan = await prisma.plan.findUnique({ where: { id: planId } });
       if (!plan) {
@@ -418,7 +433,8 @@ router.post(
           data: {
             gymId: gym.id,
             planId,
-            dueDate: parseDate(dueDate),
+            dueDate: parseDate(resolvedDueDate),
+            billingCycle,
             status: 'ACTIVE',
           },
         });
@@ -450,7 +466,8 @@ router.post(
           name: result.gym.name,
           slug: result.gym.slug,
           planId,
-          dueDate,
+          dueDate: resolvedDueDate,
+          billingCycle,
         },
       });
       await writePlatformAuditLog({
@@ -725,9 +742,10 @@ router.patch(
         return;
       }
 
-      const { planId, dueDate, markPaidAt, notes } = req.body as {
+      const { planId, dueDate, billingCycle: billingCycleRaw, markPaidAt, notes } = req.body as {
         planId?: number;
         dueDate?: string;
+        billingCycle?: string;
         markPaidAt?: string;
         notes?: string | null;
       };
@@ -740,9 +758,19 @@ router.patch(
         }
       }
 
+      const billingCycle = billingCycleRaw
+        ? normalizePlanBillingCycle(billingCycleRaw)
+        : undefined;
+      const resolvedDueDate =
+        dueDate ||
+        (billingCycle
+          ? addPlanBillingCycle(toYmdUtc(new Date()), billingCycle)
+          : undefined);
+
       const data: Prisma.GymSubscriptionUpdateInput = {};
       if (planId) data.plan = { connect: { id: planId } };
-      if (dueDate) data.dueDate = parseDate(dueDate);
+      if (resolvedDueDate) data.dueDate = parseDate(resolvedDueDate);
+      if (billingCycle) data.billingCycle = billingCycle;
       if (notes !== undefined) data.notes = notes;
 
       if (markPaidAt) {
@@ -761,16 +789,16 @@ router.patch(
           actorRole: actor.role,
           actionType: 'PLAN_CHANGE',
           targetGymId: id,
-          metadata: { planId },
+          metadata: { planId, billingCycle: billingCycle ?? updated.billingCycle },
         });
       }
-      if (dueDate) {
+      if (resolvedDueDate) {
         await writePlatformAuditLog({
           actorUserId: actor.id,
           actorRole: actor.role,
           actionType: 'DUE_DATE_EXTEND',
           targetGymId: id,
-          metadata: { dueDate },
+          metadata: { dueDate: resolvedDueDate, billingCycle },
         });
       }
       if (markPaidAt) {

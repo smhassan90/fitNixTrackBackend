@@ -34,17 +34,43 @@ afterEach(() => {
   }
 });
 
+const samplePlan = {
+  id: 11,
+  name: 'Basic',
+  code: 'BASIC',
+  description: null,
+  price: 1000,
+  currency: 'PKR',
+  billingCycle: 'MONTHLY',
+  maxMembers: 100,
+  isActive: true,
+  sortOrder: 1,
+  features: null,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  deletedAt: null,
+};
+
 test('create/update/delete billing plan', async () => {
-  const queryQueue: any[] = [
-    [], // create dup check
-    [{ id: 11, name: 'Basic', code: 'BASIC', description: null, price: 1000, currency: 'PKR', billingCycle: 'MONTHLY', isActive: true, sortOrder: 1, createdAt: new Date(), updatedAt: new Date(), deletedAt: null }],
-    [{ id: 11 }], // patch exists
-    [{ id: 11, name: 'Basic+', code: 'BASIC', description: null, price: 1200, currency: 'PKR', billingCycle: 'MONTHLY', isActive: true, sortOrder: 1, createdAt: new Date(), updatedAt: new Date(), deletedAt: null }],
-    [{ id: 11, name: 'Basic+' }], // delete exists
-    [{ count: BigInt(0) }], // delete in-use
-  ];
-  mockMethod(prisma as any, '$queryRaw', (async () => queryQueue.shift() ?? []) as any);
-  mockMethod(prisma as any, '$executeRaw', (async () => 1) as any);
+  mockMethod(prisma.plan as any, 'findFirst', (async (args: any) => {
+    if (args?.where?.code === 'BASIC' && !args?.where?.id) return null;
+    if (args?.where?.id === 11) return { id: 11, name: 'Basic+' };
+    return null;
+  }) as any);
+  mockMethod(
+    prisma.plan as any,
+    'create',
+    (async () => ({ ...samplePlan })) as any
+  );
+  mockMethod(
+    prisma.plan as any,
+    'update',
+    (async (args: any) => {
+      if (args?.data?.deletedAt) return { ...samplePlan, isActive: false, deletedAt: new Date() };
+      return { ...samplePlan, name: 'Basic+', price: 1200 };
+    }) as any
+  );
+  mockMethod(prisma.gymSubscription as any, 'count', (async () => 0) as any);
   mockMethod(prisma.platformAuditLog as any, 'create', (async () => ({ id: 1 })) as any);
 
   const app = appWithRole('SUPER_ADMIN');
@@ -54,8 +80,13 @@ test('create/update/delete billing plan', async () => {
     price: 1000,
     currency: 'PKR',
     billingCycle: 'MONTHLY',
+    maxMembers: 100,
   });
   assert.equal(createRes.status, 201);
+  assert.equal(createRes.body.data.monthlyPrice, 1000);
+  assert.equal('pricing' in createRes.body.data, false);
+  assert.equal(createRes.body.data.maxMembers, 100);
+
   const patchRes = await request(app).patch('/admin/billing/plans/11').send({ price: 1200, name: 'Basic+' });
   assert.equal(patchRes.status, 200, JSON.stringify(patchRes.body));
   const deleteRes = await request(app).delete('/admin/billing/plans/11');
@@ -63,7 +94,7 @@ test('create/update/delete billing plan', async () => {
 });
 
 test('duplicate code validation + in-use protection + support role forbidden', async () => {
-  mockMethod(prisma as any, '$queryRaw', (async () => [{ id: 55 }]) as any);
+  mockMethod(prisma.plan as any, 'findFirst', (async () => ({ id: 55 })) as any);
   const app = appWithRole('SUPER_ADMIN');
   const duplicate = await request(app).post('/admin/billing/plans').send({
     name: 'Basic',
@@ -74,11 +105,8 @@ test('duplicate code validation + in-use protection + support role forbidden', a
   });
   assert.equal(duplicate.status, 400);
 
-  const queryQueue: any[] = [
-    [{ id: 11, name: 'In Use Plan' }],
-    [{ count: BigInt(2) }],
-  ];
-  mockMethod(prisma as any, '$queryRaw', (async () => queryQueue.shift() ?? []) as any);
+  mockMethod(prisma.plan as any, 'findFirst', (async () => ({ id: 11, name: 'In Use Plan' })) as any);
+  mockMethod(prisma.gymSubscription as any, 'count', (async () => 2) as any);
   const inUse = await request(app).delete('/admin/billing/plans/11');
   assert.equal(inUse.status, 409);
   assert.equal(inUse.body.error.code, 'PLAN_IN_USE');

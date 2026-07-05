@@ -39,17 +39,23 @@ function withPlatformUser(role: 'SUPER_ADMIN' | 'PLATFORM_SUPPORT' = 'SUPER_ADMI
 }
 
 test('GET /billing/plans?active=true returns active plan payload', async () => {
-  mockMethod(prisma as any, '$queryRaw', (async () => {
+  mockMethod(prisma.plan as any, 'findMany', (async () => {
     return [
       {
         id: 1,
-        name: 'Basic Monthly',
-        code: 'BASIC_MONTHLY',
+        name: 'Starter',
+        code: 'STARTER',
+        description: 'Best for gyms with up to 100 members',
         price: 2500,
         currency: 'PKR',
         billingCycle: 'MONTHLY',
+        maxMembers: 100,
         isActive: true,
         sortOrder: 1,
+        features: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        deletedAt: null,
       },
     ];
   }) as any);
@@ -62,8 +68,11 @@ test('GET /billing/plans?active=true returns active plan payload', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.body.success, true);
   assert.equal(res.body.data.length, 1);
-  assert.equal(res.body.data[0].code, 'BASIC_MONTHLY');
+  assert.equal(res.body.data[0].code, 'STARTER');
   assert.equal(res.body.data[0].isActive, true);
+  assert.equal(res.body.data[0].maxMembers, 100);
+  assert.equal(res.body.data[0].monthlyPrice, 2500);
+  assert.equal('pricing' in res.body.data[0], false);
 });
 
 test('POST /gyms creates gym with active plan', async () => {
@@ -94,9 +103,13 @@ test('POST /gyms creates gym with active plan', async () => {
             slug: data.slug,
             tenantStatus: data.tenantStatus,
           }),
+          update: async ({ data }: any) => ({
+            id: 101,
+            ...data,
+          }),
         },
         gymSubscription: {
-          create: async () => ({ id: 202 }),
+          create: async ({ data }: any) => ({ id: 202, ...data }),
         },
         user: {
           create: async ({ data }: any) => ({
@@ -149,8 +162,9 @@ test('GET /billing/dues serializes BigInt fields', async () => {
       gymId: 12,
       dueDate: new Date('2026-05-01'),
       status: 'ACTIVE',
+      billingCycle: 'ANNUAL',
       gym: { id: 12, name: 'Gym B', slug: 'gym-b', tenantStatus: 'ACTIVE' },
-      plan: { id: 2, name: 'Basic Monthly', price: 2500, billingCycle: 'MONTHLY' },
+      plan: { id: 2, name: 'Starter', price: 2500, billingCycle: 'MONTHLY', maxMembers: 100 },
     },
   ]) as any);
   mockMethod(prisma as any, '$queryRaw', (async () => [
@@ -170,4 +184,7 @@ test('GET /billing/dues serializes BigInt fields', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.body.success, true);
   assert.equal(res.body.data.items[0].paymentHistoryCount, '3');
+  assert.equal(res.body.data.items[0].amountDue, 24000);
+  assert.equal(res.body.data.items[0].billingCycle, 'ANNUAL');
+  assert.equal(res.body.data.items[0].maxMembers, 100);
 });

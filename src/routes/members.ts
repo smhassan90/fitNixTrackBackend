@@ -19,6 +19,7 @@ import {
   assertMemberDiscountWithinLimit,
   resolveMaxMemberDiscount,
 } from '../services/memberDiscountPolicy';
+import { assertGymCanAddActiveMember } from '../services/planMemberLimitService';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import {
@@ -111,6 +112,29 @@ function normalizeMemberDobForResponse<T extends { dateOfBirth?: Date | null }>(
   };
 }
 
+async function assertLegacyMemberIdAvailable(
+  gymId: number,
+  legacyMemberId: string | null | undefined,
+  excludeMemberId?: number
+): Promise<void> {
+  if (!legacyMemberId) return;
+
+  const existing = await prisma.member.findFirst({
+    where: {
+      gymId,
+      legacyMemberId,
+      ...(excludeMemberId != null ? { id: { not: excludeMemberId } } : {}),
+    },
+    select: { id: true },
+  });
+
+  if (existing) {
+    throw new ValidationError(
+      `Member ID "${legacyMemberId}" is already assigned to another member in this gym`
+    );
+  }
+}
+
 // All routes require authentication and gymId
 router.use(authenticateToken);
 router.use(requireGymId);
@@ -160,8 +184,11 @@ router.get(
           { email: { contains: search } },
           { phone: { contains: search } },
           { cnic: { contains: search } },
-          // If search is a number, also search by ID
-          ...(isNaN(searchNum) ? [] : [{ id: searchNum }]),
+          { legacyMemberId: { contains: search } },
+          // If search is a number, also search by system ID or exact legacy ID
+          ...(isNaN(searchNum)
+            ? []
+            : [{ id: searchNum }, { legacyMemberId: search.trim() }]),
         ];
       }
 
@@ -178,6 +205,7 @@ router.get(
           where,
           select: {
             id: true,
+            legacyMemberId: true,
             gymId: true,
             name: true,
             phone: true,
@@ -282,6 +310,7 @@ router.get(
         where: { id: memberId, gymId },
         select: {
           id: true,
+          legacyMemberId: true,
           gymId: true,
           name: true,
           phone: true,
@@ -375,6 +404,7 @@ router.post(
     try {
       const gymId = req.gymId!;
       const {
+        legacyMemberId,
         name,
         phone,
         email,
@@ -388,6 +418,8 @@ router.post(
         trainerIds = [],
       } = req.body;
 
+      await assertLegacyMemberIdAvailable(gymId, legacyMemberId);
+
       // Get gym settings (admission fee, discount cap)
       const gym = await prisma.gym.findUnique({
         where: { id: gymId },
@@ -398,6 +430,8 @@ router.post(
         sendError(res, new NotFoundError('Gym', gymId));
         return;
       }
+
+      await assertGymCanAddActiveMember(gymId);
 
       const admissionFee = gym.admissionFee ?? 0;
       const maxMemberDiscount = resolveMaxMemberDiscount(gym);
@@ -443,6 +477,7 @@ router.post(
       const member: any = await prisma.member.create({
         data: {
           gymId,
+          legacyMemberId: legacyMemberId ?? null,
           name,
           phone: phone || null,
           email: email || null,
@@ -532,6 +567,7 @@ async function updateMemberHandler(req: AuthRequest, res: Response): Promise<voi
       // id is transformed to number by validation middleware
       const memberId = typeof id === 'number' ? id : parseInt(id as string, 10);
       const {
+        legacyMemberId,
         name,
         phone,
         email,
@@ -566,6 +602,10 @@ async function updateMemberHandler(req: AuthRequest, res: Response): Promise<voi
         assertMemberDiscountWithinLimit(discount, resolveMaxMemberDiscount(gym));
       }
 
+      if (legacyMemberId !== undefined) {
+        await assertLegacyMemberIdAvailable(gymId, legacyMemberId, memberId);
+      }
+
       // Validate package exists if provided
       if (packageId) {
         const packageExists = await prisma.package.findFirst({
@@ -594,6 +634,7 @@ async function updateMemberHandler(req: AuthRequest, res: Response): Promise<voi
 
       // Update member
       const updateData: any = {};
+      if (legacyMemberId !== undefined) updateData.legacyMemberId = legacyMemberId;
       if (name !== undefined) updateData.name = name;
       if (phone !== undefined) updateData.phone = phone;
       if (email !== undefined) updateData.email = email;
@@ -775,6 +816,8 @@ router.patch(
         sendError(res, new ValidationError('Member is already active'));
         return;
       }
+
+      await assertGymCanAddActiveMember(gymId);
 
       const inactiveFrom = member.inactiveFrom;
       if (!inactiveFrom) {

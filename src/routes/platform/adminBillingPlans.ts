@@ -12,6 +12,7 @@ import {
 import { sendError, sendSuccess } from '../../utils/response';
 import { AppError, NotFoundError, ValidationError } from '../../utils/errors';
 import { writePlatformAuditLog } from '../../services/platformAuditService';
+import { serializePlatformPlan } from '../../utils/planPricing';
 
 const router = Router();
 const readRoles = [PlatformRole.SUPER_ADMIN, PlatformRole.PLATFORM_SUPPORT] as const;
@@ -32,42 +33,20 @@ router.get(
     try {
       const q = req.query as Record<string, string | undefined>;
       const active = q.active;
-      const activeFilter =
-        active === undefined
-          ? Prisma.sql``
-          : active === 'true'
-            ? Prisma.sql`AND isActive = TRUE`
-            : Prisma.sql`AND isActive = FALSE`;
-      const rows = await prisma.$queryRaw<
-        Array<{
-          id: number;
-          name: string;
-          code: string | null;
-          description: string | null;
-          price: number;
-          currency: string;
-          billingCycle: string;
-          isActive: boolean;
-          sortOrder: number;
-          createdAt: Date;
-          updatedAt: Date;
-          deletedAt: Date | null;
-        }>
-      >(Prisma.sql`
-        SELECT id, name, code, description, price, currency, billingCycle, isActive, sortOrder, createdAt, updatedAt, deletedAt
-        FROM plans
-        WHERE deletedAt IS NULL
-        ${activeFilter}
-        ORDER BY sortOrder ASC, name ASC
-      `);
+      const plans = await prisma.plan.findMany({
+        where: {
+          deletedAt: null,
+          ...(active === 'true'
+            ? { isActive: true }
+            : active === 'false'
+              ? { isActive: false }
+              : {}),
+        },
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+      });
       sendSuccess(
         res,
-        rows.map((r) => ({
-          ...r,
-          amount: r.price,
-          packageName: r.name,
-          status: r.isActive ? 'ACTIVE' : 'INACTIVE',
-        }))
+        plans.map((p) => serializePlatformPlan(p))
       );
     } catch (error) {
       sendError(res, error as Error);
@@ -88,26 +67,40 @@ router.post(
         description?: string | null;
         price: number;
         currency: string;
-        billingCycle: 'MONTHLY' | 'QUARTERLY' | 'YEARLY';
+        billingCycle?: 'MONTHLY' | 'BIANNUAL' | 'ANNUAL';
+        maxMembers?: number | null;
+        features?: Prisma.InputJsonValue;
         isActive?: boolean;
         sortOrder?: number;
       };
       const code = normalizeCode(body.code);
       const currency = normalizeCurrency(body.currency);
-      const codeDup = await prisma.$queryRaw<Array<{ id: number }>>(Prisma.sql`
-        SELECT id FROM plans WHERE code = ${code} AND deletedAt IS NULL LIMIT 1
-      `);
-      if (codeDup.length > 0) {
+      const billingCycle = (body.billingCycle || 'MONTHLY').toUpperCase();
+
+      const existing = await prisma.plan.findFirst({
+        where: { code, deletedAt: null },
+        select: { id: true },
+      });
+      if (existing) {
         throw new ValidationError('Plan code already exists', { code: 'VALIDATION_ERROR', field: 'code' });
       }
 
+      let plan;
       try {
-        await prisma.$executeRaw(Prisma.sql`
-          INSERT INTO plans
-            (name, code, description, price, currency, billingCycle, isActive, sortOrder, createdAt, updatedAt, deletedAt)
-          VALUES
-            (${body.name.trim()}, ${code}, ${body.description ?? null}, ${body.price}, ${currency}, ${body.billingCycle}, ${body.isActive ?? true}, ${body.sortOrder ?? 0}, NOW(3), NOW(3), NULL)
-        `);
+        plan = await prisma.plan.create({
+          data: {
+            name: body.name.trim(),
+            code,
+            description: body.description ?? null,
+            price: body.price,
+            currency,
+            billingCycle,
+            maxMembers: body.maxMembers ?? null,
+            features: body.features === undefined ? undefined : body.features,
+            isActive: body.isActive ?? true,
+            sortOrder: body.sortOrder ?? 0,
+          },
+        });
       } catch (error) {
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
           throw new ValidationError('Plan code already exists', { code: 'VALIDATION_ERROR', field: 'code' });
@@ -115,25 +108,14 @@ router.post(
         throw error;
       }
 
-      const rows = await prisma.$queryRaw<Array<any>>(Prisma.sql`
-        SELECT id, name, code, description, price, currency, billingCycle, isActive, sortOrder, createdAt, updatedAt, deletedAt
-        FROM plans WHERE code = ${code} LIMIT 1
-      `);
-      const plan = rows[0];
-
       await writePlatformAuditLog({
         actorUserId: actor.id,
         actorRole: actor.role,
         actionType: 'BILLING_PLAN_CREATE',
-        metadata: { planId: plan.id, code: plan.code, name: plan.name },
+        metadata: { planId: plan.id, code: plan.code, name: plan.name, maxMembers: plan.maxMembers },
       });
 
-      sendSuccess(
-        res,
-        { ...plan, amount: plan.price, packageName: plan.name, status: plan.isActive ? 'ACTIVE' : 'INACTIVE' },
-        'Billing plan created',
-        201
-      );
+      sendSuccess(res, serializePlatformPlan(plan), 'Billing plan created', 201);
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -149,39 +131,46 @@ router.patch(
       const actor = req.platformUser!;
       const id = parseInt(req.params.id, 10);
       const body = req.body as Record<string, unknown>;
-      const existing = await prisma.$queryRaw<Array<{ id: number }>>(Prisma.sql`
-        SELECT id FROM plans WHERE id = ${id} AND deletedAt IS NULL LIMIT 1
-      `);
-      if (existing.length === 0) {
+
+      const existing = await prisma.plan.findFirst({
+        where: { id, deletedAt: null },
+        select: { id: true },
+      });
+      if (!existing) {
         throw new NotFoundError('Billing plan', id);
       }
 
-      const updates: Prisma.Sql[] = [];
-      if (body.name !== undefined) updates.push(Prisma.sql`name = ${String(body.name).trim()}`);
-      if (body.code !== undefined) updates.push(Prisma.sql`code = ${normalizeCode(String(body.code))}`);
-      if (body.description !== undefined) updates.push(Prisma.sql`description = ${body.description ?? null}`);
-      if (body.price !== undefined) updates.push(Prisma.sql`price = ${Number(body.price)}`);
-      if (body.currency !== undefined) {
-        updates.push(Prisma.sql`currency = ${normalizeCurrency(String(body.currency))}`);
-      }
-      if (body.billingCycle !== undefined) updates.push(Prisma.sql`billingCycle = ${String(body.billingCycle)}`);
-      if (body.isActive !== undefined) updates.push(Prisma.sql`isActive = ${Boolean(body.isActive)}`);
-      if (body.sortOrder !== undefined) updates.push(Prisma.sql`sortOrder = ${Number(body.sortOrder)}`);
-      updates.push(Prisma.sql`updatedAt = NOW(3)`);
       if (body.code !== undefined) {
         const nextCode = normalizeCode(String(body.code));
-        const dup = await prisma.$queryRaw<Array<{ id: number }>>(Prisma.sql`
-          SELECT id FROM plans WHERE code = ${nextCode} AND id <> ${id} AND deletedAt IS NULL LIMIT 1
-        `);
-        if (dup.length > 0) {
+        const dup = await prisma.plan.findFirst({
+          where: { code: nextCode, id: { not: id }, deletedAt: null },
+          select: { id: true },
+        });
+        if (dup) {
           throw new ValidationError('Plan code already exists', { code: 'VALIDATION_ERROR', field: 'code' });
         }
       }
 
+      const data: Prisma.PlanUpdateInput = {};
+      if (body.name !== undefined) data.name = String(body.name).trim();
+      if (body.code !== undefined) data.code = normalizeCode(String(body.code));
+      if (body.description !== undefined) data.description = (body.description as string | null) ?? null;
+      if (body.price !== undefined) data.price = Number(body.price);
+      if (body.currency !== undefined) data.currency = normalizeCurrency(String(body.currency));
+      if (body.billingCycle !== undefined) data.billingCycle = String(body.billingCycle).toUpperCase();
+      if (body.maxMembers !== undefined) {
+        data.maxMembers = body.maxMembers === null ? null : Number(body.maxMembers);
+      }
+      if (body.features !== undefined) {
+        data.features =
+          body.features === null ? Prisma.JsonNull : (body.features as Prisma.InputJsonValue);
+      }
+      if (body.isActive !== undefined) data.isActive = Boolean(body.isActive);
+      if (body.sortOrder !== undefined) data.sortOrder = Number(body.sortOrder);
+
+      let plan;
       try {
-        await prisma.$executeRaw(
-          Prisma.sql`UPDATE plans SET ${Prisma.join(updates)} WHERE id = ${id}`
-        );
+        plan = await prisma.plan.update({ where: { id }, data });
       } catch (error) {
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
           throw new ValidationError('Plan code already exists', { code: 'VALIDATION_ERROR', field: 'code' });
@@ -189,27 +178,14 @@ router.patch(
         throw error;
       }
 
-      const rows = await prisma.$queryRaw<Array<any>>(Prisma.sql`
-        SELECT id, name, code, description, price, currency, billingCycle, isActive, sortOrder, createdAt, updatedAt, deletedAt
-        FROM plans WHERE id = ${id} LIMIT 1
-      `);
-      const plan = rows[0];
-
       await writePlatformAuditLog({
         actorUserId: actor.id,
         actorRole: actor.role,
         actionType: 'BILLING_PLAN_UPDATE',
-        metadata: JSON.parse(
-          JSON.stringify({ planId: id, fields: body })
-        ) as Prisma.InputJsonValue,
+        metadata: JSON.parse(JSON.stringify({ planId: id, fields: body })) as Prisma.InputJsonValue,
       });
 
-      sendSuccess(res, {
-        ...plan,
-        amount: plan.price,
-        packageName: plan.name,
-        status: plan.isActive ? 'ACTIVE' : 'INACTIVE',
-      });
+      sendSuccess(res, serializePlatformPlan(plan));
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -225,33 +201,34 @@ router.delete(
       const actor = req.platformUser!;
       const id = parseInt(req.params.id, 10);
 
-      const existing = await prisma.$queryRaw<Array<{ id: number; name: string }>>(Prisma.sql`
-        SELECT id, name FROM plans WHERE id = ${id} AND deletedAt IS NULL LIMIT 1
-      `);
-      if (existing.length === 0) {
+      const existing = await prisma.plan.findFirst({
+        where: { id, deletedAt: null },
+        select: { id: true, name: true },
+      });
+      if (!existing) {
         throw new NotFoundError('Billing plan', id);
       }
 
-      const inUse = await prisma.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
-        SELECT COUNT(*) as count
-        FROM gym_subscriptions
-        WHERE planId = ${id} AND status IN ('ACTIVE','TRIAL','PAST_DUE')
-      `);
-      if (inUse.length > 0 && inUse[0].count > BigInt(0)) {
+      const inUse = await prisma.gymSubscription.count({
+        where: {
+          planId: id,
+          status: { in: ['ACTIVE', 'TRIAL', 'PAST_DUE'] },
+        },
+      });
+      if (inUse > 0) {
         throw new AppError('PLAN_IN_USE', 'Plan is currently in use by active gym subscriptions', 409);
       }
 
-      await prisma.$executeRaw(Prisma.sql`
-        UPDATE plans
-        SET isActive = FALSE, deletedAt = NOW(3), updatedAt = NOW(3)
-        WHERE id = ${id}
-      `);
+      await prisma.plan.update({
+        where: { id },
+        data: { isActive: false, deletedAt: new Date() },
+      });
 
       await writePlatformAuditLog({
         actorUserId: actor.id,
         actorRole: actor.role,
         actionType: 'BILLING_PLAN_DELETE',
-        metadata: { planId: id, name: existing[0].name },
+        metadata: { planId: id, name: existing.name },
       });
 
       sendSuccess(res, { id, deleted: true }, 'Billing plan deleted');

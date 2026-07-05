@@ -67,6 +67,7 @@ test('records billing payment successfully', async () => {
     name: 'Gym A',
     gymSubscription: {
       gymId: 10,
+      billingCycle: 'MONTHLY',
       plan: { billingCycle: 'MONTHLY' },
     },
   })) as any);
@@ -145,7 +146,7 @@ test('avoids duplicate rapid-click insert by returning existing record', async (
   mockMethod(prisma.gym as any, 'findUnique', (async () => ({
     id: 10,
     name: 'Gym A',
-    gymSubscription: { gymId: 10, plan: { billingCycle: 'MONTHLY' } },
+    gymSubscription: { gymId: 10, billingCycle: 'MONTHLY', plan: { billingCycle: 'MONTHLY' } },
   })) as any);
 
   const app = appWithRole('SUPER_ADMIN');

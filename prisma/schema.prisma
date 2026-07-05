@@ -131,9 +131,13 @@ model Plan {
   name         String
   code         String?   @unique @db.VarChar(64)
   description  String?   @db.Text
+  /// Monthly base price (PKR). Payable for longer cycles is computed via planPricing helper.
   price        Float
   currency     String    @default("PKR") @db.VarChar(10)
-  billingCycle String    @db.VarChar(32)
+  /// Base price period for this tier row (always MONTHLY for platform subscription tiers).
+  billingCycle String    @default("MONTHLY") @db.VarChar(32)
+  /// Hard cap on active members for gyms on this plan.
+  maxMembers   Int?
   isActive     Boolean   @default(true)
   sortOrder    Int       @default(0)
   features     Json?
@@ -173,6 +177,8 @@ model GymSubscription {
   gymId             Int                   @unique
   planId            Int
   dueDate           DateTime              @db.Date
+  /// Selected prepaid cycle for this gym: MONTHLY | BIANNUAL | ANNUAL
+  billingCycle      String                @default("MONTHLY") @db.VarChar(32)
   billingResumeFrom DateTime?
   status            GymSubscriptionStatus @default(ACTIVE)
   lastPaidAt        DateTime?
@@ -226,6 +232,8 @@ model PlatformAuditLog {
 model Member {
   id                    Int       @id @default(autoincrement())
   gymId                 Int
+  /// Gym owner's member number (physical device / legacy spreadsheet ID), unique per gym.
+  legacyMemberId        String?   @db.VarChar(64)
   name                  String
   phone                 String?
   email                 String?
@@ -264,6 +272,8 @@ model Member {
   @@index([phone])
   @@index([cnic])
   @@index([gymId, createdAt])
+  @@unique([gymId, legacyMemberId])
+  @@index([gymId, legacyMemberId])
   @@map("members")
 }
 

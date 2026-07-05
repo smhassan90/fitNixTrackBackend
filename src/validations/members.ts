@@ -3,6 +3,21 @@ import { z } from 'zod';
 const cnicRegex = /^\d{13}$/;
 const dobError = 'dateOfBirth must be YYYY-MM-DD or ISO 8601 datetime string';
 
+const legacyMemberIdSchema = z
+  .preprocess(
+    (val) => {
+      if (val === undefined || val === null || val === '') return null;
+      const trimmed = String(val).trim();
+      return trimmed || null;
+    },
+    z.union([
+      z.string().min(1, 'legacyMemberId cannot be empty').max(64, 'legacyMemberId must be at most 64 characters'),
+      z.null(),
+    ])
+  )
+  .optional()
+  .nullable();
+
 const dateOfBirthSchema = z
   .string()
   .refine((value) => {
@@ -13,6 +28,7 @@ const dateOfBirthSchema = z
 
 export const createMemberSchema = z.object({
   body: z.object({
+    legacyMemberId: legacyMemberIdSchema,
     name: z.string().min(1, 'Name is required').max(255),
     phone: z.string().optional().nullable(),
     email: z.string().email('Invalid email format').optional().nullable(),
@@ -59,6 +75,7 @@ export const updateMemberSchema = z.object({
     id: z.string().regex(/^\d+$/, 'Member ID must be a number').transform((val) => parseInt(val, 10)),
   }),
   body: z.object({
+    legacyMemberId: legacyMemberIdSchema,
     name: z.string().min(1).max(255).optional(),
     phone: z.string().optional().nullable(),
     email: z.string().email().optional().nullable(),

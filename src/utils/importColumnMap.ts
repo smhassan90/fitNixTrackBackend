@@ -22,8 +22,7 @@ const TRAINER_ALIASES: Record<string, string[]> = {
 
 const MEMBER_ALIASES: Record<string, string[]> = {
   name: ['name', 'member name', 'full name', 'member'],
-  // legacy spreadsheet column — ignored during import (DB assigns id)
-  memberId: ['member id', 'id', 'serial', 'sr no', 'sr', 's no', 'sno'],
+  legacyMemberId: ['member id', 'id', 'serial', 'sr no', 'sr', 's no', 'sno'],
   phone: ['phone', 'mobile', 'mobile no', 'mobile number', 'contact', 'contact no', 'cell'],
   email: ['email', 'email address'],
   gender: ['gender', 'sex'],
