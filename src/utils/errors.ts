@@ -26,26 +26,27 @@ export class ConflictError extends AppError {
 }
 
 export class NotFoundError extends AppError {
-  constructor(resource: string, id?: string | number) {
+  constructor(resource: string, id?: string | number, details?: any) {
     super(
       'NOT_FOUND',
       id ? `${resource} with id ${id} not found` : `${resource} not found`,
-      404
+      404,
+      details
     );
     this.name = 'NotFoundError';
   }
 }
 
 export class UnauthorizedError extends AppError {
-  constructor(message: string = 'Unauthorized') {
-    super('UNAUTHORIZED', message, 401);
+  constructor(message: string = 'Unauthorized', details?: any) {
+    super('UNAUTHORIZED', message, 401, details);
     this.name = 'UnauthorizedError';
   }
 }
 
 export class ForbiddenError extends AppError {
-  constructor(message: string = 'Forbidden') {
-    super('FORBIDDEN', message, 403);
+  constructor(message: string = 'Forbidden', details?: any) {
+    super('FORBIDDEN', message, 403, details);
     this.name = 'ForbiddenError';
   }
 }

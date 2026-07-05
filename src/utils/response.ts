@@ -14,6 +14,8 @@ export interface ErrorResponse {
     code: string;
     message: string;
     details?: any;
+    /** Flattened multi-line troubleshooting text (tablet/dashboard) */
+    diagnosticText?: string;
   };
 }
 
@@ -43,12 +45,14 @@ export function sendError(
   error: AppError | Error
 ): Response {
   if (error instanceof AppError) {
+    const diagnostic = error.details?.diagnostic as { diagnosticText?: string } | undefined;
     const response: ErrorResponse = {
       success: false,
       error: {
         code: error.code,
         message: error.message,
         ...(error.details && { details: serializeBigInt(error.details) }),
+        ...(diagnostic?.diagnosticText && { diagnosticText: diagnostic.diagnosticText }),
       },
     };
     return res.status(error.statusCode).json(response);

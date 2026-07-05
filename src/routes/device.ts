@@ -20,6 +20,7 @@ import {
   syncUsersOfflineSchema,
   syncAttendanceOfflineSchema,
   confirmUserMappingsSchema,
+  testBackendOfflineSchema,
 } from '../validations/device';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, BadRequestError } from '../utils/errors';
@@ -37,8 +38,126 @@ import {
   storePendingAttendanceLog,
   upsertDeviceUsers,
 } from '../services/deviceMappingService';
+import {
+  buildBackendTestSuccessDiagnostic,
+  buildOfflineSyncUrl,
+  buildSyncDiagnostic,
+  diagnosticDetails,
+} from '../utils/syncDiagnostics';
 
 const router = Router();
+
+// POST /api/device/:id/test-backend-offline — tablet connectivity + API key check
+router.post(
+  '/:id/test-backend-offline',
+  validate(testBackendOfflineSchema),
+  authenticateApiKey,
+  async (req: ApiKeyAuthRequest, res: Response) => {
+    try {
+      const deviceId = req.deviceId!;
+      const gymId = req.gymId!;
+
+      const device = await prisma.deviceConfig.findFirst({
+        where: { id: deviceId, gymId },
+        select: {
+          id: true,
+          name: true,
+          ipAddress: true,
+          port: true,
+          isActive: true,
+          lastSyncAt: true,
+          serialNumber: true,
+        },
+      });
+
+      if (!device) {
+        const diagnostic = buildSyncDiagnostic({
+          title: 'BACKEND TEST FAILED',
+          cause: 'device_config_not_found',
+          mode: 'API_KEY',
+          deviceConfigId: deviceId,
+          gymId,
+          url: `${req.protocol}://${req.get('host')}${req.originalUrl}`,
+          httpStatus: 404,
+          message: `Device configuration ${deviceId} not found for gym ${gymId}`,
+          checks: [
+            'Device Config ID must belong to the gym tied to your API key',
+            'Re-open Tablet sync setup and copy the correct device id',
+          ],
+        });
+        sendError(
+          res,
+          new NotFoundError('Device configuration', deviceId, diagnosticDetails(diagnostic))
+        );
+        return;
+      }
+
+      const [pendingLogCount, mappedCount, deviceUserCount] = await Promise.all([
+        prisma.pendingAttendanceLog.count({ where: { deviceConfigId: deviceId } }),
+        prisma.deviceUserMapping.count({ where: { deviceConfigId: deviceId, isActive: true } }),
+        prisma.deviceUser.count({ where: { deviceConfigId: deviceId } }),
+      ]);
+
+      const diagnostic = buildBackendTestSuccessDiagnostic({
+        req,
+        deviceConfigId: deviceId,
+        gymId,
+        device,
+        keySource: req.syncKeySource!,
+      });
+
+      const warnings: string[] = [];
+      if (!device.isActive) {
+        warnings.push('Device is marked inactive in admin (sync still allowed from tablet)');
+      }
+      if (mappedCount === 0 && deviceUserCount > 0) {
+        warnings.push(`${deviceUserCount} device user(s) on file but none mapped to members yet`);
+      }
+      if (pendingLogCount > 0) {
+        warnings.push(`${pendingLogCount} attendance punch(es) pending until users are mapped`);
+      }
+
+      sendSuccess(res, {
+        ok: true,
+        connected: true,
+        deviceConfigId: deviceId,
+        gymId,
+        keySource: req.syncKeySource,
+        device: {
+          name: device.name,
+          ipAddress: device.ipAddress,
+          port: device.port,
+          isActive: device.isActive,
+          lastSyncAt: device.lastSyncAt?.toISOString() ?? null,
+        },
+        sync: {
+          mappedUsers: mappedCount,
+          deviceUsers: deviceUserCount,
+          pendingAttendanceLogs: pendingLogCount,
+        },
+        warnings,
+        diagnostic,
+        message: diagnostic.message,
+      });
+    } catch (error) {
+      const deviceId = parseInt(req.params.id, 10) || -1;
+      const diagnostic = buildSyncDiagnostic({
+        title: 'BACKEND TEST FAILED',
+        cause: 'server_error',
+        mode: 'API_KEY',
+        deviceConfigId: deviceId,
+        url: `${req.protocol}://${req.get('host')}${req.originalUrl}`,
+        httpStatus: 500,
+        message: error instanceof Error ? error.message : 'Unexpected server error',
+        checks: [
+          'Retry the backend test',
+          'Check server logs if the error persists',
+        ],
+      });
+      sendError(res, new BadRequestError(diagnostic.message, diagnosticDetails(diagnostic)));
+    }
+  }
+);
 
 // ============ Offline Sync Endpoints (API Key Auth) ============
 // These endpoints are for offline sync scripts and use API key authentication
@@ -231,6 +350,44 @@ router.post(
         message += ` Skipped: ${skippedNoUserId} missing user ID, ${skippedNoTimestamp} missing/invalid timestamp.`;
       }
 
+      const syncDiagnostic =
+        pending > 0 || errors > 0 || skippedNoUserId > 0 || skippedNoTimestamp > 0
+          ? buildSyncDiagnostic({
+              title: pending > 0 ? 'SYNC PARTIAL — MAPPING REQUIRED' : 'SYNC COMPLETED WITH WARNINGS',
+              cause: pending > 0 ? 'unmapped_device_users' : 'sync_warnings',
+              mode: 'API_KEY',
+              deviceConfigId: deviceId,
+              gymId,
+              url: buildOfflineSyncUrl(req, deviceId, '/sync-attendance-offline'),
+              httpStatus: 200,
+              message,
+              checks:
+                pending > 0
+                  ? [
+                      `${pending} punch(es) saved as pending — not visible in attendance until users are mapped`,
+                      'Sync device users first, then open mapping window in FitNix admin',
+                      `Unmapped device user IDs: ${[...pendingDeviceUserIds].slice(0, 10).join(', ')}${pendingDeviceUserIds.size > 10 ? '…' : ''}`,
+                      `${deviceUserToMemberMap.size} active user mapping(s) on this device`,
+                    ]
+                  : [
+                      ...(skippedNoUserId > 0
+                        ? [`${skippedNoUserId} log(s) missing device user id (uid/id/userSn/deviceUserId)`]
+                        : []),
+                      ...(skippedNoTimestamp > 0
+                        ? [`${skippedNoTimestamp} log(s) missing or invalid timestamp/recordTime`]
+                        : []),
+                      ...(errors > 0 ? [`${errors} log(s) failed to process`] : []),
+                    ],
+              device: {
+                name: device.name,
+                ipAddress: device.ipAddress,
+                port: device.port,
+                isActive: device.isActive,
+                lastSyncAt: device.lastSyncAt?.toISOString() ?? null,
+              },
+            })
+          : undefined;
+
       sendSuccess(res, {
         synced,
         pending,
@@ -242,10 +399,26 @@ router.post(
           noUserId: skippedNoUserId,
           noTimestamp: skippedNoTimestamp,
         },
+        ...(syncDiagnostic && { diagnostic: syncDiagnostic }),
         message,
       });
     } catch (error) {
-      sendError(res, error as Error);
+      const deviceId = parseInt(req.params.id, 10) || -1;
+      const diagnostic = buildSyncDiagnostic({
+        title: 'SYNC FAILED',
+        cause: 'server_error',
+        mode: 'API_KEY',
+        deviceConfigId: deviceId,
+        url: buildOfflineSyncUrl(req, deviceId, '/sync-attendance-offline'),
+        httpStatus: 500,
+        message: error instanceof Error ? error.message : 'Unexpected server error during attendance sync',
+        checks: [
+          'Retry sync after a few seconds',
+          'Run Test Backend to confirm API key and device config id',
+          'Check server logs if errors persist',
+        ],
+      });
+      sendError(res, new BadRequestError(diagnostic.message, diagnosticDetails(diagnostic)));
     }
   }
 );
@@ -286,6 +459,7 @@ router.get(
       devices: devices.map(formatDeviceForPortal),
       instructions: {
         androidApp: 'Settings → Auth mode: API Key → paste apiKey → set Device Config ID',
+        testBackend: 'POST /api/device/{deviceId}/test-backend-offline with { "apiKey": "..." }',
         note: 'This key does not expire. Store it on the tablet once. Regenerate only if compromised.',
       },
     });

@@ -142,7 +142,7 @@ export const syncUsersOfflineSchema = z.object({
       userId: z.string(),
       card: z.number().optional(),
     })),
-    apiKey: z.string().min(1, 'API key is required'),
+    apiKey: z.string().min(1, 'API key is required').optional(),
   }),
 });
 
@@ -163,7 +163,16 @@ export const syncAttendanceOfflineSchema = z.object({
       ip: z.string().optional(),
     })),
     lastSyncAt: z.string().optional(),
-    apiKey: z.string().min(1, 'API key is required'),
+    apiKey: z.string().min(1, 'API key is required').optional(),
+  }),
+});
+
+export const testBackendOfflineSchema = z.object({
+  params: z.object({
+    id: z.string().regex(/^\d+$/, 'Device ID must be a number').transform((val) => parseInt(val, 10)),
+  }),
+  body: z.object({
+    apiKey: z.string().min(1, 'API key is required').optional(),
   }),
 });
 
