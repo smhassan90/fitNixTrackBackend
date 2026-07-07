@@ -157,7 +157,8 @@ export const syncAttendanceOfflineSchema = z.object({
       state: z.number().optional(),
       timestamp: z.number().optional(),
       type: z.number().optional(),
-      userSn: z.number().optional(),
+      // Android/device clients may send userSn as a string; accept both.
+      userSn: z.union([z.string(), z.number()]).optional(),
       deviceUserId: z.string().optional(),
       recordTime: z.string().optional(),
       ip: z.string().optional(),

@@ -2,6 +2,8 @@ import { prisma } from '../lib/prisma';
 import { applyAttendancePolicies } from './attendancePolicyService';
 import {
   applyPunchToAttendance,
+  buildDeviceUserIdentifierMap,
+  resolveCanonicalDeviceUserId,
   storePendingAttendanceLog,
   upsertDeviceUsers,
 } from './deviceMappingService';
@@ -416,6 +418,8 @@ export async function syncAttendanceFromDevice(
       deviceUserToMemberMap.set(mapping.deviceUserId, mapping.memberId);
     });
 
+    const deviceUserIdMap = await buildDeviceUserIdentifierMap(deviceConfigId);
+
     // Process each log entry
     for (const log of filteredLogs) {
       try {
@@ -438,6 +442,8 @@ export async function syncAttendanceFromDevice(
           errors++;
           continue;
         }
+
+        deviceUserId = resolveCanonicalDeviceUserId(deviceUserIdMap, deviceUserId);
 
         // Handle timestamp - support both formats
         let logDate: Date;

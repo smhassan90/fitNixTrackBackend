@@ -4,6 +4,63 @@ export function normalizeMemberName(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+/** Maps punch identifiers (uid or badge/userSn) → canonical device user uid. */
+export type DeviceUserIdentifierMap = Map<string, string>;
+
+/**
+ * Build a lookup from any punch identifier to the enrolled user's canonical `deviceUserId` (uid).
+ * Attendance logs often carry badge/userSn; user sync stores rows keyed by uid with `deviceBadgeId`.
+ */
+export async function buildDeviceUserIdentifierMap(
+  deviceConfigId: number
+): Promise<DeviceUserIdentifierMap> {
+  const users = await prisma.deviceUser.findMany({
+    where: { deviceConfigId },
+    select: { deviceUserId: true, deviceBadgeId: true },
+  });
+
+  const map: DeviceUserIdentifierMap = new Map();
+  for (const user of users) {
+    map.set(user.deviceUserId, user.deviceUserId);
+    const badge = user.deviceBadgeId?.trim();
+    if (badge) {
+      map.set(badge, user.deviceUserId);
+    }
+  }
+  return map;
+}
+
+export function resolveCanonicalDeviceUserId(
+  map: DeviceUserIdentifierMap,
+  rawIdentifier: string
+): string {
+  const id = rawIdentifier.trim();
+  if (!id) return id;
+  return map.get(id) ?? id;
+}
+
+/**
+ * Nameless rows whose `deviceUserId` equals another user's `deviceBadgeId` (attendance-only ghosts).
+ */
+export function isBadgeGhostDeviceUser(
+  user: { deviceUserId: string; deviceUserName: string | null },
+  badgeIds: Set<string>
+): boolean {
+  if (user.deviceUserName?.trim()) return false;
+  return badgeIds.has(user.deviceUserId);
+}
+
+export function collectDeviceBadgeIds(
+  users: Array<{ deviceBadgeId: string | null }>
+): Set<string> {
+  const badgeIds = new Set<string>();
+  for (const user of users) {
+    const badge = user.deviceBadgeId?.trim();
+    if (badge) badgeIds.add(badge);
+  }
+  return badgeIds;
+}
+
 export async function upsertDeviceUsers(
   deviceConfigId: number,
   users: Array<{
@@ -77,21 +134,38 @@ export async function storePendingAttendanceLog(input: {
   state?: number | null;
   deviceSerialNumber?: string | null;
 }): Promise<boolean> {
-  await ensureDeviceUser(input.deviceConfigId, input.deviceUserId);
+  const enrolled = await prisma.deviceUser.findFirst({
+    where: {
+      deviceConfigId: input.deviceConfigId,
+      OR: [
+        { deviceUserId: input.deviceUserId },
+        { deviceBadgeId: input.deviceUserId },
+      ],
+    },
+    select: { deviceUserId: true, deviceUserName: true },
+    orderBy: { deviceUserName: 'desc' },
+  });
+
+  const canonicalDeviceUserId = enrolled?.deviceUserId ?? input.deviceUserId;
+  await ensureDeviceUser(
+    input.deviceConfigId,
+    canonicalDeviceUserId,
+    enrolled?.deviceUserName
+  );
 
   try {
     await prisma.pendingAttendanceLog.upsert({
       where: {
         deviceConfigId_deviceUserId_recordTime: {
           deviceConfigId: input.deviceConfigId,
-          deviceUserId: input.deviceUserId,
+          deviceUserId: canonicalDeviceUserId,
           recordTime: input.recordTime,
         },
       },
       create: {
         gymId: input.gymId,
         deviceConfigId: input.deviceConfigId,
-        deviceUserId: input.deviceUserId,
+        deviceUserId: canonicalDeviceUserId,
         recordTime: input.recordTime,
         type: input.type ?? null,
         state: input.state ?? null,
@@ -295,9 +369,16 @@ export async function getMappingCandidates(
 
   const mappedDeviceUserIds = new Set(activeMappings.map((m) => m.deviceUserId));
   const mappedMemberIds = new Set(activeMappings.map((m) => m.memberId));
-  const pendingByUser = new Map(
-    pendingCounts.map((row) => [row.deviceUserId, row._count._all])
-  );
+  const badgeIds = collectDeviceBadgeIds(deviceUsers);
+  const deviceUserIdMap = await buildDeviceUserIdentifierMap(deviceConfigId);
+  const pendingByUser = new Map<string, number>();
+  for (const row of pendingCounts) {
+    const canonicalId = resolveCanonicalDeviceUserId(deviceUserIdMap, row.deviceUserId);
+    pendingByUser.set(
+      canonicalId,
+      (pendingByUser.get(canonicalId) || 0) + row._count._all
+    );
+  }
   const deviceUserById = new Map(deviceUsers.map((u) => [u.deviceUserId, u]));
 
   const unmappedMembers = members.filter((m) => !mappedMemberIds.has(m.id));
@@ -314,6 +395,7 @@ export async function getMappingCandidates(
 
   const unmappedDeviceUsers: MappingCandidate[] = deviceUsers
     .filter((u) => !mappedDeviceUserIds.has(u.deviceUserId))
+    .filter((u) => !isBadgeGhostDeviceUser(u, badgeIds))
     .map((u) => {
       const pendingLogCount = pendingByUser.get(u.deviceUserId) || 0;
       let suggestedMember: { id: number; name: string } | null = null;
@@ -338,10 +420,12 @@ export async function getMappingCandidates(
     });
 
   // Include device users that only appear in pending logs (no DeviceUser row yet)
-  for (const [deviceUserId, count] of pendingByUser) {
+  for (const [rawDeviceUserId, count] of pendingByUser) {
+    const deviceUserId = resolveCanonicalDeviceUserId(deviceUserIdMap, rawDeviceUserId);
     if (mappedDeviceUserIds.has(deviceUserId)) continue;
     if (unmappedDeviceUsers.some((u) => u.deviceUserId === deviceUserId)) continue;
     const du = deviceUserById.get(deviceUserId);
+    if (du && isBadgeGhostDeviceUser(du, badgeIds)) continue;
     unmappedDeviceUsers.push(
       toMappingCandidateDto({
         deviceUserId,

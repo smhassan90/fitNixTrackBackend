@@ -15,6 +15,16 @@ export interface ApiKeyAuthRequest extends Request {
   syncKeySource?: 'gym_sync_api_key' | 'env_offline_sync_api_key';
 }
 
+/**
+ * Inside the device router, req.path already includes the leading `/:id`
+ * (e.g. `/1/sync-attendance-offline`). buildOfflineSyncUrl re-adds
+ * `/api/device/{id}`, so pass the sub-path without the id to avoid a
+ * doubled segment like `/api/device/1/1/sync-attendance-offline`.
+ */
+function stripDeviceIdPrefix(path: string): string {
+  return path.replace(/^\/\d+/, '') || '/';
+}
+
 function backendFail(
   req: Request,
   deviceConfigId: number,
@@ -33,7 +43,7 @@ function backendFail(
     mode: 'API_KEY',
     deviceConfigId,
     gymId: extra?.gymId,
-    url: buildOfflineSyncUrl(req, deviceConfigId, req.path),
+    url: buildOfflineSyncUrl(req, deviceConfigId, stripDeviceIdPrefix(req.path)),
     httpStatus,
     message,
     checks,
@@ -266,7 +276,7 @@ export async function authenticateApiKey(
       cause: 'server_error',
       mode: 'API_KEY',
       deviceConfigId: deviceIdParam,
-      url: buildOfflineSyncUrl(req, deviceIdParam, req.path),
+      url: buildOfflineSyncUrl(req, deviceIdParam, stripDeviceIdPrefix(req.path)),
       httpStatus: 500,
       message: error instanceof Error ? error.message : 'Unexpected server error during API key auth',
       checks: [

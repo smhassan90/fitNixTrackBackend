@@ -37,6 +37,8 @@ import {
   processPendingLogsForDeviceUser,
   storePendingAttendanceLog,
   upsertDeviceUsers,
+  buildDeviceUserIdentifierMap,
+  resolveCanonicalDeviceUserId,
 } from '../services/deviceMappingService';
 import {
   buildBackendTestSuccessDiagnostic,
@@ -256,6 +258,7 @@ router.post(
       let skippedNoUserId = 0;
       let skippedNoTimestamp = 0;
       const pendingDeviceUserIds = new Set<string>();
+      const deviceUserIdMap = await buildDeviceUserIdentifierMap(deviceId);
 
       for (const log of logs) {
         try {
@@ -274,6 +277,8 @@ router.post(
             skippedNoUserId++;
             continue;
           }
+
+          deviceUserId = resolveCanonicalDeviceUserId(deviceUserIdMap, deviceUserId);
 
           let logDate: Date;
           if (log.recordTime) {
