@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+const featureCodeRegex = /^[A-Z0-9_]+$/;
+
 export const createPackageSchema = z.object({
   body: z.object({
     name: z.string().min(1, 'Name is required').max(255),
@@ -46,3 +48,43 @@ export const deletePackageSchema = z.object({
   }),
 });
 
+export const getPackageFeaturesQuerySchema = z.object({
+  query: z.object({
+    /** When true, include inactive features (GYM_ADMIN catalog screen). Default: active only. */
+    all: z
+      .enum(['true', 'false', '1', '0'])
+      .optional()
+      .transform((v) => v === 'true' || v === '1'),
+  }),
+});
+
+export const createPackageFeatureSchema = z.object({
+  body: z.object({
+    name: z.string().min(1).max(191),
+    code: z.string().min(1).max(64).regex(featureCodeRegex).optional().nullable(),
+    description: z.string().max(2000).optional().nullable(),
+    isActive: z.boolean().optional().default(true),
+    sortOrder: z.coerce.number().int().optional().default(0),
+  }),
+});
+
+export const updatePackageFeatureSchema = z.object({
+  params: z.object({
+    id: z.string().regex(/^\d+$/).transform((v) => parseInt(v, 10)),
+  }),
+  body: z
+    .object({
+      name: z.string().min(1).max(191).optional(),
+      code: z.string().min(1).max(64).regex(featureCodeRegex).optional().nullable(),
+      description: z.string().max(2000).optional().nullable(),
+      isActive: z.boolean().optional(),
+      sortOrder: z.coerce.number().int().optional(),
+    })
+    .refine((b) => Object.keys(b).length > 0, { message: 'At least one field is required' }),
+});
+
+export const deletePackageFeatureSchema = z.object({
+  params: z.object({
+    id: z.string().regex(/^\d+$/).transform((v) => parseInt(v, 10)),
+  }),
+});

@@ -52,10 +52,26 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
+const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX) || 1000;
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
-  message: 'Too many requests from this IP, please try again later.',
+  max: RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Tablet/biometric offline sync endpoints are API-key authenticated and polled
+  // frequently — don't count them against the per-IP browser limit.
+  skip: (req) => /^\/api\/device\/\d+\/(sync-attendance-offline|sync-users-offline|test-backend-offline)$/.test(req.path),
+  // Return JSON in the app's standard error shape (not a plain-text body),
+  // so clients parsing { success, error } don't choke on a 429.
+  handler: (_req, res) => {
+    res.status(429).json({
+      success: false,
+      error: {
+        code: 'RATE_LIMITED',
+        message: 'Too many requests from this IP, please try again later.',
+      },
+    });
+  },
 });
 app.use('/api/', limiter);
 

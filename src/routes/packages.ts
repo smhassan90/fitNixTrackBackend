@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { validate } from '../middleware/validation';
 import { authenticateToken, AuthRequest, requireRole } from '../middleware/auth';
@@ -9,44 +10,245 @@ import {
   getPackagesSchema,
   getPackageSchema,
   deletePackageSchema,
+  getPackageFeaturesQuerySchema,
+  createPackageFeatureSchema,
+  updatePackageFeatureSchema,
+  deletePackageFeatureSchema,
 } from '../validations/packages';
 import { sendSuccess, sendError } from '../utils/response';
-import { NotFoundError, ValidationError, ForbiddenError } from '../utils/errors';
+import { NotFoundError, ValidationError, ForbiddenError, AppError, ConflictError } from '../utils/errors';
 
 const router = Router();
+
+function normalizeFeatureCode(code: string | null | undefined): string | null {
+  if (!code) return null;
+  return code.trim().toUpperCase();
+}
+
+function serializeFeature(row: {
+  id: number | bigint;
+  name: string;
+  code: string | null;
+  description: string | null;
+  isActive: boolean | number;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+}) {
+  return {
+    id: Number(row.id),
+    name: row.name,
+    code: row.code ?? null,
+    description: row.description ?? null,
+    isActive: Boolean(row.isActive),
+    sortOrder: Number(row.sortOrder ?? 0),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
 
 // All routes require authentication and gymId
 router.use(authenticateToken);
 router.use(requireGymId);
 
-// GET /api/packages/features - Get all available features from database
-// Returns only features that exist in the 'features' table
-router.get('/features', async (req: AuthRequest, res: Response) => {
-  try {
-    const features = await prisma.$queryRaw<
-      Array<{
-        id: number;
-        name: string;
-        code: string | null;
-        description: string | null;
-        isActive: boolean;
-        sortOrder: number;
-        createdAt: Date;
-        updatedAt: Date;
-      }>
-    >`
-      SELECT id, name, code, description, isActive, sortOrder, createdAt, updatedAt
-      FROM features
-      WHERE isActive = TRUE
-        AND (deletedAt IS NULL OR deletedAt > NOW())
-      ORDER BY sortOrder ASC, name ASC
-    `;
+// GET /api/packages/features — active features for package form; ?all=true for catalog (GYM_ADMIN)
+router.get(
+  '/features',
+  validate(getPackageFeaturesQuerySchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const includeAll = Boolean((req.query as { all?: boolean }).all);
+      if (includeAll) {
+        const role = String(req.user?.role || '').toUpperCase();
+        if (role !== 'GYM_ADMIN') {
+          sendError(res, new ForbiddenError('Only gym administrators can list inactive features'));
+          return;
+        }
+      }
 
-    sendSuccess(res, { features });
-  } catch (error) {
-    sendError(res, error as Error);
+      const features = includeAll
+        ? await prisma.$queryRaw<Array<any>>(Prisma.sql`
+            SELECT id, name, code, description, isActive, sortOrder, createdAt, updatedAt
+            FROM features
+            WHERE deletedAt IS NULL
+            ORDER BY sortOrder ASC, name ASC
+          `)
+        : await prisma.$queryRaw<Array<any>>(Prisma.sql`
+            SELECT id, name, code, description, isActive, sortOrder, createdAt, updatedAt
+            FROM features
+            WHERE isActive = TRUE
+              AND deletedAt IS NULL
+            ORDER BY sortOrder ASC, name ASC
+          `);
+
+      sendSuccess(res, { features: features.map(serializeFeature) });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
   }
-});
+);
+
+// POST /api/packages/features — create feature (GYM_ADMIN)
+router.post(
+  '/features',
+  requireRole('GYM_ADMIN'),
+  validate(createPackageFeatureSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const body = req.body as {
+        name: string;
+        code?: string | null;
+        description?: string | null;
+        isActive?: boolean;
+        sortOrder?: number;
+      };
+      const name = body.name.trim();
+      const code = normalizeFeatureCode(body.code);
+
+      const duplicate = await prisma.$queryRaw<Array<{ id: number }>>(Prisma.sql`
+        SELECT id FROM features
+        WHERE deletedAt IS NULL
+          AND (name = ${name} OR (${code} IS NOT NULL AND code = ${code}))
+        LIMIT 1
+      `);
+      if (duplicate.length > 0) {
+        sendError(res, new ConflictError('A feature with this name or code already exists'));
+        return;
+      }
+
+      await prisma.$executeRaw(Prisma.sql`
+        INSERT INTO features (name, code, description, isActive, sortOrder, createdAt, updatedAt, deletedAt)
+        VALUES (
+          ${name},
+          ${code},
+          ${body.description ?? null},
+          ${body.isActive ?? true},
+          ${body.sortOrder ?? 0},
+          NOW(3),
+          NOW(3),
+          NULL
+        )
+      `);
+
+      const rows = await prisma.$queryRaw<Array<any>>(Prisma.sql`
+        SELECT id, name, code, description, isActive, sortOrder, createdAt, updatedAt
+        FROM features WHERE name = ${name} AND deletedAt IS NULL
+        ORDER BY id DESC LIMIT 1
+      `);
+
+      sendSuccess(res, { feature: serializeFeature(rows[0]) }, 'Feature created', 201);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// PATCH /api/packages/features/:id — update feature (GYM_ADMIN)
+router.patch(
+  '/features/:id',
+  requireRole('GYM_ADMIN'),
+  validate(updatePackageFeatureSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      const body = req.body as Record<string, unknown>;
+
+      const existing = await prisma.$queryRaw<Array<{ id: number }>>(Prisma.sql`
+        SELECT id FROM features WHERE id = ${id} AND deletedAt IS NULL LIMIT 1
+      `);
+      if (existing.length === 0) {
+        sendError(res, new NotFoundError('Feature', id));
+        return;
+      }
+
+      const nextName = body.name !== undefined ? String(body.name).trim() : undefined;
+      const nextCode =
+        body.code !== undefined ? normalizeFeatureCode(body.code as string | null) : undefined;
+
+      if (nextName !== undefined || nextCode !== undefined) {
+        const duplicate = await prisma.$queryRaw<Array<{ id: number }>>(Prisma.sql`
+          SELECT id FROM features
+          WHERE id <> ${id}
+            AND deletedAt IS NULL
+            AND (
+              (${nextName ?? null} IS NOT NULL AND name = ${nextName ?? null})
+              OR (${nextCode ?? null} IS NOT NULL AND code = ${nextCode ?? null})
+            )
+          LIMIT 1
+        `);
+        if (duplicate.length > 0) {
+          sendError(res, new ConflictError('A feature with this name or code already exists'));
+          return;
+        }
+      }
+
+      const updates: Prisma.Sql[] = [];
+      if (body.name !== undefined) updates.push(Prisma.sql`name = ${nextName}`);
+      if (body.code !== undefined) updates.push(Prisma.sql`code = ${nextCode}`);
+      if (body.description !== undefined) {
+        updates.push(Prisma.sql`description = ${body.description ?? null}`);
+      }
+      if (body.isActive !== undefined) updates.push(Prisma.sql`isActive = ${Boolean(body.isActive)}`);
+      if (body.sortOrder !== undefined) {
+        updates.push(Prisma.sql`sortOrder = ${Number(body.sortOrder)}`);
+      }
+      updates.push(Prisma.sql`updatedAt = NOW(3)`);
+
+      await prisma.$executeRaw(Prisma.sql`
+        UPDATE features SET ${Prisma.join(updates)} WHERE id = ${id}
+      `);
+
+      const rows = await prisma.$queryRaw<Array<any>>(Prisma.sql`
+        SELECT id, name, code, description, isActive, sortOrder, createdAt, updatedAt
+        FROM features WHERE id = ${id} LIMIT 1
+      `);
+
+      sendSuccess(res, { feature: serializeFeature(rows[0]) }, 'Feature updated');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// DELETE /api/packages/features/:id — soft delete (GYM_ADMIN); blocked if used by packages
+router.delete(
+  '/features/:id',
+  requireRole('GYM_ADMIN'),
+  validate(deletePackageFeatureSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      const existing = await prisma.$queryRaw<Array<{ id: number; name: string }>>(Prisma.sql`
+        SELECT id, name FROM features WHERE id = ${id} AND deletedAt IS NULL LIMIT 1
+      `);
+      if (existing.length === 0) {
+        sendError(res, new NotFoundError('Feature', id));
+        return;
+      }
+
+      const inUse = await prisma.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+        SELECT COUNT(*) as count FROM package_features WHERE featureId = ${id}
+      `);
+      if (inUse.length > 0 && inUse[0].count > BigInt(0)) {
+        sendError(
+          res,
+          new AppError('FEATURE_IN_USE', 'Feature is assigned to one or more packages', 409)
+        );
+        return;
+      }
+
+      await prisma.$executeRaw(Prisma.sql`
+        UPDATE features
+        SET isActive = FALSE, deletedAt = NOW(3), updatedAt = NOW(3)
+        WHERE id = ${id}
+      `);
+
+      sendSuccess(res, { id, deleted: true }, 'Feature deleted');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
 
 // GET /api/packages - Get all packages from database for the authenticated gym
 router.get(

@@ -112,6 +112,17 @@ The server will start on `http://localhost:3001` (or the port specified in `.env
 - `PUT /api/packages/:id` - Update package
 - `DELETE /api/packages/:id` - Delete package
 
+### Package features (catalog used when creating/editing packages)
+- `GET /api/packages/features` — active features (package form checkboxes)
+- `GET /api/packages/features?all=true` — all non-deleted features (`GYM_ADMIN` only; management screen)
+- `POST /api/packages/features` — create feature (`GYM_ADMIN`)
+- `PATCH /api/packages/features/:id` — update feature (`GYM_ADMIN`)
+- `DELETE /api/packages/features/:id` — soft-delete (`GYM_ADMIN`); `409 FEATURE_IN_USE` if assigned to packages
+
+Platform operators can also manage the same catalog via:
+- `GET/POST /api/platform/admin/packages/features`
+- `PATCH/DELETE /api/platform/admin/packages/features/:id` (`SUPER_ADMIN` for writes)
+
 ### Payments
 - `GET /api/payments` - List all payments (with filters)
 - `GET /api/payments/:id` - Get single payment

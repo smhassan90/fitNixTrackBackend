@@ -19,6 +19,39 @@ function normalizeCode(code: string | null | undefined): string | null {
   return code.trim().toUpperCase();
 }
 
+function serializeFeature(row: any) {
+  return {
+    id: Number(row.id),
+    name: row.name,
+    code: row.code ?? null,
+    description: row.description ?? null,
+    isActive: Boolean(row.isActive),
+    sortOrder: Number(row.sortOrder ?? 0),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    deletedAt: row.deletedAt ?? null,
+  };
+}
+
+// GET /api/platform/admin/packages/features — list all (incl. inactive) for admin UI
+router.get(
+  '/admin/packages/features',
+  requirePlatformRole(PlatformRole.SUPER_ADMIN, PlatformRole.PLATFORM_SUPPORT),
+  async (_req: PlatformRequest, res: Response) => {
+    try {
+      const rows = await prisma.$queryRaw<Array<any>>(Prisma.sql`
+        SELECT id, name, code, description, isActive, sortOrder, createdAt, updatedAt, deletedAt
+        FROM features
+        WHERE deletedAt IS NULL
+        ORDER BY sortOrder ASC, name ASC
+      `);
+      sendSuccess(res, { features: rows.map(serializeFeature) });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
 router.post(
   '/admin/packages/features',
   requirePlatformRole(PlatformRole.SUPER_ADMIN),
@@ -59,7 +92,7 @@ router.post(
         actionType: 'PACKAGE_FEATURE_CREATE',
         metadata: { featureId: feature.id, name: feature.name } as Prisma.InputJsonValue,
       });
-      sendSuccess(res, feature, 'Feature created', 201);
+      sendSuccess(res, serializeFeature(feature), 'Feature created', 201);
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -124,7 +157,7 @@ router.patch(
         actionType: 'PACKAGE_FEATURE_UPDATE',
         metadata: JSON.parse(JSON.stringify({ featureId: id, fields: body })) as Prisma.InputJsonValue,
       });
-      sendSuccess(res, feature, 'Feature updated');
+      sendSuccess(res, serializeFeature(feature), 'Feature updated');
     } catch (error) {
       sendError(res, error as Error);
     }

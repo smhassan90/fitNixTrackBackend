@@ -57,6 +57,27 @@ test('create/update/delete package feature', async () => {
   assert.equal(deleteRes.status, 200);
 });
 
+test('GET admin package features lists catalog', async () => {
+  mockMethod(prisma as any, '$queryRaw', (async () => [
+    {
+      id: 1,
+      name: 'Gym Access',
+      code: 'GYM_ACCESS',
+      description: null,
+      isActive: true,
+      sortOrder: 1,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      deletedAt: null,
+    },
+  ]) as any);
+  const app = appWithRole('PLATFORM_SUPPORT');
+  const res = await request(app).get('/admin/packages/features');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.data.features.length, 1);
+  assert.equal(res.body.data.features[0].name, 'Gym Access');
+});
+
 test('rbac + duplicate validation', async () => {
   mockMethod(prisma as any, '$queryRaw', (async () => [{ id: 1 }]) as any);
   const app = appWithRole('SUPER_ADMIN');

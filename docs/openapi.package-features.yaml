@@ -1,0 +1,122 @@
+openapi: 3.0.3
+info:
+  title: FitNix Package Features API
+  version: 1.0.0
+  description: Catalog of selectable features used when creating gym packages.
+paths:
+  /api/packages/features:
+    get:
+      summary: List package features
+      description: Active features by default. Pass all=true (GYM_ADMIN) to include inactive.
+      tags: [Package Features]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: all
+          schema:
+            type: boolean
+          description: Include inactive features (GYM_ADMIN only)
+      responses:
+        '200':
+          description: Feature list
+          content:
+            application/json:
+              example:
+                success: true
+                data:
+                  features:
+                    - id: 1
+                      name: Gym Access
+                      code: GYM_ACCESS
+                      description: Full floor access
+                      isActive: true
+                      sortOrder: 1
+    post:
+      summary: Create feature (GYM_ADMIN)
+      tags: [Package Features]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              name: Cardio Equipment
+              code: CARDIO
+              description: Treadmills and bikes
+              isActive: true
+              sortOrder: 2
+      responses:
+        '201':
+          description: Created
+        '409':
+          description: Duplicate name/code
+  /api/packages/features/{id}:
+    patch:
+      summary: Update feature (GYM_ADMIN)
+      tags: [Package Features]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            example:
+              isActive: false
+              name: Cardio Zone
+      responses:
+        '200':
+          description: Updated
+    delete:
+      summary: Soft-delete feature (GYM_ADMIN)
+      tags: [Package Features]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Soft-deleted
+        '409':
+          description: FEATURE_IN_USE
+  /api/platform/admin/packages/features:
+    get:
+      summary: Platform list features (SUPER_ADMIN / PLATFORM_SUPPORT)
+      tags: [Platform Package Features]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: All non-deleted features
+    post:
+      summary: Platform create feature (SUPER_ADMIN)
+      tags: [Platform Package Features]
+      security:
+        - bearerAuth: []
+  /api/platform/admin/packages/features/{id}:
+    patch:
+      summary: Platform update feature (SUPER_ADMIN)
+      tags: [Platform Package Features]
+      security:
+        - bearerAuth: []
+    delete:
+      summary: Platform soft-delete feature (SUPER_ADMIN)
+      tags: [Platform Package Features]
+      security:
+        - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
