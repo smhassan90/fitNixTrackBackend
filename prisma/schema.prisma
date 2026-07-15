@@ -281,6 +281,7 @@ model Trainer {
   id             Int       @id @default(autoincrement())
   gymId          Int
   name           String
+  phone          String?   @db.VarChar(40)
   gender         String?
   dateOfBirth    DateTime?
   specialization String?   @db.Text
@@ -294,6 +295,7 @@ model Trainer {
   members MemberTrainer[]
 
   @@index([gymId])
+  @@index([gymId, phone])
   @@map("trainers")
 }
 

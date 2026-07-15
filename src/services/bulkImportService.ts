@@ -530,6 +530,7 @@ export async function importTrainersFromCsv(
       data: {
         gymId,
         name,
+        phone: mapped.phone?.trim() || null,
         gender: normalizeGender(mapped.gender),
         dateOfBirth,
         specialization: mapped.specialization?.trim() || null,

@@ -59,10 +59,12 @@ router.get(
 
       // Search filter
       if (search) {
+        const searchNum = parseInt(search, 10);
         where.OR = [
           { name: { contains: search } },
+          { phone: { contains: search } },
           { specialization: { contains: search } },
-          { id: { contains: search } },
+          ...(Number.isNaN(searchNum) ? [] : [{ id: searchNum }]),
         ];
       }
 
@@ -148,6 +150,7 @@ router.post(
       const gymId = req.gymId!;
       const {
         name,
+        phone,
         gender,
         dateOfBirth,
         specialization,
@@ -164,6 +167,7 @@ router.post(
         data: {
           gymId,
           name,
+          phone: phone && String(phone).trim() ? String(phone).trim() : null,
           gender: gender || null,
           dateOfBirth: dob,
           specialization: specialization || null,
@@ -197,6 +201,7 @@ router.put(
       const { id } = req.params;
       const {
         name,
+        phone,
         gender,
         dateOfBirth,
         specialization,
@@ -221,6 +226,9 @@ router.put(
       // Update trainer
       const updateData: any = {};
       if (name !== undefined) updateData.name = name;
+      if (phone !== undefined) {
+        updateData.phone = phone && String(phone).trim() ? String(phone).trim() : null;
+      }
       if (gender !== undefined) updateData.gender = gender;
       if (dateOfBirth !== undefined) updateData.dateOfBirth = dob;
       if (specialization !== undefined) updateData.specialization = specialization;

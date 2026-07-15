@@ -5,6 +5,7 @@ const timeRegex = /^([0-1][0-9]|2[0-3]):[0-5][0-9]$/; // HH:mm format
 export const createTrainerSchema = z.object({
   body: z.object({
     name: z.string().min(1, 'Name is required').max(255),
+    phone: z.string().max(40).optional().nullable(),
     gender: z.enum(['Male', 'Female', 'Other']).optional().nullable(),
     dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').optional().nullable(),
     specialization: z.string().max(500).optional().nullable(),
@@ -20,6 +21,7 @@ export const updateTrainerSchema = z.object({
   }),
   body: z.object({
     name: z.string().min(1).max(255).optional(),
+    phone: z.string().max(40).optional().nullable(),
     gender: z.enum(['Male', 'Female', 'Other']).optional().nullable(),
     dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
     specialization: z.string().max(500).optional().nullable(),
