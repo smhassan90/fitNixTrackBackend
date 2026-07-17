@@ -92,6 +92,9 @@ export async function applyAutoCheckoutForOpenSessions(
 /**
  * Mark active members inactive when their last check-in is older than absenceInactiveDays.
  * Uses the same inactiveFrom + payment cleanup pattern as manual deactivation.
+ *
+ * Members who have never checked in are left active — "no attendance yet" is not
+ * the same as "stopped coming" (important after CSV import / before device sync).
  */
 export async function markMembersInactiveAfterAbsence(
   gymId: number,
@@ -139,10 +142,11 @@ export async function markMembersInactiveAfterAbsence(
 
   for (const member of activeMembers) {
     const lastCheckIn = lastCheckInByMember.get(member.id);
-    const shouldDeactivate =
-      !lastCheckIn || lastCheckIn.getTime() < cutoffStart.getTime();
-
-    if (!shouldDeactivate) {
+    // Never attended on this system → do not auto-deactivate.
+    if (!lastCheckIn) {
+      continue;
+    }
+    if (lastCheckIn.getTime() >= cutoffStart.getTime()) {
       continue;
     }
 

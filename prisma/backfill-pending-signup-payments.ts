@@ -2,6 +2,11 @@
  * Mark all PENDING signup one-time payments as PAID using historical dates
  * (member admission / join date), so fee reports are not inflated for today.
  *
+ * Historical joins resume monthly billing from the current gym month — they do
+ * not invent every month since admission as OVERDUE. If a prior run already
+ * created that overdue chain, run:
+ *   npx tsx prisma/repair-historical-signup-overdue.ts --gym-id=3
+ *
  * Usage:
  *   npx tsx prisma/backfill-pending-signup-payments.ts --gym-id=3
  *   npx tsx prisma/backfill-pending-signup-payments.ts --gym-id=3 --dry-run

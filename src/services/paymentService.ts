@@ -12,6 +12,7 @@ import {
   getGymTimezone,
   calendarDateStringInGymTZ,
   endOfCalendarMonthInGymTZ,
+  parseDate,
 } from '../utils/dateHelpers';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import {
@@ -21,6 +22,209 @@ import {
 } from './feeCollectionService';
 
 type Tx = Prisma.TransactionClient;
+
+/**
+ * First calendar day monthly billing is considered live for this deployment.
+ * Admissions before this date are treated as pre-opening signup (admission fee only)
+ * until billing resumes — they must not invent months of overdue.
+ *
+ * Override with GYM_OPERATIONS_START=YYYY-MM-DD when needed.
+ */
+export function getGymOperationsStartDate(): Date {
+  const raw = process.env.GYM_OPERATIONS_START?.trim();
+  if (raw && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return parseDate(raw);
+  }
+  return parseDate('2026-01-01');
+}
+
+/** Admission/join before gym monthly operations started. */
+export function isPreOperationsAdmission(membershipStart: Date): boolean {
+  const start = new Date(membershipStart);
+  start.setUTCHours(0, 0, 0, 0);
+  return start.getTime() < getGymOperationsStartDate().getTime();
+}
+
+/** True when paid/join month is before the current gym calendar month. */
+export function isBeforeCurrentGymMonth(date: Date, now: Date = new Date()): boolean {
+  const tz = getGymTimezone();
+  const dateYm = calendarDateStringInGymTZ(date, tz).slice(0, 7);
+  const todayYm = calendarDateStringInGymTZ(now, tz).slice(0, 7);
+  return dateYm < todayYm;
+}
+
+/** First day of the current gym calendar month (UTC midnight). */
+export function startOfCurrentGymMonth(now: Date = new Date()): Date {
+  const tz = getGymTimezone();
+  const todayStr = calendarDateStringInGymTZ(now, tz);
+  return parseDate(`${todayStr.slice(0, 7)}-01`);
+}
+
+/**
+ * After last PAID, choose the first due date sync may create.
+ * Pre-operations admissions whose only paid row is the signup month jump to the
+ * current gym month (or billingResumeFrom) — never invent a year of phantom overdue.
+ * Post-operations members keep a normal month-to-month chain.
+ */
+export function resolveNextSyncDueAfterLastPaid(params: {
+  lastPaidDueDate: Date;
+  membershipStart: Date | null;
+  billingResumeFrom: Date | null | undefined;
+  anchorDay: number;
+  now?: Date;
+}): Date {
+  const {
+    lastPaidDueDate,
+    membershipStart,
+    billingResumeFrom,
+    anchorDay,
+    now = new Date(),
+  } = params;
+
+  let billableFrom = billingResumeFrom ?? null;
+  const lastPaid = new Date(lastPaidDueDate);
+  lastPaid.setUTCHours(0, 0, 0, 0);
+
+  const isSignupSeedMonth =
+    !!membershipStart && formatMonth(lastPaid) === formatMonth(membershipStart);
+
+  if (
+    !billableFrom &&
+    membershipStart &&
+    isPreOperationsAdmission(membershipStart) &&
+    isSignupSeedMonth &&
+    isBeforeCurrentGymMonth(lastPaid, now)
+  ) {
+    billableFrom = startOfCurrentGymMonth(now);
+  }
+
+  const d = nextBillingDueDate(lastPaid, anchorDay);
+  return shiftToBillableDate(d, anchorDay, billableFrom);
+}
+
+/**
+ * Unpaid rows that are phantom gaps from historical admission seeding — not real debt.
+ * Only applies to pre-operations admissions (before GYM_OPERATIONS_START).
+ * - Later PAID exists: unpaid months after admission month and before first later PAID,
+ *   but only months that themselves fall before operations start.
+ * - Only admission month PAID: unpaid before the current gym month (resume billing now).
+ */
+export function selectPhantomGapUnpaidPayments<
+  T extends { status: string; dueDate: Date },
+>(params: {
+  membershipStart: Date;
+  payments: T[];
+  resumeFrom?: Date;
+  now?: Date;
+  operationsStart?: Date;
+}): { gapUnpaid: T[]; setBillingResume: boolean } {
+  const membershipStart = new Date(params.membershipStart);
+  membershipStart.setUTCHours(0, 0, 0, 0);
+  if (!isPreOperationsAdmission(membershipStart)) {
+    return { gapUnpaid: [], setBillingResume: false };
+  }
+
+  const resumeFrom = params.resumeFrom ?? startOfCurrentGymMonth(params.now);
+  const operationsStart = params.operationsStart ?? getGymOperationsStartDate();
+  const payments = params.payments;
+
+  const paid = payments.filter((p) => p.status === 'PAID');
+  const month1Key = formatMonth(membershipStart);
+  const month1Paid = paid.find((p) => formatMonth(p.dueDate) === month1Key);
+  if (!month1Paid) {
+    return { gapUnpaid: [], setBillingResume: false };
+  }
+
+  // Compare by calendar month, not dueDate > join day (join day-of-month can be 1
+  // while due is the 31st of the same month).
+  const paidAfterMonth1 = paid
+    .filter((p) => formatMonth(p.dueDate) > month1Key)
+    .sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
+
+  if (paidAfterMonth1.length > 0) {
+    const firstLaterPaidMonth = formatMonth(paidAfterMonth1[0].dueDate);
+    return {
+      gapUnpaid: payments.filter((p) => {
+        if (p.status !== 'OVERDUE' && p.status !== 'PENDING') return false;
+        const ym = formatMonth(p.dueDate);
+        return ym > month1Key && ym < firstLaterPaidMonth && p.dueDate.getTime() < operationsStart.getTime();
+      }),
+      setBillingResume: false,
+    };
+  }
+
+  const onlyMonth1Paid = paid.length === 1;
+  if (!onlyMonth1Paid) {
+    return { gapUnpaid: [], setBillingResume: false };
+  }
+
+  const gapUnpaid = payments.filter((p) => {
+    if (p.status !== 'OVERDUE' && p.status !== 'PENDING') return false;
+    const ym = formatMonth(p.dueDate);
+    return ym > month1Key && p.dueDate.getTime() < resumeFrom.getTime();
+  });
+  return { gapUnpaid, setBillingResume: gapUnpaid.length > 0 };
+}
+
+/**
+ * After a historical signup seed (admission long before today), do not invent
+ * every intervening month as OVERDUE. Resume monthly billing from the current
+ * gym month and drop unpaid gap rows — but never delete unpaid that sits after
+ * a real later PAID month (legitimate current overdue).
+ */
+async function resumeMonthlyBillingFromCurrentMonth(
+  memberId: number,
+  gymId: number,
+  month1DueDate: Date
+): Promise<Date | null> {
+  const laterPaid = await prisma.payment.findFirst({
+    where: {
+      memberId,
+      gymId,
+      status: 'PAID',
+      dueDate: { gt: month1DueDate },
+    },
+    orderBy: { dueDate: 'asc' },
+    select: { dueDate: true },
+  });
+
+  if (laterPaid) {
+    // Real billing already exists — only clear unpaid phantom gap before it.
+    await prisma.payment.deleteMany({
+      where: {
+        memberId,
+        gymId,
+        status: { in: ['PENDING', 'OVERDUE'] },
+        dueDate: {
+          gt: month1DueDate,
+          lt: laterPaid.dueDate,
+        },
+      },
+    });
+    return null;
+  }
+
+  const resumeFrom = startOfCurrentGymMonth();
+
+  await prisma.member.update({
+    where: { id: memberId },
+    data: { billingResumeFrom: resumeFrom },
+  });
+
+  await prisma.payment.deleteMany({
+    where: {
+      memberId,
+      gymId,
+      status: { in: ['PENDING', 'OVERDUE'] },
+      dueDate: {
+        gt: month1DueDate,
+        lt: resumeFrom,
+      },
+    },
+  });
+
+  return resumeFrom;
+}
 
 type MemberWithPackage = {
   packageId: number | null;
@@ -281,7 +485,7 @@ export async function markSignupOneTimePaidAtDate(
   return { memberId: oneTimePayment.memberId, paidDate };
 }
 
-/** After signup one-time is paid, record month 1 as paid and open month 2+. */
+/** After signup one-time is paid, record month 1 as paid and open the next billable month. */
 export async function seedMonthlyBillingAfterOneTimePaid(
   memberId: number,
   gymId: number,
@@ -296,15 +500,29 @@ export async function seedMonthlyBillingAfterOneTimePaid(
   }
 
   const amount = await refreshMemberOpenInstallmentAmounts(memberId, gymId);
-  const anchorDay = getBillingAnchorDayUTC(member.membershipStart);
   const month1Key = formatMonth(member.membershipStart);
   const dueDate = new Date(member.membershipStart);
   dueDate.setUTCHours(0, 0, 0, 0);
 
   const paidDate = options.paidDate
     ? new Date(options.paidDate)
-  : new Date(member.membershipStart);
+    : new Date(member.membershipStart);
   paidDate.setUTCHours(0, 0, 0, 0);
+
+  // Pre-opening admission: keep signup revenue on the join date, but do not
+  // backfill every month since then as overdue (gym was not operating yet).
+  const historicalSignup = isPreOperationsAdmission(dueDate);
+  let billingResumeFrom = member.billingResumeFrom;
+  let skipCreateNextFromMonth1 = false;
+  if (historicalSignup) {
+    const resumed = await resumeMonthlyBillingFromCurrentMonth(memberId, gymId, dueDate);
+    if (resumed) {
+      billingResumeFrom = resumed;
+    } else {
+      // Real monthly PAID rows already exist after admission — do not open Feb from month 1.
+      skipCreateNextFromMonth1 = true;
+    }
+  }
 
   await prisma.$transaction(async (tx) => {
     const existing = await tx.payment.findFirst({
@@ -331,7 +549,7 @@ export async function seedMonthlyBillingAfterOneTimePaid(
       });
     }
 
-    if (month1Paid) {
+    if (month1Paid && !skipCreateNextFromMonth1) {
       await createNextInstallmentIfNeeded(tx, gymId, {
         memberId,
         dueDate: month1Paid.dueDate,
@@ -341,7 +559,7 @@ export async function seedMonthlyBillingAfterOneTimePaid(
           membershipEnd: member.membershipEnd,
           membershipStart: member.membershipStart,
           isActive: member.isActive,
-          billingResumeFrom: member.billingResumeFrom,
+          billingResumeFrom,
           package: member.package,
         },
       });
@@ -350,6 +568,267 @@ export async function seedMonthlyBillingAfterOneTimePaid(
 
   await syncMissingNextMonthlyInstallment(memberId, gymId);
   await markOverduePayments(gymId);
+}
+
+/**
+ * Repair members damaged by historical signup seed + overdue backfill.
+ *
+ * Two patterns:
+ * 1) Only admission month PAID, then many OVERDUE through today (e.g. Sufiyan) —
+ *    drop gap unpaid and resume billing from the current gym month.
+ * 2) Admission month PAID, later months truly PAID, but phantom OVERDUE in the
+ *    gap before real billing (e.g. Sarwar 2025-02) — drop only that gap.
+ *
+ * Also reactivates members auto-marked inactive (inactiveFrom ≠ join month).
+ */
+export async function repairHistoricalSignupOverdueBackfill(
+  gymId: number,
+  options: { dryRun?: boolean; reactivateAutoInactive?: boolean } = {}
+): Promise<{
+  scanned: number;
+  repaired: number;
+  reactivated: number;
+  skipped: number;
+  members: Array<{
+    memberId: number;
+    legacyMemberId: string | null;
+    name: string;
+    overdueRemoved: number;
+    reactivated: boolean;
+  }>;
+}> {
+  const dryRun = options.dryRun === true;
+  const reactivateAutoInactive = options.reactivateAutoInactive !== false;
+  const resumeFrom = startOfCurrentGymMonth();
+
+  const candidates = await prisma.member.findMany({
+    where: {
+      gymId,
+      oneTimePaymentPaid: true,
+      membershipStart: { not: null },
+    },
+    select: {
+      id: true,
+      legacyMemberId: true,
+      name: true,
+      isActive: true,
+      inactiveFrom: true,
+      membershipStart: true,
+      membershipEnd: true,
+      billingResumeFrom: true,
+      package: { select: { duration: true } },
+    },
+  });
+
+  const result: {
+    scanned: number;
+    repaired: number;
+    reactivated: number;
+    skipped: number;
+    members: Array<{
+      memberId: number;
+      legacyMemberId: string | null;
+      name: string;
+      overdueRemoved: number;
+      reactivated: boolean;
+    }>;
+  } = {
+    scanned: candidates.length,
+    repaired: 0,
+    reactivated: 0,
+    skipped: 0,
+    members: [],
+  };
+
+  for (const member of candidates) {
+    if (!member.membershipStart || !isPreOperationsAdmission(member.membershipStart)) {
+      result.skipped++;
+      continue;
+    }
+
+    const month1Key = formatMonth(member.membershipStart);
+    const payments = await prisma.payment.findMany({
+      where: { memberId: member.id, gymId },
+      select: { id: true, month: true, status: true, dueDate: true },
+      orderBy: { dueDate: 'asc' },
+    });
+
+    const month1Due = new Date(member.membershipStart);
+    month1Due.setUTCHours(0, 0, 0, 0);
+
+    const { gapUnpaid, setBillingResume } = selectPhantomGapUnpaidPayments({
+      membershipStart: member.membershipStart,
+      payments,
+      resumeFrom,
+    });
+
+    if (gapUnpaid.length === 0) {
+      result.skipped++;
+      continue;
+    }
+
+    const importedInactive =
+      !member.isActive &&
+      member.inactiveFrom &&
+      formatMonth(member.inactiveFrom) === month1Key;
+    // Only reactivate when we are also clearing phantom overdue — do not undo
+    // legitimate absence/manual deactivations with clean payment history.
+    const shouldReactivate =
+      reactivateAutoInactive &&
+      !member.isActive &&
+      !importedInactive;
+
+    const staleMembershipEnd =
+      !member.membershipEnd || member.membershipEnd.getTime() <= month1Due.getTime();
+
+    const paidAfterMonth1 = payments.filter(
+      (p) => p.status === 'PAID' && p.dueDate.getTime() > month1Due.getTime()
+    );
+
+    if (dryRun) {
+      result.repaired++;
+      if (shouldReactivate) result.reactivated++;
+      result.members.push({
+        memberId: member.id,
+        legacyMemberId: member.legacyMemberId,
+        name: member.name,
+        overdueRemoved: gapUnpaid.length,
+        reactivated: shouldReactivate,
+      });
+      continue;
+    }
+
+    let newMembershipEnd: Date | undefined;
+    if ((shouldReactivate || setBillingResume) && staleMembershipEnd && member.package) {
+      const anchorDay = getBillingAnchorDayUTC(member.membershipStart);
+      const durationMonths = parseDurationToMonths(member.package.duration);
+      if (durationMonths > 0) {
+        const from = setBillingResume ? resumeFrom : paidAfterMonth1[0]?.dueDate ?? resumeFrom;
+        newMembershipEnd = computeMembershipLastDueDate(from, durationMonths, anchorDay);
+      } else {
+        newMembershipEnd = endOfCalendarMonthInGymTZ(new Date());
+      }
+    }
+
+    await prisma.member.update({
+      where: { id: member.id },
+      data: {
+        ...(setBillingResume ? { billingResumeFrom: resumeFrom } : {}),
+        ...(shouldReactivate ? { isActive: true, inactiveFrom: null } : {}),
+        ...(newMembershipEnd ? { membershipEnd: newMembershipEnd } : {}),
+      },
+    });
+
+    if (gapUnpaid.length > 0) {
+      await prisma.payment.deleteMany({
+        where: { id: { in: gapUnpaid.map((p) => p.id) } },
+      });
+    }
+
+    if (shouldReactivate || member.isActive) {
+      await syncMissingNextMonthlyInstallment(member.id, gymId);
+    }
+    await markOverduePayments(gymId);
+
+    result.repaired++;
+    if (shouldReactivate) result.reactivated++;
+    result.members.push({
+      memberId: member.id,
+      legacyMemberId: member.legacyMemberId,
+      name: member.name,
+      overdueRemoved: gapUnpaid.length,
+      reactivated: shouldReactivate,
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Undo accidental "resume from current month" for members who joined on/after
+ * gym operations start. Clears billingResumeFrom and re-syncs the real overdue chain
+ * from their last PAID installment.
+ */
+export async function restorePostOperationsBillingAfterWrongResume(
+  gymId: number,
+  options: { dryRun?: boolean } = {}
+): Promise<{
+  scanned: number;
+  restored: number;
+  members: Array<{
+    memberId: number;
+    legacyMemberId: string | null;
+    name: string;
+    membershipStart: string;
+  }>;
+}> {
+  const dryRun = options.dryRun === true;
+  const operationsStart = getGymOperationsStartDate();
+
+  const candidates = await prisma.member.findMany({
+    where: {
+      gymId,
+      billingResumeFrom: { not: null },
+      membershipStart: { gte: operationsStart },
+      isActive: true,
+    },
+    select: {
+      id: true,
+      legacyMemberId: true,
+      name: true,
+      membershipStart: true,
+      billingResumeFrom: true,
+    },
+  });
+
+  const result: {
+    scanned: number;
+    restored: number;
+    members: Array<{
+      memberId: number;
+      legacyMemberId: string | null;
+      name: string;
+      membershipStart: string;
+    }>;
+  } = { scanned: candidates.length, restored: 0, members: [] };
+
+  for (const member of candidates) {
+    if (!member.membershipStart) continue;
+
+    const paid = await prisma.payment.findMany({
+      where: { memberId: member.id, gymId, status: 'PAID' },
+      select: { month: true, dueDate: true },
+      orderBy: { dueDate: 'asc' },
+    });
+    const month1Key = formatMonth(member.membershipStart);
+    const onlyAdmissionPaid =
+      paid.length === 1 && formatMonth(paid[0].dueDate) === month1Key;
+    if (!onlyAdmissionPaid) {
+      continue;
+    }
+
+    result.members.push({
+      memberId: member.id,
+      legacyMemberId: member.legacyMemberId,
+      name: member.name,
+      membershipStart: member.membershipStart.toISOString().slice(0, 10),
+    });
+
+    if (dryRun) {
+      result.restored++;
+      continue;
+    }
+
+    await prisma.member.update({
+      where: { id: member.id },
+      data: { billingResumeFrom: null },
+    });
+    await syncMissingNextMonthlyInstallment(member.id, gymId);
+    await markOverduePayments(gymId);
+    result.restored++;
+  }
+
+  return result;
 }
 
 async function resolveMonthlyInstallmentAmount(
@@ -501,8 +980,12 @@ export async function syncMissingNextMonthlyInstallment(
   const todayStr = calendarDateStringInGymTZ(new Date(), tz);
   const todayYm = todayStr.slice(0, 7);
 
-  let d = nextBillingDueDate(lastPaid.dueDate, anchorDay);
-  d = shiftToBillableDate(d, anchorDay, member.billingResumeFrom);
+  let d = resolveNextSyncDueAfterLastPaid({
+    lastPaidDueDate: lastPaid.dueDate,
+    membershipStart: member.membershipStart,
+    billingResumeFrom: member.billingResumeFrom,
+    anchorDay,
+  });
   const maxSteps = 120;
 
   for (let step = 0; step < maxSteps; step++) {
@@ -609,8 +1092,12 @@ export async function ensureMonthlyInstallmentsThroughMonthKey(
 
   const amount = await refreshMemberOpenInstallmentAmounts(memberId, gymId);
 
-  let d = nextBillingDueDate(lastPaid.dueDate, anchorDay);
-  d = shiftToBillableDate(d, anchorDay, member.billingResumeFrom);
+  let d = resolveNextSyncDueAfterLastPaid({
+    lastPaidDueDate: lastPaid.dueDate,
+    membershipStart: member.membershipStart,
+    billingResumeFrom: member.billingResumeFrom,
+    anchorDay,
+  });
 
   for (let step = 0; step < 120; step++) {
     if (d.getTime() > endCap.getTime()) {
