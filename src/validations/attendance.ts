@@ -29,3 +29,13 @@ export const getNoSignInMembersSchema = z.object({
 });
 
 export const applyAttendancePoliciesSchema = z.object({});
+
+export const getOverdueCheckinsSchema = z.object({
+  query: z.object({
+    /** Only include check-ins at/after this time (ISO 8601). Default: start of today. */
+    since: z
+      .string()
+      .refine((v) => !Number.isNaN(new Date(v).getTime()), 'since must be a valid ISO datetime')
+      .optional(),
+  }),
+});

@@ -29,7 +29,10 @@ import { ensureGymSyncApiKey } from '../services/gymSyncApiKeyService';
 import { generateSyncApiKey } from '../utils/syncApiKey';
 import { parseDate } from '../utils/dateHelpers';
 import { formatDeviceForPortal, formatSyncResultDto } from '../utils/deviceDto';
-import { applyAttendancePolicies } from '../services/attendancePolicyService';
+import {
+  applyAttendancePolicies,
+  getOverduePaymentDetailsByMemberIds,
+} from '../services/attendancePolicyService';
 import {
   applyPunchToAttendance,
   confirmDeviceUserMappings,
@@ -690,6 +693,7 @@ router.get(
                 member: {
                   select: {
                     id: true,
+                    legacyMemberId: true,
                     name: true,
                     email: true,
                     phone: true,
@@ -767,6 +771,7 @@ router.get(
           deviceUserToMemberMap.set(mapping.deviceUserId, mapping.member.id);
           deviceUserToMemberInfoMap.set(mapping.deviceUserId, {
             memberId: mapping.member.id,
+            memberNumber: mapping.member.legacyMemberId?.trim() || null,
             memberName: mapping.member.name,
             memberEmail: mapping.member.email,
             memberPhone: mapping.member.phone,
@@ -985,6 +990,8 @@ router.get(
         let synced = 0;
         let errors = 0;
         const formattedLogs: any[] = [];
+        // Members whose check-in was written/updated this sync — used for overdue-payment alerts
+        const syncedCheckInsByMember = new Map<number, { memberInfo: any; checkInTime: Date }>();
 
         // Process each grouped log (one record per member per date)
         for (const group of groupedLogs) {
@@ -1188,6 +1195,16 @@ router.get(
 
               // Add formatted logs for response (one entry per check-in/check-out)
               if (wasUpdated || isNewRecord) {
+                if (earliestCheckIn) {
+                  const prev = syncedCheckInsByMember.get(memberId);
+                  if (!prev || earliestCheckIn > prev.checkInTime) {
+                    syncedCheckInsByMember.set(memberId, {
+                      memberInfo,
+                      checkInTime: earliestCheckIn,
+                    });
+                  }
+                }
+
                 // Add check-in entry
                 if (earliestCheckIn) {
                   formattedLogs.push({
@@ -1259,7 +1276,32 @@ router.get(
         const checkIns = formattedLogs.filter((log) => log.eventType === 'CHECK_IN');
         const checkOuts = formattedLogs.filter((log) => log.eventType === 'CHECK_OUT');
 
+        // Overdue-payment alerts for members whose check-in was just synced —
+        // frontend shows these as toast notifications so the owner can act immediately.
+        const overdueByMember = await getOverduePaymentDetailsByMemberIds(gymId, [
+          ...syncedCheckInsByMember.keys(),
+        ]);
+        const overdueAlerts = [...syncedCheckInsByMember.entries()]
+          .filter(([memberId]) => overdueByMember.has(memberId))
+          .map(([memberId, { memberInfo, checkInTime }]) => {
+            const overdue = overdueByMember.get(memberId)!;
+            return {
+              memberId,
+              memberNumber: memberInfo?.memberNumber ?? null,
+              legacyMemberId: memberInfo?.memberNumber ?? null,
+              memberName: memberInfo?.memberName ?? null,
+              contact: memberInfo?.memberPhone || memberInfo?.memberEmail || 'N/A',
+              checkInTime: checkInTime.toISOString(),
+              overdueCount: overdue.overdueCount,
+              overdueAmount: overdue.overdueAmount,
+              overdueSince: overdue.overdueSince,
+              overdueMonths: overdue.overdueMonths,
+            };
+          })
+          .sort((a, b) => (a.checkInTime < b.checkInTime ? 1 : -1));
+
         sendSuccess(res, {
+          overdueAlerts,
           total: formattedLogs.length,
           checkIns: checkIns.length,
           checkOuts: checkOuts.length,

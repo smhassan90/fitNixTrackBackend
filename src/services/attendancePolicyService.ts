@@ -194,41 +194,74 @@ export async function applyAttendancePolicies(gymId: number): Promise<{
   return { autoCheckedOut, markedInactive };
 }
 
-export async function getOverduePaymentMemberIds(
+export interface MemberOverduePaymentInfo {
+  memberId: number;
+  /** Number of overdue (past-due unpaid) installments. */
+  overdueCount: number;
+  /** Total amount across overdue installments. */
+  overdueAmount: number;
+  /** Due date of the oldest overdue installment (ISO). */
+  overdueSince: string;
+  /** Billing months (YYYY-MM) that are overdue, oldest first. */
+  overdueMonths: string[];
+}
+
+/**
+ * Detailed overdue-installment info per member (past-due unpaid installments only).
+ * A payment counts as overdue when status is OVERDUE or its due date is before today in gym TZ.
+ */
+export async function getOverduePaymentDetailsByMemberIds(
   gymId: number,
   memberIds: number[]
-): Promise<Set<number>> {
+): Promise<Map<number, MemberOverduePaymentInfo>> {
   if (memberIds.length === 0) {
-    return new Set();
+    return new Map();
   }
 
   const tz = getGymTimezone();
   const payments = await prisma.payment.findMany({
     where: {
       gymId,
-      memberId: { in: memberIds },
+      memberId: { in: [...new Set(memberIds)] },
       status: { in: ['PENDING', 'OVERDUE'] },
     },
-    select: { memberId: true, status: true, dueDate: true },
+    select: { memberId: true, status: true, dueDate: true, amount: true, month: true },
     orderBy: { dueDate: 'asc' },
   });
 
-  const nextByMember = new Map<number, (typeof payments)[0]>();
+  const details = new Map<number, MemberOverduePaymentInfo>();
   for (const p of payments) {
-    if (!nextByMember.has(p.memberId)) {
-      nextByMember.set(p.memberId, p);
+    const isOverdue =
+      p.status === 'OVERDUE' || unpaidInstallmentDisplayBucket(p.dueDate, tz) === 'overdue';
+    if (!isOverdue) {
+      continue;
+    }
+
+    const existing = details.get(p.memberId);
+    if (!existing) {
+      details.set(p.memberId, {
+        memberId: p.memberId,
+        overdueCount: 1,
+        overdueAmount: p.amount,
+        overdueSince: p.dueDate.toISOString(),
+        overdueMonths: [p.month],
+      });
+    } else {
+      existing.overdueCount += 1;
+      existing.overdueAmount += p.amount;
+      existing.overdueMonths.push(p.month);
     }
   }
 
-  const overdue = new Set<number>();
-  for (const [memberId, payment] of nextByMember) {
-    const bucket = unpaidInstallmentDisplayBucket(payment.dueDate, tz);
-    if (payment.status === 'OVERDUE' || bucket === 'overdue') {
-      overdue.add(memberId);
-    }
-  }
+  return details;
+}
 
-  return overdue;
+export async function getOverduePaymentMemberIds(
+  gymId: number,
+  memberIds: number[]
+): Promise<Set<number>> {
+  const details = await getOverduePaymentDetailsByMemberIds(gymId, memberIds);
+  return new Set(details.keys());
 }
 
 export async function getCurrentlyInGymMembers(gymId: number): Promise<{

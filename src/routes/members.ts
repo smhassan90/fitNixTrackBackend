@@ -664,10 +664,6 @@ async function updateMemberHandler(req: AuthRequest, res: Response): Promise<voi
         assertMemberDiscountWithinLimit(discount, resolveMaxMemberDiscount(gym));
       }
 
-      if (legacyMemberId !== undefined) {
-        await assertLegacyMemberIdAvailable(gymId, legacyMemberId, memberId);
-      }
-
       // Validate package exists if provided
       if (packageId) {
         const packageExists = await prisma.package.findFirst({
@@ -696,7 +692,21 @@ async function updateMemberHandler(req: AuthRequest, res: Response): Promise<voi
 
       // Update member
       const updateData: any = {};
-      if (legacyMemberId !== undefined) updateData.legacyMemberId = legacyMemberId;
+      if (legacyMemberId !== undefined) {
+        const trimmedLegacy =
+          legacyMemberId === null || legacyMemberId === ''
+            ? null
+            : String(legacyMemberId).trim() || null;
+
+        if (trimmedLegacy) {
+          await assertLegacyMemberIdAvailable(gymId, trimmedLegacy, memberId);
+          updateData.legacyMemberId = trimmedLegacy;
+        } else if (!existingMember.legacyMemberId?.trim()) {
+          const nextId = await allocateNextLegacyMemberId(gymId);
+          await assertLegacyMemberIdAvailable(gymId, nextId, memberId);
+          updateData.legacyMemberId = nextId;
+        }
+      }
       if (name !== undefined) updateData.name = name;
       if (phone !== undefined) updateData.phone = phone;
       if (email !== undefined) updateData.email = email;

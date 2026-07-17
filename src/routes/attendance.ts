@@ -8,6 +8,7 @@ import {
   getAttendanceRecordSchema,
   getNoSignInMembersSchema,
   applyAttendancePoliciesSchema,
+  getOverdueCheckinsSchema,
 } from '../validations/attendance';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
@@ -15,6 +16,7 @@ import { parseDate, getStartOfDay, getEndOfDay } from '../utils/dateHelpers';
 import { resolveMemberInternalId } from '../utils/memberLookup';
 import {
   applyAttendancePolicies,
+  getOverduePaymentDetailsByMemberIds,
   listMembersWithoutSignInSince,
 } from '../services/attendancePolicyService';
 import { requireRole } from '../middleware/auth';
@@ -130,10 +132,17 @@ router.get(
         take: limitNum,
       });
 
+      // Overdue payment info per member (for row highlighting in the portal)
+      const overdueByMember = await getOverduePaymentDetailsByMemberIds(
+        gymId,
+        records.map((r: any) => r.member.id)
+      );
+
       // Format records for frontend with calculated duration
       const formattedRecords = records.map((record: any) => {
         const checkInTime = record.checkInTime as Date | null;
         const checkOutTime = record.checkOutTime as Date | null;
+        const overdueInfo = overdueByMember.get(record.member.id) ?? null;
 
         // Calculate duration in minutes
         let duration: number | null = null;
@@ -196,6 +205,15 @@ router.get(
           status: record.status,
           duration: duration,
           durationFormatted: durationFormatted,
+          hasOverduePayment: overdueInfo != null,
+          overduePayment: overdueInfo
+            ? {
+                overdueCount: overdueInfo.overdueCount,
+                overdueAmount: overdueInfo.overdueAmount,
+                overdueSince: overdueInfo.overdueSince,
+                overdueMonths: overdueInfo.overdueMonths,
+              }
+            : null,
           memberDetails: {
             email: record.member.email,
             phone: record.member.phone,
@@ -257,6 +275,82 @@ router.get(
       });
 
       sendSuccess(res, { members: memberOptions });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// GET /api/attendance/overdue-checkins?since=<ISO>
+// Members who checked in since `since` (default: today) AND have overdue payments.
+// Poll this after attendance sync to show "member with overdue payment just entered" alerts.
+router.get(
+  '/overdue-checkins',
+  validate(getOverdueCheckinsSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { since } = req.query as { since?: string };
+
+      const sinceTime = since ? new Date(since) : getStartOfDay(new Date());
+      const now = new Date();
+
+      const records = await prisma.attendanceRecord.findMany({
+        where: {
+          gymId,
+          checkInTime: { gte: sinceTime, lte: now },
+        },
+        include: {
+          member: {
+            select: {
+              id: true,
+              legacyMemberId: true,
+              name: true,
+              phone: true,
+              email: true,
+            },
+          },
+        },
+        orderBy: { checkInTime: 'desc' },
+      });
+
+      // One alert per member — keep only the latest check-in
+      const latestByMember = new Map<number, (typeof records)[0]>();
+      for (const record of records) {
+        if (!latestByMember.has(record.member.id)) {
+          latestByMember.set(record.member.id, record);
+        }
+      }
+
+      const overdueByMember = await getOverduePaymentDetailsByMemberIds(gymId, [
+        ...latestByMember.keys(),
+      ]);
+
+      const alerts = [...latestByMember.values()]
+        .filter((record) => overdueByMember.has(record.member.id))
+        .map((record) => {
+          const overdue = overdueByMember.get(record.member.id)!;
+          const memberNumber = record.member.legacyMemberId?.trim() || null;
+          return {
+            attendanceRecordId: record.id,
+            memberId: record.member.id,
+            memberNumber,
+            legacyMemberId: memberNumber,
+            memberName: record.member.name,
+            contact: record.member.phone || record.member.email || 'N/A',
+            checkInTime: record.checkInTime?.toISOString() ?? null,
+            overdueCount: overdue.overdueCount,
+            overdueAmount: overdue.overdueAmount,
+            overdueSince: overdue.overdueSince,
+            overdueMonths: overdue.overdueMonths,
+          };
+        });
+
+      sendSuccess(res, {
+        alerts,
+        // Pass this back as `since` on the next poll to only get new check-ins
+        serverTime: now.toISOString(),
+      });
     } catch (error) {
       sendError(res, error as Error);
     }
