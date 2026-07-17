@@ -170,7 +170,7 @@ export const syncAttendanceOfflineSchema = z.object({
 
 export const testBackendOfflineSchema = z.object({
   params: z.object({
-    id: z.string().regex(/^\d+$/, 'Device ID must be a number').transform((val) => parseInt(val, 10)),
+    id: z.string().regex(/^\d+$/, 'Device ID must  be a number').transform((val) => parseInt(val, 10)),
   }),
   body: z.object({
     apiKey: z.string().min(1, 'API key is required').optional(),
