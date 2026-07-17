@@ -12,6 +12,7 @@ export const createTrainerSchema = z.object({
     charges: z.number().min(0).optional().nullable(),
     startTime: z.string().regex(timeRegex, 'Time must be in HH:mm format').optional().nullable(),
     endTime: z.string().regex(timeRegex, 'Time must be in HH:mm format').optional().nullable(),
+    isActive: z.boolean().optional(),
   }),
 });
 
@@ -28,6 +29,7 @@ export const updateTrainerSchema = z.object({
     charges: z.number().min(0).optional().nullable(),
     startTime: z.string().regex(timeRegex).optional().nullable(),
     endTime: z.string().regex(timeRegex).optional().nullable(),
+    isActive: z.boolean().optional(),
   }),
 });
 
@@ -43,6 +45,11 @@ export const getTrainersSchema = z.object({
     /** Gym-local creation date range (filters `createdAt`). */
     createdFrom: ymdQuery.optional(),
     createdTo: ymdQuery.optional(),
+    /** Filter by active status. Omit to return all trainers. */
+    isActive: z
+      .enum(['true', 'false'])
+      .optional()
+      .transform((val) => (val === undefined ? undefined : val === 'true')),
   }),
 });
 
@@ -53,6 +60,18 @@ export const getTrainerSchema = z.object({
 });
 
 export const deleteTrainerSchema = z.object({
+  params: z.object({
+    id: z.string().regex(/^\d+$/, 'Trainer ID must be a number').transform((val) => parseInt(val, 10)),
+  }),
+});
+
+export const deactivateTrainerSchema = z.object({
+  params: z.object({
+    id: z.string().regex(/^\d+$/, 'Trainer ID must be a number').transform((val) => parseInt(val, 10)),
+  }),
+});
+
+export const activateTrainerSchema = z.object({
   params: z.object({
     id: z.string().regex(/^\d+$/, 'Trainer ID must be a number').transform((val) => parseInt(val, 10)),
   }),

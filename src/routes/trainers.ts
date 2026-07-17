@@ -9,6 +9,8 @@ import {
   getTrainersSchema,
   getTrainerSchema,
   deleteTrainerSchema,
+  deactivateTrainerSchema,
+  activateTrainerSchema,
 } from '../validations/trainers';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
@@ -35,6 +37,7 @@ router.get(
         limit,
         createdFrom,
         createdTo,
+        isActive,
       } = req.query as any;
 
       // Ensure page and limit are numbers
@@ -42,6 +45,10 @@ router.get(
       const limitNum = typeof limit === 'number' ? limit : parseInt(limit as string, 10) || 50;
 
       const where: any = { gymId };
+
+      if (isActive !== undefined) {
+        where.isActive = isActive;
+      }
 
       if (createdFrom || createdTo) {
         if (createdFrom && createdTo && createdFrom > createdTo) {
@@ -157,6 +164,7 @@ router.post(
         charges,
         startTime,
         endTime,
+        isActive,
       } = req.body;
 
       // Parse date of birth
@@ -174,6 +182,7 @@ router.post(
           charges: charges || null,
           startTime: startTime || null,
           endTime: endTime || null,
+          isActive: isActive ?? true,
         },
         include: {
           _count: {
@@ -192,53 +201,95 @@ router.post(
 );
 
 // PUT /api/trainers/:id
-router.put(
-  '/:id',
-  validate(updateTrainerSchema),
+async function updateTrainerHandler(req: AuthRequest, res: Response) {
+  try {
+    const gymId = req.gymId!;
+    const { id } = req.params;
+    const {
+      name,
+      phone,
+      gender,
+      dateOfBirth,
+      specialization,
+      charges,
+      startTime,
+      endTime,
+      isActive,
+    } = req.body;
+
+    const existingTrainer = await prisma.trainer.findFirst({
+      where: { id: id as any, gymId: gymId as any },
+    });
+
+    if (!existingTrainer) {
+      sendError(res, new NotFoundError('Trainer', id));
+      return;
+    }
+
+    const dob = dateOfBirth ? parseDate(dateOfBirth) : null;
+
+    const updateData: any = {};
+    if (name !== undefined) updateData.name = name;
+    if (phone !== undefined) {
+      updateData.phone = phone && String(phone).trim() ? String(phone).trim() : null;
+    }
+    if (gender !== undefined) updateData.gender = gender;
+    if (dateOfBirth !== undefined) updateData.dateOfBirth = dob;
+    if (specialization !== undefined) updateData.specialization = specialization;
+    if (charges !== undefined) updateData.charges = charges;
+    if (startTime !== undefined) updateData.startTime = startTime;
+    if (endTime !== undefined) updateData.endTime = endTime;
+    if (isActive !== undefined) updateData.isActive = isActive;
+
+    const trainer = await prisma.trainer.update({
+      where: { id: id as any },
+      data: updateData,
+      include: {
+        _count: {
+          select: {
+            members: true,
+          },
+        },
+      },
+    });
+
+    sendSuccess(res, trainer, 'Trainer updated successfully');
+  } catch (error) {
+    sendError(res, error as Error);
+  }
+}
+
+router.put('/:id', validate(updateTrainerSchema), updateTrainerHandler);
+
+// PATCH /api/trainers/:id — partial update (same as PUT)
+router.patch('/:id', validate(updateTrainerSchema), updateTrainerHandler);
+
+// PATCH /api/trainers/:id/deactivate — must be registered before generic /:id if paths overlap
+router.patch(
+  '/:id/deactivate',
+  validate(deactivateTrainerSchema),
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
-      const { id } = req.params;
-      const {
-        name,
-        phone,
-        gender,
-        dateOfBirth,
-        specialization,
-        charges,
-        startTime,
-        endTime,
-      } = req.body;
+      const id = parseInt(req.params.id, 10);
 
-      // Check if trainer exists
-      const existingTrainer = await prisma.trainer.findFirst({
-        where: { id: id as any, gymId: gymId as any },
+      const trainer = await prisma.trainer.findFirst({
+        where: { id, gymId },
       });
 
-      if (!existingTrainer) {
+      if (!trainer) {
         sendError(res, new NotFoundError('Trainer', id));
         return;
       }
 
-      // Parse date of birth
-      const dob = dateOfBirth ? parseDate(dateOfBirth) : null;
-
-      // Update trainer
-      const updateData: any = {};
-      if (name !== undefined) updateData.name = name;
-      if (phone !== undefined) {
-        updateData.phone = phone && String(phone).trim() ? String(phone).trim() : null;
+      if (!trainer.isActive) {
+        sendError(res, new ValidationError('Trainer is already inactive'));
+        return;
       }
-      if (gender !== undefined) updateData.gender = gender;
-      if (dateOfBirth !== undefined) updateData.dateOfBirth = dob;
-      if (specialization !== undefined) updateData.specialization = specialization;
-      if (charges !== undefined) updateData.charges = charges;
-      if (startTime !== undefined) updateData.startTime = startTime;
-      if (endTime !== undefined) updateData.endTime = endTime;
 
-      const trainer = await prisma.trainer.update({
-        where: { id: id as any },
-        data: updateData,
+      const updated = await prisma.trainer.update({
+        where: { id },
+        data: { isActive: false },
         include: {
           _count: {
             select: {
@@ -248,7 +299,49 @@ router.put(
         },
       });
 
-      sendSuccess(res, trainer, 'Trainer updated successfully');
+      sendSuccess(res, updated, 'Trainer deactivated successfully');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// PATCH /api/trainers/:id/activate
+router.patch(
+  '/:id/activate',
+  validate(activateTrainerSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const id = parseInt(req.params.id, 10);
+
+      const trainer = await prisma.trainer.findFirst({
+        where: { id, gymId },
+      });
+
+      if (!trainer) {
+        sendError(res, new NotFoundError('Trainer', id));
+        return;
+      }
+
+      if (trainer.isActive) {
+        sendError(res, new ValidationError('Trainer is already active'));
+        return;
+      }
+
+      const updated = await prisma.trainer.update({
+        where: { id },
+        data: { isActive: true },
+        include: {
+          _count: {
+            select: {
+              members: true,
+            },
+          },
+        },
+      });
+
+      sendSuccess(res, updated, 'Trainer activated successfully');
     } catch (error) {
       sendError(res, error as Error);
     }

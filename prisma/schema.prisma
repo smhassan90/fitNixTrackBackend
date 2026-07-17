@@ -288,6 +288,7 @@ model Trainer {
   charges        Float?
   startTime      String?   @db.VarChar(5) // HH:mm format
   endTime        String?   @db.VarChar(5) // HH:mm format
+  isActive       Boolean   @default(true)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -296,6 +297,7 @@ model Trainer {
 
   @@index([gymId])
   @@index([gymId, phone])
+  @@index([gymId, isActive])
   @@map("trainers")
 }
 

@@ -490,7 +490,7 @@ router.post(
         }
       }
 
-      // Validate trainers exist if provided
+      // Validate trainers exist and are active if provided
       let trainers: Trainer[] = [];
       if (trainerIds.length > 0) {
         trainers = await prisma.trainer.findMany({
@@ -498,6 +498,16 @@ router.post(
         });
         if (trainers.length !== trainerIds.length) {
           sendError(res, new NotFoundError('One or more trainers'));
+          return;
+        }
+        const inactive = trainers.filter((t) => !t.isActive);
+        if (inactive.length > 0) {
+          sendError(
+            res,
+            new ValidationError(
+              `Cannot assign inactive trainer(s): ${inactive.map((t) => t.name).join(', ')}`
+            )
+          );
           return;
         }
       }
@@ -675,13 +685,23 @@ async function updateMemberHandler(req: AuthRequest, res: Response): Promise<voi
         }
       }
 
-      // Validate trainers exist if provided
+      // Validate trainers exist and are active if provided
       if (trainerIds && trainerIds.length > 0) {
         const trainers = await prisma.trainer.findMany({
           where: { id: { in: trainerIds }, gymId },
         });
         if (trainers.length !== trainerIds.length) {
           sendError(res, new NotFoundError('One or more trainers'));
+          return;
+        }
+        const inactive = trainers.filter((t) => !t.isActive);
+        if (inactive.length > 0) {
+          sendError(
+            res,
+            new ValidationError(
+              `Cannot assign inactive trainer(s): ${inactive.map((t) => t.name).join(', ')}`
+            )
+          );
           return;
         }
       }
