@@ -9,6 +9,7 @@ import {
   getPaymentsSchema,
   getPaymentSchema,
   markPaidSchema,
+  markOneTimePaidSchema,
   deletePaymentSchema,
   getMemberPaymentSummariesSchema,
   bulkMarkPaidSchema,
@@ -27,7 +28,7 @@ import {
   markPaymentsAsPaidBulk,
   markMonthlyInstallmentByYearMonth,
   markLastPaidInstallmentUnpaid,
-  seedMonthlyBillingAfterOneTimePaid,
+  markSignupOneTimePaidAtDate,
 } from '../services/paymentService';
 import {
   buildMonthlyPaymentReceipt,
@@ -35,8 +36,6 @@ import {
   buildReceiptPrintedBy,
   findPaidSignupOneTimeForMemberMonth,
 } from '../services/receiptService';
-import { recordOneTimeFeeCollection } from '../services/feeCollectionService';
-import { formatMonth } from '../utils/dateHelpers';
 
 const router = Router();
 
@@ -366,11 +365,12 @@ router.get('/one-time', validate(getPaymentsSchema), async (req: AuthRequest, re
 // PATCH /api/payments/one-time/:id/mark-paid - Mark one-time payment as paid
 router.patch(
   '/one-time/:id/mark-paid',
-  validate(getPaymentSchema),
+  validate(markOneTimePaidSchema),
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
       const id = parseInt(req.params.id, 10);
+      const body = (req.body ?? {}) as { paidDate?: string };
 
       const oneTimePayment = await prisma.oneTimePayment.findFirst({
         where: { id, gymId },
@@ -397,60 +397,31 @@ router.patch(
         return;
       }
 
-      const paidDate = new Date();
-      paidDate.setUTCHours(0, 0, 0, 0);
-
-      const memberRecord = await prisma.member.findFirst({
-        where: { id: oneTimePayment.memberId, gymId },
-        select: { membershipStart: true },
+      const paidDateInput = body.paidDate ? parseDate(body.paidDate) : undefined;
+      await markSignupOneTimePaidAtDate(id, gymId, {
+        paidDate: paidDateInput,
+        seedMonthly: true,
       });
 
-      const updated = await prisma.$transaction(async (tx) => {
-        const row = await tx.oneTimePayment.update({
-          where: { id },
-          data: {
-            status: 'PAID',
-            paidDate,
-          },
-          include: {
-            member: {
-              select: {
-                id: true,
-                legacyMemberId: true,
-                name: true,
-                email: true,
-                phone: true,
-              },
+      const updated = await prisma.oneTimePayment.findFirst({
+        where: { id, gymId },
+        include: {
+          member: {
+            select: {
+              id: true,
+              legacyMemberId: true,
+              name: true,
+              email: true,
+              phone: true,
             },
           },
-        });
-
-        await tx.member.update({
-          where: { id: oneTimePayment.memberId },
-          data: {
-            oneTimePaymentPaid: true,
-          },
-        });
-
-        await recordOneTimeFeeCollection(tx, {
-          gymId,
-          memberId: oneTimePayment.memberId,
-          memberName: oneTimePayment.member.name,
-          oneTimePaymentId: oneTimePayment.id,
-          admissionFee: oneTimePayment.admissionFee,
-          packageFee: oneTimePayment.packageFee,
-          trainerFee: oneTimePayment.trainerFee,
-          totalAmount: oneTimePayment.totalAmount,
-          collectedAt: paidDate,
-          billingMonth: memberRecord?.membershipStart
-            ? formatMonth(memberRecord.membershipStart)
-            : null,
-        });
-
-        return row;
+        },
       });
 
-      await seedMonthlyBillingAfterOneTimePaid(oneTimePayment.memberId, gymId);
+      if (!updated) {
+        sendError(res, new NotFoundError('One-time payment', id));
+        return;
+      }
 
       sendSuccess(res, mapRowMemberNumber(updated), 'One-time payment marked as paid');
     } catch (error) {

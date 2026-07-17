@@ -165,19 +165,28 @@ export async function recordOneTimeFeeCollection(
     normalized.totalAmount
   );
 
-  await db.feeCollection.create({
-    data: {
-      gymId: params.gymId,
-      memberId: params.memberId,
-      amount: normalized.totalAmount,
-      collectedAt: normalizeCollectedAt(params.collectedAt),
-      billingMonth: params.billingMonth,
-      category,
-      description,
-      sourceType: 'ONE_TIME_PAYMENT',
-      sourceId: params.oneTimePaymentId,
-    },
-  });
+  try {
+    await db.feeCollection.create({
+      data: {
+        gymId: params.gymId,
+        memberId: params.memberId,
+        amount: normalized.totalAmount,
+        collectedAt: normalizeCollectedAt(params.collectedAt),
+        billingMonth: params.billingMonth,
+        category,
+        description,
+        sourceType: 'ONE_TIME_PAYMENT',
+        sourceId: params.oneTimePaymentId,
+      },
+    });
+  } catch (error: unknown) {
+    // Concurrent backfills / retries can race past the findUnique above.
+    const code = (error as { code?: string } | null)?.code;
+    if (code === 'P2002') {
+      return;
+    }
+    throw error;
+  }
 }
 
 export async function removeFeeCollectionBySource(

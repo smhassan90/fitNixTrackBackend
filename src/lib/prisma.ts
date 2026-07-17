@@ -57,6 +57,12 @@ export const prisma =
         url: process.env.DATABASE_URL,
       },
     },
+    // Default 5s interactive-transaction timeout is too tight when the DB is
+    // remote/high-latency (e.g. running backfill scripts against production).
+    transactionOptions: {
+      maxWait: 30_000,
+      timeout: 60_000,
+    },
   });
 
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;

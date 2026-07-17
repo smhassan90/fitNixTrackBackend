@@ -16,6 +16,7 @@ import {
 import { NotFoundError, ValidationError } from '../utils/errors';
 import {
   recordMonthlyFeeCollection,
+  recordOneTimeFeeCollection,
   removeFeeCollectionBySource,
 } from './feeCollectionService';
 
@@ -181,10 +182,110 @@ export async function assertNoPendingOneTimeBeforeMonthlyPay(
   }
 }
 
+/** Resolve historical paid date for signup — never defaults to today for migrated data. */
+async function resolveSignupPaidDate(
+  memberId: number,
+  gymId: number,
+  membershipStart: Date | null,
+  explicit?: Date
+): Promise<Date> {
+  if (explicit) {
+    const d = new Date(explicit);
+    d.setUTCHours(0, 0, 0, 0);
+    return d;
+  }
+  if (membershipStart) {
+    const d = new Date(membershipStart);
+    d.setUTCHours(0, 0, 0, 0);
+    return d;
+  }
+  const firstPaid = await prisma.payment.findFirst({
+    where: { memberId, gymId, status: 'PAID', paidDate: { not: null } },
+    orderBy: { paidDate: 'asc' },
+    select: { paidDate: true },
+  });
+  if (firstPaid?.paidDate) {
+    const d = new Date(firstPaid.paidDate);
+    d.setUTCHours(0, 0, 0, 0);
+    return d;
+  }
+  const d = new Date();
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+}
+
+/**
+ * Mark a pending signup one-time payment as PAID using a historical collected date
+ * (membership start / first monthly paid date), so today's revenue is not inflated.
+ */
+export async function markSignupOneTimePaidAtDate(
+  oneTimePaymentId: number,
+  gymId: number,
+  options: { paidDate?: Date; seedMonthly?: boolean } = {}
+): Promise<{ memberId: number; paidDate: Date } | null> {
+  const oneTimePayment = await prisma.oneTimePayment.findFirst({
+    where: { id: oneTimePaymentId, gymId },
+    include: {
+      member: { select: { id: true, name: true, membershipStart: true } },
+    },
+  });
+
+  if (!oneTimePayment) {
+    return null;
+  }
+  if (oneTimePayment.status === 'PAID') {
+    return {
+      memberId: oneTimePayment.memberId,
+      paidDate: oneTimePayment.paidDate ?? new Date(oneTimePayment.member.membershipStart ?? Date.now()),
+    };
+  }
+
+  const paidDate = await resolveSignupPaidDate(
+    oneTimePayment.memberId,
+    gymId,
+    oneTimePayment.member.membershipStart,
+    options.paidDate
+  );
+
+  const billingMonth = oneTimePayment.member.membershipStart
+    ? formatMonth(oneTimePayment.member.membershipStart)
+    : formatMonth(paidDate);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.oneTimePayment.update({
+      where: { id: oneTimePaymentId },
+      data: { status: 'PAID', paidDate },
+    });
+    await tx.member.update({
+      where: { id: oneTimePayment.memberId },
+      data: { oneTimePaymentPaid: true },
+    });
+    await recordOneTimeFeeCollection(tx, {
+      gymId,
+      memberId: oneTimePayment.memberId,
+      memberName: oneTimePayment.member.name,
+      oneTimePaymentId: oneTimePayment.id,
+      admissionFee: oneTimePayment.admissionFee,
+      packageFee: oneTimePayment.packageFee,
+      trainerFee: oneTimePayment.trainerFee,
+      totalAmount: oneTimePayment.totalAmount,
+      collectedAt: paidDate,
+      billingMonth,
+    });
+  });
+
+  if (options.seedMonthly !== false) {
+    await seedMonthlyBillingAfterOneTimePaid(oneTimePayment.memberId, gymId, { paidDate });
+  }
+
+  return { memberId: oneTimePayment.memberId, paidDate };
+}
+
 /** After signup one-time is paid, record month 1 as paid and open month 2+. */
 export async function seedMonthlyBillingAfterOneTimePaid(
   memberId: number,
-  gymId: number
+  gymId: number,
+  options: { paidDate?: Date } = {}
 ): Promise<void> {
   const member = await prisma.member.findFirst({
     where: { id: memberId, gymId },
@@ -200,7 +301,9 @@ export async function seedMonthlyBillingAfterOneTimePaid(
   const dueDate = new Date(member.membershipStart);
   dueDate.setUTCHours(0, 0, 0, 0);
 
-  const paidDate = new Date();
+  const paidDate = options.paidDate
+    ? new Date(options.paidDate)
+  : new Date(member.membershipStart);
   paidDate.setUTCHours(0, 0, 0, 0);
 
   await prisma.$transaction(async (tx) => {

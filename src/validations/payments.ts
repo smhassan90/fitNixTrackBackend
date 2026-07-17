@@ -55,6 +55,19 @@ export const markPaidSchema = z.object({
   }),
 });
 
+export const markOneTimePaidSchema = z.object({
+  params: z.object({
+    id: z.string().regex(/^\d+$/, 'Payment ID must be a number').transform((val) => parseInt(val, 10)),
+  }),
+  body: z
+    .object({
+      /** When the signup was actually collected (YYYY-MM-DD). Omit for today. */
+      paidDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    })
+    .optional()
+    .default({}),
+});
+
 export const deletePaymentSchema = z.object({
   params: z.object({
     id: z.string().regex(/^\d+$/, 'Payment ID must be a number').transform((val) => parseInt(val, 10)),
