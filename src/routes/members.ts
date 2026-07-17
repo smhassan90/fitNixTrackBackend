@@ -35,6 +35,10 @@ import {
   startOfNextGymCalendarDayUtc,
 } from '../utils/dateHelpers';
 import {
+  formatMemberStatusFields,
+  resolveMemberStatusEffectiveDate,
+} from '../utils/memberStatus';
+import {
   generatePaymentsForMember,
   computeSignupOneTimeFees,
   refreshMemberOpenInstallmentAmounts,
@@ -121,6 +125,10 @@ function formatMemberResponse(
   member: {
     dateOfBirth?: Date | null;
     legacyMemberId?: string | null;
+    membershipStart?: Date | null;
+    inactiveFrom?: Date | null;
+    billingResumeFrom?: Date | null;
+    isActive?: boolean | null;
     [key: string]: unknown;
   }
 ) {
@@ -132,6 +140,7 @@ function formatMemberResponse(
   return {
     ...withNumber,
     legacyMemberId: withNumber.legacyMemberId ?? withNumber.memberNumber,
+    ...formatMemberStatusFields(member),
   };
 }
 
@@ -288,9 +297,6 @@ router.get(
       // Format response with payment summary + gym-facing memberNumber
       const formattedMembers = members.map((member: any) => ({
         ...formatMemberResponse(member),
-        isActive: member.isActive ?? true,
-        inactiveFrom: member.inactiveFrom ?? null,
-        billingResumeFrom: member.billingResumeFrom ?? null,
         trainers: member.trainers.map((mt: any) => mt.trainer),
         paymentSummary: {
           admissionFeeWaived: member.admissionFeeWaived,
@@ -408,9 +414,6 @@ router.get(
 
       sendSuccess(res, {
         ...formatMemberResponse(member as any),
-        isActive: (member as any).isActive ?? true,
-        inactiveFrom: (member as any).inactiveFrom ?? null,
-        billingResumeFrom: (member as any).billingResumeFrom ?? null,
         trainers: member.trainers.map((mt) => mt.trainer),
         deviceMappings: member.deviceUserMappings.map((mapping) => ({
           id: mapping.id,
@@ -548,7 +551,6 @@ router.post(
               packageId: packageId || null,
               discount: discount || null,
               membershipStart,
-              billingResumeFrom: membershipStart,
               admissionFeeWaived,
               admissionFeePaid,
               oneTimePaymentAmount: signupFees.totalAmount,
@@ -822,9 +824,7 @@ router.patch(
       await ensureMemberStatusColumnsOrThrow();
       const { id } = req.params;
       const memberId = typeof id === 'number' ? id : parseInt(id as string, 10);
-      const effectiveDate = req.body?.effectiveDate
-        ? parseDate(req.body.effectiveDate)
-        : parseDate(new Date().toISOString().slice(0, 10));
+      const effectiveDate = resolveMemberStatusEffectiveDate(req.body?.effectiveDate);
 
       const member: any = await prisma.member.findFirst({
         where: { id: memberId, gymId },
@@ -844,6 +844,7 @@ router.patch(
           data: {
             isActive: false,
             inactiveFrom: effectiveDate,
+            billingResumeFrom: null,
           } as any,
         });
 
@@ -873,7 +874,7 @@ router.patch(
       sendSuccess(
         res,
         {
-          ...updated,
+          ...formatMemberResponse(updated as any),
           trainers: updated?.trainers.map((mt: any) => mt.trainer) ?? [],
         },
         'Member deactivated successfully'
@@ -893,9 +894,7 @@ router.patch(
       const gymId = req.gymId!;
       const { id } = req.params;
       const memberId = typeof id === 'number' ? id : parseInt(id as string, 10);
-      const effectiveDate = req.body?.effectiveDate
-        ? parseDate(req.body.effectiveDate)
-        : parseDate(new Date().toISOString().slice(0, 10));
+      const effectiveDate = resolveMemberStatusEffectiveDate(req.body?.effectiveDate);
 
       const member: any = await prisma.member.findFirst({
         where: { id: memberId, gymId },
@@ -959,7 +958,7 @@ router.patch(
       sendSuccess(
         res,
         {
-          ...updated,
+          ...formatMemberResponse(updated as any),
           trainers: updated?.trainers.map((mt: any) => mt.trainer) ?? [],
         },
         'Member reactivated successfully'

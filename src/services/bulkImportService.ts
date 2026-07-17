@@ -767,7 +767,6 @@ export async function importMembersFromCsv(
           discount,
           membershipStart: joiningDate,
           membershipEnd: expiryDate,
-          billingResumeFrom: joiningDate,
           isActive,
           inactiveFrom: isActive ? null : joiningDate,
           admissionFeeWaived,
