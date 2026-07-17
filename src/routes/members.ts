@@ -49,10 +49,17 @@ import {
   getPendingOneTimeByMemberIds,
   normalizeOneTimePaymentBreakdown,
 } from '../services/paymentService';
+import { parseMemberPhotoUpload } from '../middleware/memberPhotoMultipart';
+import {
+  compressMemberPhoto,
+  deleteStoredMemberPhoto,
+  storeMemberPhoto,
+} from '../services/memberPhotoService';
 
 const router = Router();
 
 let memberStatusColumnsAvailableCache: boolean | null = null;
+let memberPhotoUrlColumnAvailableCache: boolean | null = null;
 
 async function hasMemberStatusColumns(): Promise<boolean> {
   if (memberStatusColumnsAvailableCache !== null) {
@@ -90,6 +97,41 @@ async function ensureMemberStatusColumnsOrThrow(): Promise<void> {
   if (!available) {
     throw new ValidationError(
       'Member status columns are not migrated yet. Please run prisma db push (or production migration) first.'
+    );
+  }
+}
+
+async function hasMemberPhotoUrlColumn(): Promise<boolean> {
+  if (memberPhotoUrlColumnAvailableCache !== null) {
+    return memberPhotoUrlColumnAvailableCache;
+  }
+  try {
+    await prisma.$queryRawUnsafe('SELECT `photoUrl` FROM `members` WHERE 1 = 0');
+    memberPhotoUrlColumnAvailableCache = true;
+    return true;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const code =
+      typeof e === 'object' && e !== null && 'code' in e
+        ? String((e as { code: unknown }).code)
+        : '';
+    const missingColumn =
+      /unknown column/i.test(msg) ||
+      /doesn't exist/i.test(msg) ||
+      code === 'ER_BAD_FIELD_ERROR';
+    if (missingColumn) {
+      memberPhotoUrlColumnAvailableCache = false;
+      return false;
+    }
+    return false;
+  }
+}
+
+async function ensureMemberPhotoUrlColumnOrThrow(): Promise<void> {
+  const available = await hasMemberPhotoUrlColumn();
+  if (!available) {
+    throw new ValidationError(
+      'Member photoUrl column is not migrated yet. Run prisma migrate deploy or prisma/manual_sql/add_member_photo_url.sql first.'
     );
   }
 }
@@ -230,6 +272,7 @@ router.get(
 
       // Get total count and members in parallel for better performance
       const statusColsAvailable = await hasMemberStatusColumns();
+      const photoUrlAvailable = await hasMemberPhotoUrlColumn();
 
       const [total, members] = await Promise.all([
         prisma.member.count({ where }),
@@ -246,6 +289,7 @@ router.get(
             dateOfBirth: true,
             cnic: true,
             comments: true,
+            ...(photoUrlAvailable ? { photoUrl: true } : {}),
             packageId: true,
             discount: true,
             membershipStart: true,
@@ -348,6 +392,7 @@ router.get(
       const memberId = typeof id === 'number' ? id : parseInt(id as string, 10);
 
       const statusColsAvailable = await hasMemberStatusColumns();
+      const photoUrlAvailable = await hasMemberPhotoUrlColumn();
 
       const member = await prisma.member.findFirst({
         where: { id: memberId, gymId },
@@ -362,6 +407,7 @@ router.get(
           dateOfBirth: true,
           cnic: true,
           comments: true,
+          ...(photoUrlAvailable ? { photoUrl: true } : {}),
           packageId: true,
           discount: true,
           membershipStart: true,
@@ -430,6 +476,139 @@ router.get(
           monthlyPaymentAmount: member.monthlyPaymentAmount ?? 0,
         },
       });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// POST /api/members/:id/photo — upload / replace member portrait (compressed ~50KB JPEG)
+router.post(
+  '/:id/photo',
+  validate(getMemberSchema),
+  parseMemberPhotoUpload,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      await ensureMemberPhotoUrlColumnOrThrow();
+
+      const gymId = req.gymId!;
+      const { id } = req.params;
+      const memberId = typeof id === 'number' ? id : parseInt(id as string, 10);
+      const file = (req as AuthRequest & { file?: Express.Multer.File }).file;
+
+      if (!file?.buffer?.length) {
+        sendError(res, new ValidationError('Missing file field "photo"'));
+        return;
+      }
+
+      const member = await prisma.member.findFirst({
+        where: { id: memberId, gymId },
+        select: { id: true, photoUrl: true },
+      });
+
+      if (!member) {
+        sendError(res, new NotFoundError('Member', String(memberId)));
+        return;
+      }
+
+      const compressed = await compressMemberPhoto(file.buffer);
+      const photoUrl = await storeMemberPhoto(compressed, gymId);
+
+      const updated = await prisma.member.update({
+        where: { id: member.id },
+        data: { photoUrl },
+        select: {
+          id: true,
+          legacyMemberId: true,
+          name: true,
+          photoUrl: true,
+          updatedAt: true,
+        },
+      });
+
+      // Replace: remove previous blob/file after successful DB update
+      if (member.photoUrl && member.photoUrl !== photoUrl) {
+        await deleteStoredMemberPhoto(member.photoUrl);
+      }
+
+      sendSuccess(
+        res,
+        {
+          ...formatMemberResponse(updated as any),
+          photo: {
+            url: photoUrl,
+            sizeBytes: compressed.sizeBytes,
+            width: compressed.width,
+            height: compressed.height,
+            mimeType: compressed.mimeType,
+          },
+        },
+        'Member photo uploaded',
+        201
+      );
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// DELETE /api/members/:id/photo — clear member portrait
+router.delete(
+  '/:id/photo',
+  validate(getMemberSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      await ensureMemberPhotoUrlColumnOrThrow();
+
+      const gymId = req.gymId!;
+      const { id } = req.params;
+      const memberId = typeof id === 'number' ? id : parseInt(id as string, 10);
+
+      const member = await prisma.member.findFirst({
+        where: { id: memberId, gymId },
+        select: { id: true, photoUrl: true, legacyMemberId: true, name: true },
+      });
+
+      if (!member) {
+        sendError(res, new NotFoundError('Member', String(memberId)));
+        return;
+      }
+
+      if (!member.photoUrl) {
+        sendSuccess(
+          res,
+          {
+            ...formatMemberResponse({ ...member, photoUrl: null } as any),
+            photoUrl: null,
+          },
+          'Member has no photo'
+        );
+        return;
+      }
+
+      const previousUrl = member.photoUrl;
+      const updated = await prisma.member.update({
+        where: { id: member.id },
+        data: { photoUrl: null },
+        select: {
+          id: true,
+          legacyMemberId: true,
+          name: true,
+          photoUrl: true,
+          updatedAt: true,
+        },
+      });
+
+      await deleteStoredMemberPhoto(previousUrl);
+
+      sendSuccess(
+        res,
+        {
+          ...formatMemberResponse(updated as any),
+          photoUrl: null,
+        },
+        'Member photo removed'
+      );
     } catch (error) {
       sendError(res, error as Error);
     }

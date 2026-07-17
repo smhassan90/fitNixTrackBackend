@@ -136,6 +136,9 @@ export const getMemberSchema = z.object({
   }),
 });
 
+/** Params-only schema reused by member photo upload/delete. */
+export const memberPhotoParamsSchema = getMemberSchema;
+
 export const deleteMemberSchema = z.object({
   params: z.object({
     id: z.string().regex(/^\d+$/, 'Member ID must be a number').transform((val) => parseInt(val, 10)),

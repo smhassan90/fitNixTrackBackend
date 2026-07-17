@@ -96,6 +96,7 @@ const uploadsRoot =
     : path.join(process.cwd(), 'uploads');
 try {
   fs.mkdirSync(path.join(uploadsRoot, 'logos'), { recursive: true });
+  fs.mkdirSync(path.join(uploadsRoot, 'members'), { recursive: true });
 } catch (err) {
   console.warn('Could not create uploads directory:', err);
 }

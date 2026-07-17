@@ -241,6 +241,8 @@ model Member {
   dateOfBirth           DateTime?
   cnic                  String?   @db.VarChar(13)
   comments              String?   @db.Text
+  /// Compressed member portrait URL (Vercel Blob or `/uploads/members/...`). Kept ~50KB.
+  photoUrl              String?   @db.VarChar(2048)
   packageId             Int?
   discount              Float?
   membershipStart       DateTime?

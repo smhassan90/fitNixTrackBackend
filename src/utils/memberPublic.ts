@@ -10,6 +10,7 @@ export const memberPublicSelect = {
   name: true,
   email: true,
   phone: true,
+  photoUrl: true,
 } as const;
 
 export const memberReceiptSelect = {
