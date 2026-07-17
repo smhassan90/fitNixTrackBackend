@@ -837,6 +837,9 @@ router.get(
         let skippedDateFilter = 0;
         let skippedNoUserId = 0;
         let skippedUnmapped = 0;
+        let pendingStored = 0;
+
+        const deviceUserIdMap = await buildDeviceUserIdentifierMap(id);
 
         for (const log of logs) {
           // Handle both timestamp formats
@@ -894,14 +897,24 @@ router.get(
             continue;
           }
 
+          deviceUserId = resolveCanonicalDeviceUserId(deviceUserIdMap, deviceUserId);
+
           const memberId = deviceUserToMemberMap.get(deviceUserId);
           if (!memberId) {
             skippedUnmapped++;
-            // Log unmapped users for debugging (but limit to first 5 to avoid spam)
-            if (skippedUnmapped <= 5) {
-              console.warn(`No mapping found for device user ID: ${deviceUserId}. Log date: ${logDate.toISOString()}. Available mappings:`, Array.from(deviceUserToMemberMap.keys()));
+            const stored = await storePendingAttendanceLog({
+              gymId,
+              deviceConfigId: id,
+              deviceUserId,
+              recordTime: logDate,
+              type: log.type,
+              state: log.state,
+              deviceSerialNumber: device.serialNumber,
+            });
+            if (stored) {
+              pendingStored++;
             }
-            continue; // Skip unmapped users
+            continue;
           }
 
           processedLogs++;
@@ -1227,7 +1240,7 @@ router.get(
         console.log(`Skipped - no timestamp: ${skippedNoTimestamp}`);
         console.log(`Skipped - date filter: ${skippedDateFilter}`);
         console.log(`Skipped - no user ID: ${skippedNoUserId}`);
-        console.log(`Skipped - unmapped user: ${skippedUnmapped}`);
+        console.log(`Unmapped user punches stored as pending: ${pendingStored} (of ${skippedUnmapped} unmapped)`);
         console.log(`Records synced: ${synced}`);
         console.log(`Errors: ${errors}`);
         console.log(`===================\n`);
@@ -1252,6 +1265,7 @@ router.get(
           checkOuts: checkOuts.length,
           synced,
           errors,
+          pendingStored,
           deleted: deletedRecordsCount, // Number of records deleted in full sync
           logs: formattedLogs.sort((a, b) => b.timestamp - a.timestamp),
           summary: {
@@ -1260,6 +1274,7 @@ router.get(
             checkOutsCount: checkOuts.length,
             syncedCount: synced,
             errorCount: errors,
+            pendingStoredCount: pendingStored,
             deletedCount: deletedRecordsCount,
             lastSyncAt: newLastSyncAt.toISOString(),
             previousSyncAt: device.lastSyncAt ? device.lastSyncAt.toISOString() : null,
@@ -1607,6 +1622,7 @@ router.get(
         where: { gymId },
         select: {
           id: true,
+          legacyMemberId: true,
           name: true,
           email: true,
           phone: true,
@@ -1627,7 +1643,13 @@ router.get(
       const mappedMemberIds = new Set(mappedMembers.map((m) => m.memberId));
 
       // Filter out mapped members
-      const unmappedMembers = allMembers.filter((member) => !mappedMemberIds.has(member.id));
+      const unmappedMembers = allMembers
+        .filter((member) => !mappedMemberIds.has(member.id))
+        .map((member) => ({
+          ...member,
+          memberNumber: member.legacyMemberId?.trim() || null,
+          legacyMemberId: member.legacyMemberId?.trim() || null,
+        }));
 
       sendSuccess(res, {
         unmappedMembers,

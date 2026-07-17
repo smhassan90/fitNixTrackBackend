@@ -23,7 +23,10 @@ import { assertGymCanAddActiveMember } from '../services/planMemberLimitService'
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import { withMemberNumber } from '../utils/memberPublic';
-import { allocateNextLegacyMemberId } from '../utils/memberLookup';
+import {
+  allocateNextLegacyMemberId,
+  isLegacyMemberIdUniqueViolation,
+} from '../utils/memberLookup';
 import {
   parseDate,
   installmentDisplayBucket,
@@ -111,6 +114,24 @@ function normalizeMemberDobForResponse<T extends { dateOfBirth?: Date | null }>(
   return {
     ...member,
     dateOfBirth: member.dateOfBirth ? new Date(member.dateOfBirth).toISOString() : null,
+  };
+}
+
+function formatMemberResponse(
+  member: {
+    dateOfBirth?: Date | null;
+    legacyMemberId?: string | null;
+    [key: string]: unknown;
+  }
+) {
+  const normalized = normalizeMemberDobForResponse(member);
+  const withNumber = withMemberNumber({
+    ...normalized,
+    legacyMemberId: member.legacyMemberId ?? null,
+  });
+  return {
+    ...withNumber,
+    legacyMemberId: withNumber.legacyMemberId ?? withNumber.memberNumber,
   };
 }
 
@@ -266,7 +287,7 @@ router.get(
 
       // Format response with payment summary + gym-facing memberNumber
       const formattedMembers = members.map((member: any) => ({
-        ...withMemberNumber(normalizeMemberDobForResponse(member)),
+        ...formatMemberResponse(member),
         isActive: member.isActive ?? true,
         inactiveFrom: member.inactiveFrom ?? null,
         billingResumeFrom: member.billingResumeFrom ?? null,
@@ -294,6 +315,20 @@ router.get(
     }
   }
 );
+
+// GET /api/members/next-member-number — preview next gym member ID (max legacyMemberId + 1)
+router.get('/next-member-number', async (req: AuthRequest, res: Response) => {
+  try {
+    const gymId = req.gymId!;
+    const memberNumber = await allocateNextLegacyMemberId(gymId);
+    sendSuccess(res, {
+      memberNumber,
+      legacyMemberId: memberNumber,
+    });
+  } catch (error) {
+    sendError(res, error as Error);
+  }
+});
 
 // GET /api/members/:id
 router.get(
@@ -372,7 +407,7 @@ router.get(
       });
 
       sendSuccess(res, {
-        ...withMemberNumber(normalizeMemberDobForResponse(member as any)),
+        ...formatMemberResponse(member as any),
         isActive: (member as any).isActive ?? true,
         inactiveFrom: (member as any).inactiveFrom ?? null,
         billingResumeFrom: (member as any).billingResumeFrom ?? null,
@@ -420,10 +455,11 @@ router.post(
         trainerIds = [],
       } = req.body;
 
-      const legacyMemberId =
-        legacyMemberIdInput?.trim() || (await allocateNextLegacyMemberId(gymId));
+      const legacyMemberIdInputTrimmed = legacyMemberIdInput?.trim() || null;
+      let assignedLegacyMemberId =
+        legacyMemberIdInputTrimmed || (await allocateNextLegacyMemberId(gymId));
 
-      await assertLegacyMemberIdAvailable(gymId, legacyMemberId);
+      await assertLegacyMemberIdAvailable(gymId, assignedLegacyMemberId);
 
       // Get gym settings (admission fee, discount cap)
       const gym = await prisma.gym.findUnique({
@@ -479,40 +515,61 @@ router.post(
         memberDiscount: discount,
       });
 
-      const member: any = await prisma.member.create({
-        data: {
-          gymId,
-          legacyMemberId: legacyMemberId ?? null,
-          name,
-          phone: phone || null,
-          email: email || null,
-          gender: gender || null,
-          dateOfBirth: dob,
-          cnic: cnic || null,
-          comments: comments || null,
-          packageId: packageId || null,
-          discount: discount || null,
-          membershipStart,
-          billingResumeFrom: membershipStart,
-          admissionFeeWaived,
-          admissionFeePaid,
-          oneTimePaymentAmount: signupFees.totalAmount,
-          monthlyPaymentAmount: signupFees.monthlyInstallmentAmount,
-          trainers: {
-            create: trainerIds.map((trainerId: string) => ({
-              trainerId,
-            })),
-          },
-        } as any,
-        include: {
-          package: true,
-          trainers: {
+      let member: any = null;
+      const maxIdAttempts = legacyMemberIdInputTrimmed ? 1 : 5;
+      for (let attempt = 0; attempt < maxIdAttempts; attempt++) {
+        if (attempt > 0) {
+          assignedLegacyMemberId = await allocateNextLegacyMemberId(gymId);
+          await assertLegacyMemberIdAvailable(gymId, assignedLegacyMemberId);
+        }
+
+        try {
+          member = await prisma.member.create({
+            data: {
+              gymId,
+              legacyMemberId: assignedLegacyMemberId,
+              name,
+              phone: phone || null,
+              email: email || null,
+              gender: gender || null,
+              dateOfBirth: dob,
+              cnic: cnic || null,
+              comments: comments || null,
+              packageId: packageId || null,
+              discount: discount || null,
+              membershipStart,
+              billingResumeFrom: membershipStart,
+              admissionFeeWaived,
+              admissionFeePaid,
+              oneTimePaymentAmount: signupFees.totalAmount,
+              monthlyPaymentAmount: signupFees.monthlyInstallmentAmount,
+              trainers: {
+                create: trainerIds.map((trainerId: string) => ({
+                  trainerId,
+                })),
+              },
+            } as any,
             include: {
-              trainer: true,
+              package: true,
+              trainers: {
+                include: {
+                  trainer: true,
+                },
+              },
             },
-          },
-        },
-      });
+          });
+          break;
+        } catch (error) {
+          if (!legacyMemberIdInputTrimmed && isLegacyMemberIdUniqueViolation(error)) {
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      if (!member) {
+        throw new ValidationError('Could not assign a unique member ID. Please try again.');
+      }
 
       // Create one-time payment record (signup = admission + first month)
       if (signupFees.admissionFee > 0 || signupFees.firstMonthRecurring > 0) {
@@ -545,7 +602,7 @@ router.post(
       sendSuccess(
         res,
         {
-          ...withMemberNumber(normalizeMemberDobForResponse(member)),
+          ...formatMemberResponse(member),
           trainers: member.trainers.map((mt: any) => mt.trainer),
           oneTimePayment: oneTimePayment || null,
           paymentSummary: {
@@ -701,7 +758,7 @@ async function updateMemberHandler(req: AuthRequest, res: Response): Promise<voi
       sendSuccess(
         res,
         {
-          ...withMemberNumber(normalizeMemberDobForResponse(member as any)),
+          ...formatMemberResponse(member as any),
           trainers: member.trainers.map((mt) => mt.trainer),
           oneTimePayment: oneTimePayment || null,
           paymentSummary: {

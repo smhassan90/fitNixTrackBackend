@@ -197,7 +197,9 @@ export async function applyPunchToAttendance(input: {
   deviceSerialNumber?: string | null;
 }): Promise<boolean> {
   const { gymId, memberId, deviceUserId, logDate, type, state, deviceSerialNumber } = input;
-  const dateOnly = new Date(logDate.getFullYear(), logDate.getMonth(), logDate.getDate());
+  const dateOnly = new Date(
+    Date.UTC(logDate.getUTCFullYear(), logDate.getUTCMonth(), logDate.getUTCDate())
+  );
 
   const existingRecord = await prisma.attendanceRecord.findUnique({
     where: {
@@ -290,8 +292,17 @@ export async function processPendingLogsForDeviceUser(
   memberId: number,
   deviceSerialNumber?: string | null
 ): Promise<number> {
+  const idMap = await buildDeviceUserIdentifierMap(deviceConfigId);
+  const canonicalId = resolveCanonicalDeviceUserId(idMap, deviceUserId);
+  const deviceUserIds = new Set<string>([canonicalId, deviceUserId.trim()]);
+  for (const [alias, canonical] of idMap) {
+    if (canonical === canonicalId) {
+      deviceUserIds.add(alias);
+    }
+  }
+
   const pendingLogs = await prisma.pendingAttendanceLog.findMany({
-    where: { deviceConfigId, deviceUserId },
+    where: { deviceConfigId, deviceUserId: { in: [...deviceUserIds] } },
     orderBy: { recordTime: 'asc' },
   });
 
@@ -311,7 +322,10 @@ export async function processPendingLogsForDeviceUser(
 
   if (pendingLogs.length > 0) {
     await prisma.pendingAttendanceLog.deleteMany({
-      where: { deviceConfigId, deviceUserId },
+      where: {
+        deviceConfigId,
+        deviceUserId: { in: [...deviceUserIds] },
+      },
     });
   }
 
@@ -342,7 +356,14 @@ export async function getMappingCandidates(
   gymId: number
 ): Promise<{
   unmappedDeviceUsers: MappingCandidate[];
-  unmappedMembers: Array<{ id: number; name: string; email: string | null; phone: string | null }>;
+  unmappedMembers: Array<{
+    id: number;
+    name: string;
+    email: string | null;
+    phone: string | null;
+    legacyMemberId: string | null;
+    memberNumber: string | null;
+  }>;
   mappedCount: number;
   pendingLogCount: number;
 }> {
@@ -357,7 +378,7 @@ export async function getMappingCandidates(
     }),
     prisma.member.findMany({
       where: { gymId },
-      select: { id: true, name: true, email: true, phone: true },
+      select: { id: true, legacyMemberId: true, name: true, email: true, phone: true },
       orderBy: { name: 'asc' },
     }),
     prisma.pendingAttendanceLog.groupBy({
@@ -442,7 +463,10 @@ export async function getMappingCandidates(
 
   return {
     unmappedDeviceUsers,
-    unmappedMembers,
+    unmappedMembers: unmappedMembers.map((m) => ({
+      ...m,
+      memberNumber: m.legacyMemberId?.trim() || null,
+    })),
     mappedCount: activeMappings.length,
     pendingLogCount: totalPending,
   };
