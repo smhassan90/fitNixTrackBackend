@@ -1359,8 +1359,12 @@ router.delete(
       // id is transformed to number by validation middleware
       const memberId = typeof id === 'number' ? id : parseInt(id as string, 10);
 
+      const photoUrlAvailable = await hasMemberPhotoUrlColumn();
       const member = await prisma.member.findFirst({
         where: { id: memberId, gymId },
+        select: photoUrlAvailable
+          ? { id: true, photoUrl: true }
+          : { id: true },
       });
 
       if (!member) {
@@ -1368,10 +1372,18 @@ router.delete(
         return;
       }
 
+      const previousPhotoUrl =
+        photoUrlAvailable && 'photoUrl' in member
+          ? (member.photoUrl as string | null)
+          : null;
+
       // Delete member (cascades to payments and attendance records)
       await prisma.member.delete({
         where: { id: memberId },
       });
+
+      // Remove portrait from blob/disk so deleted members leave no storage garbage
+      await deleteStoredMemberPhoto(previousPhotoUrl);
 
       sendSuccess(res, { message: 'Member deleted successfully' });
     } catch (error) {
