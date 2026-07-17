@@ -16,7 +16,7 @@ import {
 } from '../validations/payments';
 import { getPaymentsReceivedDailySchema } from '../validations/reports';
 import { getPaymentsReceivedDaily } from '../services/reportService';
-import { sendSuccess, sendError } from '../utils/response';
+import { sendSuccess, sendError, buildPagination } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import { parseDate } from '../utils/dateHelpers';
 import { mapRowMemberNumber, mapRowsMemberNumber } from '../utils/memberPublic';
@@ -70,7 +70,7 @@ router.get(
 
       // Ensure page and limit are numbers
       const pageNum = typeof page === 'number' ? page : parseInt(page as string, 10) || 1;
-      const limitNum = typeof limit === 'number' ? limit : parseInt(limit as string, 10) || 50;
+      const limitNum = typeof limit === 'number' ? limit : parseInt(limit as string, 10) || 25;
 
       const where: any = { gymId };
 
@@ -106,59 +106,64 @@ router.get(
       const isPendingOrOverdue = normalizedStatus === 'PENDING' || normalizedStatus === 'OVERDUE';
 
       if (isPendingOrOverdue) {
-        // Get all payments matching the status (and other filters like memberId, search, etc.)
-        const allPayments = await prisma.payment.findMany({
+        // One next payment per member — aggregate in DB, paginate member IDs, then fetch page rows only
+        const memberGroups = await prisma.payment.groupBy({
+          by: ['memberId'],
           where,
-          include: {
-            member: {
-              select: {
-                id: true,
-                legacyMemberId: true,
-                name: true,
-                email: true,
-                phone: true,
-              },
-            },
-          },
-          orderBy: {
-            dueDate: 'asc',
-          },
+          _min: { dueDate: true },
         });
 
-        // Group by member and get only the next upcoming payment for each
-        // This ensures we only show 1 pending/overdue payment per member (the next one)
-        const memberNextPayments = new Map<number, typeof allPayments[0]>();
-        
-        for (const payment of allPayments) {
-          // Ensure we only process payments with the correct status
-          if (payment.status !== normalizedStatus) {
-            continue;
+        memberGroups.sort((a, b) => {
+          const aTime = a._min.dueDate?.getTime() ?? 0;
+          const bTime = b._min.dueDate?.getTime() ?? 0;
+          if (sortOrder === 'asc') {
+            return aTime - bTime;
           }
-          
-          const existing = memberNextPayments.get(payment.memberId);
-          // If no payment for this member yet, or this one has an earlier due date, use this one
-          if (!existing || payment.dueDate < existing.dueDate) {
-            memberNextPayments.set(payment.memberId, payment);
+          return bTime - aTime;
+        });
+
+        total = memberGroups.length;
+        const pageGroups = memberGroups.slice((pageNum - 1) * limitNum, pageNum * limitNum);
+
+        if (pageGroups.length === 0) {
+          payments = [];
+        } else {
+          const pagePayments = await Promise.all(
+            pageGroups.map((group) =>
+              prisma.payment.findFirst({
+                where: {
+                  ...where,
+                  memberId: group.memberId,
+                  dueDate: group._min.dueDate ?? undefined,
+                },
+                include: {
+                  member: {
+                    select: {
+                      id: true,
+                      legacyMemberId: true,
+                      name: true,
+                      email: true,
+                      phone: true,
+                    },
+                  },
+                },
+                orderBy: { id: 'asc' },
+              })
+            )
+          );
+          payments = pagePayments.filter((p): p is NonNullable<typeof p> => p != null);
+
+          if (sortBy !== 'dueDate') {
+            payments.sort((a, b) => {
+              const aVal = (a as any)[sortBy];
+              const bVal = (b as any)[sortBy];
+              if (sortOrder === 'asc') {
+                return aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
+              }
+              return aVal < bVal ? 1 : aVal > bVal ? -1 : 0;
+            });
           }
         }
-
-        // Convert to array and apply sorting, pagination
-        payments = Array.from(memberNextPayments.values());
-        total = payments.length;
-
-        // Apply sorting
-        payments.sort((a, b) => {
-          const aVal = (a as any)[sortBy];
-          const bVal = (b as any)[sortBy];
-          if (sortOrder === 'asc') {
-            return aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
-          } else {
-            return aVal < bVal ? 1 : aVal > bVal ? -1 : 0;
-          }
-        });
-
-        // Apply pagination
-        payments = payments.slice((pageNum - 1) * limitNum, pageNum * limitNum);
       } else {
         // For other statuses (PAID) or no status filter, show all payments
         total = await prisma.payment.count({ where });
@@ -184,12 +189,7 @@ router.get(
 
       sendSuccess(res, {
         payments: mapRowsMemberNumber(payments),
-        pagination: {
-          page: pageNum,
-          limit: limitNum,
-          total,
-          totalPages: Math.ceil(total / limitNum),
-        },
+        pagination: buildPagination(pageNum, limitNum, total),
       });
     } catch (error) {
       sendError(res, error as Error);
@@ -206,7 +206,7 @@ router.get(
       const gymId = req.gymId!;
       const q = req.query as any;
       const pageNum = typeof q.page === 'number' ? q.page : parseInt(q.page as string, 10) || 1;
-      const limitNum = typeof q.limit === 'number' ? q.limit : parseInt(q.limit as string, 10) || 50;
+      const limitNum = typeof q.limit === 'number' ? q.limit : parseInt(q.limit as string, 10) || 25;
 
       const { rows, total } = await getMemberPaymentSummaries(gymId, {
         search: q.search,
@@ -219,12 +219,7 @@ router.get(
 
       sendSuccess(res, {
         members: rows,
-        pagination: {
-          page: pageNum,
-          limit: limitNum,
-          total,
-          totalPages: Math.ceil(total / limitNum),
-        },
+        pagination: buildPagination(pageNum, limitNum, total),
       });
     } catch (error) {
       sendError(res, error as Error);
@@ -324,7 +319,7 @@ router.get('/one-time', validate(getPaymentsSchema), async (req: AuthRequest, re
     } = query;
 
     const pageNum = typeof page === 'number' ? page : parseInt(page as string, 10) || 1;
-    const limitNum = typeof limit === 'number' ? limit : parseInt(limit as string, 10) || 50;
+    const limitNum = typeof limit === 'number' ? limit : parseInt(limit as string, 10) || 25;
 
     const where: any = { gymId };
 
@@ -361,12 +356,7 @@ router.get('/one-time', validate(getPaymentsSchema), async (req: AuthRequest, re
 
     sendSuccess(res, {
       oneTimePayments: mapRowsMemberNumber(oneTimePayments),
-      pagination: {
-        page: pageNum,
-        limit: limitNum,
-        total,
-        totalPages: Math.ceil(total / limitNum),
-      },
+      pagination: buildPagination(pageNum, limitNum, total),
     });
   } catch (error) {
     sendError(res, error as Error);

@@ -32,7 +32,14 @@ export const getPaymentsSchema = z.object({
     sortBy: z.string().optional(),
     sortOrder: z.enum(['asc', 'desc']).optional().default('desc'),
     page: z.string().regex(/^\d+$/).optional().transform((val) => (val ? parseInt(val, 10) : 1)),
-    limit: z.string().regex(/^\d+$/).optional().transform((val) => (val ? parseInt(val, 10) : 50)),
+    limit: z
+      .string()
+      .regex(/^\d+$/)
+      .optional()
+      .transform((val) => {
+        const n = val ? parseInt(val, 10) : 25;
+        return Math.min(Math.max(n, 1), 100);
+      }),
   }),
 });
 
@@ -64,7 +71,14 @@ export const getMemberPaymentSummariesSchema = z.object({
     sortBy: z.enum(['name', 'nextDueDate', 'overdueCount']).optional().default('nextDueDate'),
     sortOrder: z.enum(['asc', 'desc']).optional().default('asc'),
     page: z.string().regex(/^\d+$/).optional().transform((val) => (val ? parseInt(val, 10) : 1)),
-    limit: z.string().regex(/^\d+$/).optional().transform((val) => (val ? parseInt(val, 10) : 50)),
+    limit: z
+      .string()
+      .regex(/^\d+$/)
+      .optional()
+      .transform((val) => {
+        const n = val ? parseInt(val, 10) : 25;
+        return Math.min(Math.max(n, 1), 100);
+      }),
   }),
 });
 

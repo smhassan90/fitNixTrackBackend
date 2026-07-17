@@ -1212,81 +1212,115 @@ export type MemberPaymentSummaryRow = {
   nextOneTime: PendingOneTimeSummary | null;
 };
 
-/**
- * Build one-row-per-member summaries for the main payment screen.
- */
-export async function getMemberPaymentSummaries(
+const MEMBER_SUMMARY_SELECT = {
+  id: true,
+  legacyMemberId: true,
+  name: true,
+  email: true,
+  phone: true,
+  packageId: true,
+  membershipStart: true,
+  membershipEnd: true,
+  monthlyPaymentAmount: true,
+} as const;
+
+function buildMemberSummaryWhere(
   gymId: number,
-  options: {
-    search?: string;
-    onlyWithOpenInstallments?: boolean;
-    page: number;
-    limit: number;
-    sortBy: 'name' | 'nextDueDate' | 'overdueCount';
-    sortOrder: 'asc' | 'desc';
-  }
-): Promise<{ rows: MemberPaymentSummaryRow[]; total: number }> {
-  await markOverduePayments(gymId);
+  search?: string,
+  onlyWithOpenInstallments?: boolean
+): Prisma.MemberWhereInput {
+  const and: Prisma.MemberWhereInput[] = [{ gymId }];
 
-  const { search, onlyWithOpenInstallments, page, limit, sortBy, sortOrder } = options;
-
-  const memberWhere: Prisma.MemberWhereInput = { gymId };
   if (search?.trim()) {
     const s = search.trim();
     const searchNum = parseInt(s, 10);
-    memberWhere.OR = [
-      { name: { contains: s } },
-      { email: { contains: s } },
-      { phone: { contains: s } },
-      { legacyMemberId: { contains: s } },
-      ...(isNaN(searchNum) ? [] : [{ id: searchNum }, { legacyMemberId: s }]),
-    ];
+    and.push({
+      OR: [
+        { name: { contains: s } },
+        { email: { contains: s } },
+        { phone: { contains: s } },
+        { legacyMemberId: { contains: s } },
+        ...(isNaN(searchNum) ? [] : [{ id: searchNum }, { legacyMemberId: s }]),
+      ],
+    });
+  }
+
+  if (onlyWithOpenInstallments) {
+    and.push({
+      OR: [
+        {
+          payments: {
+            some: {
+              gymId,
+              status: { in: ['PENDING', 'OVERDUE'] },
+            },
+          },
+        },
+        {
+          oneTimePayments: {
+            some: {
+              gymId,
+              status: 'PENDING',
+            },
+          },
+        },
+      ],
+    });
+  }
+
+  return and.length === 1 ? and[0] : { AND: and };
+}
+
+/** Refresh installment amounts / missing months for members on the current page only. */
+async function syncMembersForPaymentSummary(gymId: number, memberIds: number[]): Promise<void> {
+  if (memberIds.length === 0) {
+    return;
   }
 
   const members = await prisma.member.findMany({
-    where: memberWhere,
-    select: {
-      id: true,
-      legacyMemberId: true,
-      name: true,
-      email: true,
-      phone: true,
-      packageId: true,
-      membershipStart: true,
-      membershipEnd: true,
-      monthlyPaymentAmount: true,
-    },
-    orderBy: { name: 'asc' },
+    where: { id: { in: memberIds }, gymId },
+    select: { id: true, packageId: true, membershipStart: true },
   });
 
-  const memberIds = members.map((m) => m.id);
-  if (memberIds.length === 0) {
-    return { rows: [], total: 0 };
-  }
-
   const paidMemberRows = await prisma.payment.findMany({
-    where: {
-      gymId,
-      memberId: { in: memberIds },
-      status: 'PAID',
-    },
+    where: { gymId, memberId: { in: memberIds }, status: 'PAID' },
     select: { memberId: true },
     distinct: ['memberId'],
   });
   const membersWithSomePaid = new Set(paidMemberRows.map((r) => r.memberId));
 
-  const membersToChainSync = members.filter(
-    (m) =>
-      membersWithSomePaid.has(m.id) && m.packageId != null && m.membershipStart != null
-  );
   for (const m of members.filter((row) => row.packageId != null)) {
     await refreshMemberOpenInstallmentAmounts(m.id, gymId);
   }
+
+  const membersToChainSync = members.filter(
+    (m) => membersWithSomePaid.has(m.id) && m.packageId != null && m.membershipStart != null
+  );
   for (const m of membersToChainSync) {
     await syncMissingNextMonthlyInstallment(m.id, gymId);
   }
   if (membersToChainSync.length > 0) {
     await markOverduePayments(gymId);
+  }
+}
+
+async function buildSummaryRowsForMembers(
+  gymId: number,
+  members: Array<{
+    id: number;
+    legacyMemberId: string | null;
+    name: string;
+    email: string | null;
+    phone: string | null;
+    packageId: number | null;
+    membershipStart: Date | null;
+    membershipEnd: Date | null;
+    monthlyPaymentAmount: number | null;
+  }>
+): Promise<MemberPaymentSummaryRow[]> {
+  const memberIds = members.map((m) => m.id);
+  if (memberIds.length === 0) {
+    return [];
   }
 
   const unpaidPayments = await prisma.payment.findMany({
@@ -1299,7 +1333,6 @@ export async function getMemberPaymentSummaries(
   });
 
   const pendingOneTimeByMember = await getPendingOneTimeByMemberIds(gymId, memberIds);
-
   const tz = getGymTimezone();
 
   const unpaidByMember = new Map<number, typeof unpaidPayments>();
@@ -1309,7 +1342,7 @@ export async function getMemberPaymentSummaries(
     unpaidByMember.set(p.memberId, list);
   }
 
-  let rows: MemberPaymentSummaryRow[] = members.map((member) => {
+  return members.map((member) => {
     const list = unpaidByMember.get(member.id) ?? [];
     const next = list[0];
     const overdueMonthCount = list.filter((p) =>
@@ -1338,35 +1371,133 @@ export async function getMemberPaymentSummaries(
       nextOneTime: pendingOneTimeByMember.get(member.id) ?? null,
     };
   });
+}
 
-  if (onlyWithOpenInstallments) {
-    rows = rows.filter((r) => r.nextUnpaid !== null || r.nextOneTime !== null);
+/**
+ * Build one-row-per-member summaries for the main payment screen.
+ * Paginates at the database level and only syncs billing for the current page.
+ */
+export async function getMemberPaymentSummaries(
+  gymId: number,
+  options: {
+    search?: string;
+    onlyWithOpenInstallments?: boolean;
+    page: number;
+    limit: number;
+    sortBy: 'name' | 'nextDueDate' | 'overdueCount';
+    sortOrder: 'asc' | 'desc';
   }
+): Promise<{ rows: MemberPaymentSummaryRow[]; total: number }> {
+  await markOverduePayments(gymId);
 
+  const { search, onlyWithOpenInstallments, page, limit, sortBy, sortOrder } = options;
+  const memberWhere = buildMemberSummaryWhere(gymId, search, onlyWithOpenInstallments);
   const collator = sortOrder === 'asc' ? 1 : -1;
 
-  rows.sort((a, b) => {
-    if (sortBy === 'name') {
-      return collator * a.member.name.localeCompare(b.member.name);
-    }
+  if (sortBy === 'name') {
+    const total = await prisma.member.count({ where: memberWhere });
+    const members = await prisma.member.findMany({
+      where: memberWhere,
+      select: MEMBER_SUMMARY_SELECT,
+      orderBy: { name: sortOrder },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    await syncMembersForPaymentSummary(
+      gymId,
+      members.map((m) => m.id)
+    );
+    const rows = await buildSummaryRowsForMembers(gymId, members);
+    return { rows, total };
+  }
+
+  const matchingMembers = await prisma.member.findMany({
+    where: memberWhere,
+    select: { id: true, name: true },
+  });
+
+  if (matchingMembers.length === 0) {
+    return { rows: [], total: 0 };
+  }
+
+  const memberIds = matchingMembers.map((m) => m.id);
+  const unpaidPayments = await prisma.payment.findMany({
+    where: {
+      gymId,
+      memberId: { in: memberIds },
+      status: { in: ['PENDING', 'OVERDUE'] },
+    },
+    select: { memberId: true, dueDate: true, status: true },
+    orderBy: { dueDate: 'asc' },
+  });
+
+  const tz = getGymTimezone();
+
+  const unpaidByMember = new Map<number, typeof unpaidPayments>();
+  for (const p of unpaidPayments) {
+    const list = unpaidByMember.get(p.memberId) ?? [];
+    list.push(p);
+    unpaidByMember.set(p.memberId, list);
+  }
+
+  type SortMetric = {
+    memberId: number;
+    name: string;
+    nextDueTime: number;
+    overdueCount: number;
+  };
+
+  const metrics: SortMetric[] = matchingMembers.map((member) => {
+    const list = unpaidByMember.get(member.id) ?? [];
+    const next = list[0];
+    const overdueCount = list.filter(
+      (p) =>
+        p.status === 'OVERDUE' || isDueCalendarDateBeforeTodayInGymTZ(p.dueDate, tz)
+    ).length;
+
+    return {
+      memberId: member.id,
+      name: member.name,
+      nextDueTime: next?.dueDate.getTime() ?? Number.POSITIVE_INFINITY,
+      overdueCount,
+    };
+  });
+
+  metrics.sort((a, b) => {
     if (sortBy === 'overdueCount') {
-      const diff = a.overdueMonthCount - b.overdueMonthCount;
+      const diff = a.overdueCount - b.overdueCount;
       if (diff !== 0) {
         return collator * diff;
       }
-      return a.member.name.localeCompare(b.member.name);
+      return a.name.localeCompare(b.name);
     }
-    // nextDueDate
-    const aTime = a.nextUnpaid?.dueDate.getTime() ?? Number.POSITIVE_INFINITY;
-    const bTime = b.nextUnpaid?.dueDate.getTime() ?? Number.POSITIVE_INFINITY;
-    if (aTime !== bTime) {
-      return collator * (aTime - bTime);
+
+    if (a.nextDueTime !== b.nextDueTime) {
+      return collator * (a.nextDueTime - b.nextDueTime);
     }
-    return a.member.name.localeCompare(b.member.name);
+    return a.name.localeCompare(b.name);
   });
 
-  const total = rows.length;
-  const paged = rows.slice((page - 1) * limit, page * limit);
+  const total = metrics.length;
+  const pageMetrics = metrics.slice((page - 1) * limit, page * limit);
+  const pageMemberIds = pageMetrics.map((m) => m.memberId);
 
-  return { rows: paged, total };
+  if (pageMemberIds.length === 0) {
+    return { rows: [], total };
+  }
+
+  await syncMembersForPaymentSummary(gymId, pageMemberIds);
+
+  const members = await prisma.member.findMany({
+    where: { id: { in: pageMemberIds } },
+    select: MEMBER_SUMMARY_SELECT,
+  });
+  const memberById = new Map(members.map((m) => [m.id, m]));
+  const orderedMembers = pageMemberIds
+    .map((id) => memberById.get(id))
+    .filter((m): m is (typeof members)[0] => m != null);
+
+  const rows = await buildSummaryRowsForMembers(gymId, orderedMembers);
+  return { rows, total };
 }

@@ -69,3 +69,23 @@ export function sendError(
   return res.status(500).json(response);
 }
 
+export interface PaginationMeta {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  /** True when more rows exist — use for infinite scroll. */
+  hasMore: boolean;
+}
+
+export function buildPagination(page: number, limit: number, total: number): PaginationMeta {
+  const totalPages = limit > 0 ? Math.ceil(total / limit) : 0;
+  return {
+    page,
+    limit,
+    total,
+    totalPages,
+    hasMore: page * limit < total,
+  };
+}
+
