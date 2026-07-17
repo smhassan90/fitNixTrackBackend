@@ -19,6 +19,7 @@ import { getPaymentsReceivedDaily } from '../services/reportService';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import { parseDate } from '../utils/dateHelpers';
+import { mapRowMemberNumber, mapRowsMemberNumber } from '../utils/memberPublic';
 import {
   markPaymentAsPaid,
   markOverduePayments,
@@ -91,6 +92,8 @@ router.get(
           { month: { contains: search } },
           { member: { name: { contains: search } } },
           { member: { email: { contains: search } } },
+          { member: { legacyMemberId: { contains: search } } },
+          { member: { phone: { contains: search } } },
         ];
       }
 
@@ -110,6 +113,7 @@ router.get(
             member: {
               select: {
                 id: true,
+                legacyMemberId: true,
                 name: true,
                 email: true,
                 phone: true,
@@ -165,6 +169,7 @@ router.get(
             member: {
               select: {
                 id: true,
+                legacyMemberId: true,
                 name: true,
                 email: true,
                 phone: true,
@@ -178,7 +183,7 @@ router.get(
       }
 
       sendSuccess(res, {
-        payments,
+        payments: mapRowsMemberNumber(payments),
         pagination: {
           page: pageNum,
           limit: limitNum,
@@ -260,6 +265,7 @@ router.post(
           member: {
             select: {
               id: true,
+              legacyMemberId: true,
               name: true,
               email: true,
               phone: true,
@@ -269,7 +275,7 @@ router.post(
         orderBy: { dueDate: 'asc' },
       });
 
-      sendSuccess(res, { payments: updated, paidIds: result.paidIds }, 'Payments marked as paid');
+      sendSuccess(res, { payments: mapRowsMemberNumber(updated), paidIds: result.paidIds }, 'Payments marked as paid');
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -340,6 +346,7 @@ router.get('/one-time', validate(getPaymentsSchema), async (req: AuthRequest, re
           member: {
             select: {
               id: true,
+              legacyMemberId: true,
               name: true,
               email: true,
               phone: true,
@@ -353,7 +360,7 @@ router.get('/one-time', validate(getPaymentsSchema), async (req: AuthRequest, re
     ]);
 
     sendSuccess(res, {
-      oneTimePayments,
+      oneTimePayments: mapRowsMemberNumber(oneTimePayments),
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -381,6 +388,7 @@ router.patch(
           member: {
             select: {
               id: true,
+              legacyMemberId: true,
               name: true,
               email: true,
               phone: true,
@@ -418,6 +426,7 @@ router.patch(
             member: {
               select: {
                 id: true,
+                legacyMemberId: true,
                 name: true,
                 email: true,
                 phone: true,
@@ -453,7 +462,7 @@ router.patch(
 
       await seedMonthlyBillingAfterOneTimePaid(oneTimePayment.memberId, gymId);
 
-      sendSuccess(res, updated, 'One-time payment marked as paid');
+      sendSuccess(res, mapRowMemberNumber(updated), 'One-time payment marked as paid');
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -552,7 +561,7 @@ router.get(
         return;
       }
 
-      sendSuccess(res, payment);
+      sendSuccess(res, mapRowMemberNumber(payment));
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -609,6 +618,7 @@ router.post(
           member: {
             select: {
               id: true,
+              legacyMemberId: true,
               name: true,
               email: true,
               phone: true,
@@ -617,7 +627,7 @@ router.post(
         },
       });
 
-      sendSuccess(res, payment, 'Payment created successfully', 201);
+      sendSuccess(res, mapRowMemberNumber(payment), 'Payment created successfully', 201);
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -658,6 +668,7 @@ router.put(
           member: {
             select: {
               id: true,
+              legacyMemberId: true,
               name: true,
               email: true,
               phone: true,
@@ -666,7 +677,7 @@ router.put(
         },
       });
 
-      sendSuccess(res, payment, 'Payment updated successfully');
+      sendSuccess(res, mapRowMemberNumber(payment), 'Payment updated successfully');
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -690,6 +701,7 @@ router.patch(
           member: {
             select: {
               id: true,
+              legacyMemberId: true,
               name: true,
               email: true,
               phone: true,
@@ -698,7 +710,12 @@ router.patch(
         },
       });
 
-      sendSuccess(res, payment, 'Payment marked as paid');
+      if (!payment) {
+        sendError(res, new NotFoundError('Payment', id));
+        return;
+      }
+
+      sendSuccess(res, mapRowMemberNumber(payment), 'Payment marked as paid');
     } catch (error) {
       sendError(res, error as Error);
     }

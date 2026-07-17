@@ -26,6 +26,7 @@ type GymReceiptInfo = {
 
 type MemberWithRelations = {
   id: number;
+  legacyMemberId?: string | null;
   name: string;
   email: string | null;
   phone: string | null;
@@ -70,8 +71,11 @@ export function buildReceiptPrintedBy(user: {
 }
 
 function buildMemberReceiptSection(member: MemberWithRelations) {
+  const memberNumber = member.legacyMemberId?.trim() || null;
   return {
-    id: member.id,
+    // Gym-facing member ID only — never expose internal PK on receipts.
+    memberNumber,
+    legacyMemberId: memberNumber,
     name: member.name ?? '',
     email: member.email ?? null,
     phone: member.phone ?? null,

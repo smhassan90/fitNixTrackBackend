@@ -986,7 +986,8 @@ function resolveImportedPaymentStatus(
 export async function importPaymentsFromCsv(
   gymId: number,
   csvText: string,
-  dryRun = false
+  dryRun = false,
+  options: { skipPostProcess?: boolean } = {}
 ): Promise<BulkImportResult> {
   const { rows } = parseCsv(csvText);
   const results: ImportRowResult[] = [];
@@ -1149,7 +1150,7 @@ export async function importPaymentsFromCsv(
     }
   }
 
-  if (!dryRun && affectedMemberIds.size > 0) {
+  if (!dryRun && !options.skipPostProcess && affectedMemberIds.size > 0) {
     for (const memberId of affectedMemberIds) {
       await refreshMemberOpenInstallmentAmounts(memberId, gymId);
       await syncMissingNextMonthlyInstallment(memberId, gymId);

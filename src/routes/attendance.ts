@@ -114,6 +114,7 @@ router.get(
           member: {
             select: {
               id: true,
+              legacyMemberId: true,
               name: true,
               email: true,
               phone: true,
@@ -181,6 +182,7 @@ router.get(
           id: record.id,
           date: dateFormatted,
           memberId: record.member.id,
+          memberNumber: record.member.legacyMemberId?.trim() || null,
           member: record.member.name,
           contact: contact,
           checkIn: checkInFormatted,
@@ -190,10 +192,11 @@ router.get(
           status: record.status,
           duration: duration,
           durationFormatted: durationFormatted,
-          // Include raw data for reference
           memberDetails: {
             email: record.member.email,
             phone: record.member.phone,
+            memberNumber: record.member.legacyMemberId?.trim() || null,
+            legacyMemberId: record.member.legacyMemberId?.trim() || null,
           },
         };
       });
@@ -226,6 +229,7 @@ router.get(
         where: { gymId },
         select: {
           id: true,
+          legacyMemberId: true,
           name: true,
           phone: true,
           email: true,
@@ -233,13 +237,20 @@ router.get(
         orderBy: { name: 'asc' },
       });
 
-      // Format for dropdown
-      const memberOptions = members.map((member) => ({
-        id: member.id,
-        name: member.name,
-        label: `${member.name} (ID: ${member.id})`,
-        contact: member.phone || member.email || 'N/A',
-      }));
+      // Format for dropdown — show gym member number, never internal PK
+      const memberOptions = members.map((member) => {
+        const memberNumber = member.legacyMemberId?.trim() || null;
+        return {
+          id: member.id,
+          memberNumber,
+          legacyMemberId: memberNumber,
+          name: member.name,
+          label: memberNumber
+            ? `${member.name} (ID: ${memberNumber})`
+            : member.name,
+          contact: member.phone || member.email || 'N/A',
+        };
+      });
 
       sendSuccess(res, { members: memberOptions });
     } catch (error) {
@@ -270,6 +281,7 @@ router.get(
           member: {
             select: {
               id: true,
+              legacyMemberId: true,
               name: true,
               email: true,
               phone: true,
@@ -306,6 +318,7 @@ router.get(
         id: record.id,
         date: record.date.toISOString().split('T')[0],
         memberId: record.member.id,
+        memberNumber: (record.member as any).legacyMemberId?.trim() || null,
         member: record.member.name,
         contact: contact,
         checkIn: checkInTime

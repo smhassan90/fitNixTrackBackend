@@ -37,6 +37,7 @@ test('monthly receipt populates package coverage from payment.month and membersh
     },
     member: {
       id: 10,
+      legacyMemberId: '42',
       name: 'Jane Doe',
       email: null,
       phone: null,
@@ -55,6 +56,8 @@ test('monthly receipt populates package coverage from payment.month and membersh
 
   assert.equal(receipt.package?.startDate, '2026-03-15');
   assert.equal(receipt.package?.expiryDate, '2026-04-15');
+  assert.equal(receipt.member.memberNumber, '42');
+  assert.equal((receipt.member as { id?: number }).id, undefined);
 });
 
 test('monthly receipt falls back to payment.dueDate when membershipStart is missing', () => {

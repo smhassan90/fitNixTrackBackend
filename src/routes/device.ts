@@ -1675,6 +1675,7 @@ router.get(
           member: {
             select: {
               id: true,
+              legacyMemberId: true,
               name: true,
               email: true,
               phone: true,
@@ -1694,11 +1695,19 @@ router.get(
         const fromDeviceUsers = deviceUserById.get(mapping.deviceUserId);
         const resolvedName =
           mapping.deviceUserName ?? fromDeviceUsers?.deviceUserName ?? null;
+        const memberNumber = mapping.member?.legacyMemberId?.trim() || null;
         return {
           ...mapping,
           deviceUserName: resolvedName,
           name: resolvedName,
           deviceBadgeId: fromDeviceUsers?.deviceBadgeId ?? null,
+          member: mapping.member
+            ? {
+                ...mapping.member,
+                memberNumber,
+                legacyMemberId: memberNumber,
+              }
+            : mapping.member,
         };
       });
 
@@ -1774,6 +1783,7 @@ router.post(
           member: {
             select: {
               id: true,
+              legacyMemberId: true,
               name: true,
               email: true,
               phone: true,
@@ -1852,6 +1862,7 @@ router.put(
           member: {
             select: {
               id: true,
+              legacyMemberId: true,
               name: true,
               email: true,
               phone: true,

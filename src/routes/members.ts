@@ -22,6 +22,8 @@ import {
 import { assertGymCanAddActiveMember } from '../services/planMemberLimitService';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
+import { withMemberNumber } from '../utils/memberPublic';
+import { allocateNextLegacyMemberId } from '../utils/memberLookup';
 import {
   parseDate,
   installmentDisplayBucket,
@@ -262,9 +264,9 @@ router.get(
         }),
       ]);
 
-      // Format response with payment summary
+      // Format response with payment summary + gym-facing memberNumber
       const formattedMembers = members.map((member: any) => ({
-        ...normalizeMemberDobForResponse(member),
+        ...withMemberNumber(normalizeMemberDobForResponse(member)),
         isActive: member.isActive ?? true,
         inactiveFrom: member.inactiveFrom ?? null,
         billingResumeFrom: member.billingResumeFrom ?? null,
@@ -370,7 +372,7 @@ router.get(
       });
 
       sendSuccess(res, {
-        ...normalizeMemberDobForResponse(member as any),
+        ...withMemberNumber(normalizeMemberDobForResponse(member as any)),
         isActive: (member as any).isActive ?? true,
         inactiveFrom: (member as any).inactiveFrom ?? null,
         billingResumeFrom: (member as any).billingResumeFrom ?? null,
@@ -404,7 +406,7 @@ router.post(
     try {
       const gymId = req.gymId!;
       const {
-        legacyMemberId,
+        legacyMemberId: legacyMemberIdInput,
         name,
         phone,
         email,
@@ -417,6 +419,9 @@ router.post(
         admissionFeeWaived = false,
         trainerIds = [],
       } = req.body;
+
+      const legacyMemberId =
+        legacyMemberIdInput?.trim() || (await allocateNextLegacyMemberId(gymId));
 
       await assertLegacyMemberIdAvailable(gymId, legacyMemberId);
 
@@ -540,7 +545,7 @@ router.post(
       sendSuccess(
         res,
         {
-          ...normalizeMemberDobForResponse(member),
+          ...withMemberNumber(normalizeMemberDobForResponse(member)),
           trainers: member.trainers.map((mt: any) => mt.trainer),
           oneTimePayment: oneTimePayment || null,
           paymentSummary: {
@@ -696,7 +701,7 @@ async function updateMemberHandler(req: AuthRequest, res: Response): Promise<voi
       sendSuccess(
         res,
         {
-          ...normalizeMemberDobForResponse(member as any),
+          ...withMemberNumber(normalizeMemberDobForResponse(member as any)),
           trainers: member.trainers.map((mt) => mt.trainer),
           oneTimePayment: oneTimePayment || null,
           paymentSummary: {
@@ -901,7 +906,7 @@ router.get(
       // Verify member exists and belongs to gym
       const member = await prisma.member.findFirst({
         where: { id: memberId, gymId },
-        select: { id: true, name: true },
+        select: { id: true, name: true, legacyMemberId: true },
       });
 
       if (!member) {
@@ -1022,10 +1027,11 @@ router.get(
       const totalPayments = monthlyTotal + oneTimeTotal;
 
       sendSuccess(res, {
-        member: {
+        member: withMemberNumber({
           id: member.id,
+          legacyMemberId: (member as any).legacyMemberId ?? null,
           name: member.name,
-        },
+        }),
         pendingOneTime,
         monthlyInstallments,
         monthlyGrouped,

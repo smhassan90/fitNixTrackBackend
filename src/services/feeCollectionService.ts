@@ -12,7 +12,10 @@ type Tx = Prisma.TransactionClient;
 
 export type FeeCollectionRow = {
   id: number;
+  /** Internal PK — use for API links only, never display. */
   memberId: number;
+  /** Gym-facing member number (legacyMemberId). */
+  memberNumber: string | null;
   memberName: string;
   amount: number;
   collectedAt: Date;
@@ -311,7 +314,7 @@ export async function getRecentFeeCollections(
   const rows = await prisma.feeCollection.findMany({
     where: { gymId },
     include: {
-      member: { select: { name: true } },
+      member: { select: { name: true, legacyMemberId: true } },
     },
     orderBy: [{ collectedAt: 'desc' }, { id: 'desc' }],
     take: limit,
@@ -323,7 +326,7 @@ export async function getRecentFeeCollections(
 function mapFeeCollectionRow(row: {
   id: number;
   memberId: number;
-  member: { name: string };
+  member: { name: string; legacyMemberId: string | null };
   amount: number;
   collectedAt: Date;
   billingMonth: string | null;
@@ -335,6 +338,7 @@ function mapFeeCollectionRow(row: {
   return {
     id: row.id,
     memberId: row.memberId,
+    memberNumber: row.member.legacyMemberId?.trim() || null,
     memberName: row.member.name,
     amount: row.amount,
     collectedAt: row.collectedAt,
@@ -381,7 +385,7 @@ export async function listFeeCollections(
     prisma.feeCollection.count({ where }),
     prisma.feeCollection.findMany({
       where,
-      include: { member: { select: { name: true } } },
+      include: { member: { select: { name: true, legacyMemberId: true } } },
       orderBy: [{ collectedAt: 'desc' }, { id: 'desc' }],
       skip: (options.page - 1) * options.limit,
       take: options.limit,

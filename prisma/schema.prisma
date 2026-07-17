@@ -232,7 +232,7 @@ model PlatformAuditLog {
 model Member {
   id                    Int       @id @default(autoincrement())
   gymId                 Int
-  /// Gym owner's member number (physical device / legacy spreadsheet ID), unique per gym.
+  /// Gym-facing member number (unique per gym). Display this — never expose `id` as Member ID.
   legacyMemberId        String?   @db.VarChar(64)
   name                  String
   phone                 String?

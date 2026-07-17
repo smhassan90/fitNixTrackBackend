@@ -1189,6 +1189,8 @@ export async function markOverduePayments(gymId: number): Promise<number> {
 export type MemberPaymentSummaryRow = {
   member: {
     id: number;
+    legacyMemberId: string | null;
+    memberNumber: string | null;
     name: string;
     email: string | null;
     phone: string | null;
@@ -1236,7 +1238,8 @@ export async function getMemberPaymentSummaries(
       { name: { contains: s } },
       { email: { contains: s } },
       { phone: { contains: s } },
-      ...(isNaN(searchNum) ? [] : [{ id: searchNum }]),
+      { legacyMemberId: { contains: s } },
+      ...(isNaN(searchNum) ? [] : [{ id: searchNum }, { legacyMemberId: s }]),
     ];
   }
 
@@ -1244,6 +1247,7 @@ export async function getMemberPaymentSummaries(
     where: memberWhere,
     select: {
       id: true,
+      legacyMemberId: true,
       name: true,
       email: true,
       phone: true,
@@ -1313,7 +1317,10 @@ export async function getMemberPaymentSummaries(
     ).length;
 
     return {
-      member,
+      member: {
+        ...member,
+        memberNumber: member.legacyMemberId?.trim() || null,
+      },
       nextUnpaid: next
         ? {
             paymentId: next.id,
