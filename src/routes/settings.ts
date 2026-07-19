@@ -1,9 +1,12 @@
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { validate } from '../middleware/validation';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
+import {
+  authenticateToken,
+  AuthRequest,
+  requireGymPermission,
+} from '../middleware/auth';
 import { requireGymId } from '../middleware/multiTenant';
-import { requireRole } from '../middleware/auth';
 import {
   getSettingsSchema,
   updateSettingsSchema,
@@ -58,6 +61,7 @@ function formatSettingsResponse(gym: {
 // GET /api/settings - Get gym settings
 router.get(
   '/',
+  requireGymPermission('gym.settings.read'),
   validate(getSettingsSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -94,7 +98,7 @@ router.get(
 router.put(
   '/',
   validate(updateSettingsSchema),
-  requireRole('GYM_ADMIN'),
+  requireGymPermission('gym.settings.manage'),
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;

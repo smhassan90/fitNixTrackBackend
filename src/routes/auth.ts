@@ -8,6 +8,7 @@ import { loginSchema, meSchema } from '../validations/auth';
 import { sendSuccess, sendError } from '../utils/response';
 import { jwtSignOptions } from '../utils/jwtExpiresIn';
 import { UnauthorizedError, NotFoundError, ForbiddenError } from '../utils/errors';
+import { effectiveGymPermissionKeys } from '../constants/gymPermissions';
 
 const router = Router();
 
@@ -105,11 +106,14 @@ router.post(
       const token = jwt.sign(payload, jwtSecret, jwtSignOptions(undefined, process.env.JWT_EXPIRES_IN));
 
       const { password: _, ...userWithoutPassword } = user;
+      const usesLegacyPermissions = user.permissionKeys === null;
       sendSuccess(
         res,
         {
           user: {
             ...userWithoutPassword,
+            permissionKeys: effectiveGymPermissionKeys(user.role, user.permissionKeys),
+            usesLegacyPermissions,
             gymName: user.gym?.name,
           },
           token,
@@ -143,6 +147,7 @@ router.get(
           email: true,
           phone: true,
           role: true,
+          permissionKeys: true,
           gymId: true,
           gymName: true,
           isActive: true,
@@ -169,6 +174,8 @@ router.get(
 
       sendSuccess(res, {
         ...user,
+        permissionKeys: effectiveGymPermissionKeys(user.role, user.permissionKeys),
+        usesLegacyPermissions: user.permissionKeys === null,
         gymName: user.gym?.name || user.gymName,
       });
     } catch (error) {

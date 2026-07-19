@@ -37,7 +37,7 @@ router.get(
 
 router.post(
   '/packages',
-  requireRole('GYM_ADMIN', 'GYM_MANAGER'),
+  requireRole('GYM_ADMIN'),
   uploadCsvSingle('file'),
   validate(importQuerySchema),
   async (req: AuthRequest, res: Response) => {
@@ -55,7 +55,7 @@ router.post(
 
 router.post(
   '/trainers',
-  requireRole('GYM_ADMIN', 'GYM_MANAGER'),
+  requireRole('GYM_ADMIN'),
   uploadCsvSingle('file'),
   validate(importQuerySchema),
   async (req: AuthRequest, res: Response) => {
@@ -73,7 +73,7 @@ router.post(
 
 router.post(
   '/members/assign-trainers',
-  requireRole('GYM_ADMIN', 'GYM_MANAGER'),
+  requireRole('GYM_ADMIN'),
   uploadCsvSingle('file'),
   validate(importQuerySchema),
   async (req: AuthRequest, res: Response) => {
@@ -99,7 +99,7 @@ router.post(
 
 router.post(
   '/members',
-  requireRole('GYM_ADMIN', 'GYM_MANAGER'),
+  requireRole('GYM_ADMIN'),
   uploadCsvSingle('file'),
   validate(importQuerySchema),
   async (req: AuthRequest, res: Response) => {
@@ -128,7 +128,7 @@ router.post(
 
 router.post(
   '/payments',
-  requireRole('GYM_ADMIN', 'GYM_MANAGER'),
+  requireRole('GYM_ADMIN'),
   uploadCsvSingle('file'),
   validate(importQuerySchema),
   async (req: AuthRequest, res: Response) => {

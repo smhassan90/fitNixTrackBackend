@@ -1,7 +1,11 @@
 import { Router, Response } from 'express';
 import { prisma, retryDatabaseOperation } from '../lib/prisma';
 import { validate } from '../middleware/validation';
-import { authenticateToken, AuthRequest, requireRole } from '../middleware/auth';
+import {
+  authenticateToken,
+  AuthRequest,
+  requireGymPermission,
+} from '../middleware/auth';
 import { authenticateApiKey, ApiKeyAuthRequest } from '../middleware/apiKeyAuth';
 import { requireGymId } from '../middleware/multiTenant';
 import {
@@ -438,7 +442,7 @@ router.use(requireGymId);
 // GET /api/device/tablet-sync-setup — per-gym API key + devices (for Android tablet config)
 router.get(
   '/tablet-sync-setup',
-  requireRole('GYM_ADMIN', 'GYM_MANAGER'),
+  requireGymPermission('gym.devices.manage'),
   async (req: AuthRequest, res: Response) => {
   try {
     const gymId = req.gymId!;
@@ -480,7 +484,7 @@ router.get(
 // POST /api/device/tablet-sync/regenerate-key — new permanent key (invalidates old tablets until reconfigured)
 router.post(
   '/tablet-sync/regenerate-key',
-  requireRole('GYM_ADMIN'),
+  requireGymPermission('gym.devices.manage'),
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
@@ -506,6 +510,11 @@ router.post(
 );
 
 // ============ Device Configuration Routes ============
+router.use((req, res, next) => {
+  const permission =
+    req.method === 'GET' ? 'gym.devices.read' : 'gym.devices.manage';
+  requireGymPermission(permission)(req as AuthRequest, res, next);
+});
 
 // GET /api/device - Get all device configurations for the gym
 router.get('/', async (req: AuthRequest, res: Response) => {
@@ -534,7 +543,6 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 // POST /api/device - Create a new device configuration
 router.post(
   '/',
-  requireRole('GYM_ADMIN', 'GYM_MANAGER'),
   validate(createDeviceConfigSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -675,6 +683,7 @@ router.post(
 // GET /api/device/:id/attendance-logs - Fetch attendance logs from device and save to database (incremental sync)
 router.get(
   '/:id/attendance-logs',
+  requireGymPermission('gym.devices.manage'),
   validate(getDeviceAttendanceLogsSchema),
   async (req: AuthRequest, res: Response) => {
     try {

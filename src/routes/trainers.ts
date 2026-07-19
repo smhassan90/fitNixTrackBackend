@@ -1,7 +1,11 @@
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { validate } from '../middleware/validation';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
+import {
+  authenticateToken,
+  AuthRequest,
+  requireGymPermission,
+} from '../middleware/auth';
 import { requireGymId } from '../middleware/multiTenant';
 import {
   createTrainerSchema,
@@ -25,6 +29,7 @@ router.use(requireGymId);
 // GET /api/trainers
 router.get(
   '/',
+  requireGymPermission('gym.trainers.read'),
   validate(getTrainersSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -111,6 +116,7 @@ router.get(
 // GET /api/trainers/:id
 router.get(
   '/:id',
+  requireGymPermission('gym.trainers.read'),
   validate(getTrainerSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -151,6 +157,7 @@ router.get(
 // POST /api/trainers
 router.post(
   '/',
+  requireGymPermission('gym.trainers.manage'),
   validate(createTrainerSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -259,14 +266,25 @@ async function updateTrainerHandler(req: AuthRequest, res: Response) {
   }
 }
 
-router.put('/:id', validate(updateTrainerSchema), updateTrainerHandler);
+router.put(
+  '/:id',
+  requireGymPermission('gym.trainers.manage'),
+  validate(updateTrainerSchema),
+  updateTrainerHandler
+);
 
 // PATCH /api/trainers/:id — partial update (same as PUT)
-router.patch('/:id', validate(updateTrainerSchema), updateTrainerHandler);
+router.patch(
+  '/:id',
+  requireGymPermission('gym.trainers.manage'),
+  validate(updateTrainerSchema),
+  updateTrainerHandler
+);
 
 // PATCH /api/trainers/:id/deactivate — must be registered before generic /:id if paths overlap
 router.patch(
   '/:id/deactivate',
+  requireGymPermission('gym.trainers.manage'),
   validate(deactivateTrainerSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -309,6 +327,7 @@ router.patch(
 // PATCH /api/trainers/:id/activate
 router.patch(
   '/:id/activate',
+  requireGymPermission('gym.trainers.manage'),
   validate(activateTrainerSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -351,6 +370,7 @@ router.patch(
 // DELETE /api/trainers/:id
 router.delete(
   '/:id',
+  requireGymPermission('gym.trainers.delete'),
   validate(deleteTrainerSchema),
   async (req: AuthRequest, res: Response) => {
     try {

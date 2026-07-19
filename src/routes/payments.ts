@@ -1,7 +1,11 @@
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { validate } from '../middleware/validation';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
+import {
+  authenticateToken,
+  AuthRequest,
+  requireGymPermission,
+} from '../middleware/auth';
 import { requireGymId } from '../middleware/multiTenant';
 import {
   createPaymentSchema,
@@ -46,6 +50,7 @@ router.use(requireGymId);
 // GET /api/payments
 router.get(
   '/',
+  requireGymPermission('gym.payments.read'),
   validate(getPaymentsSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -199,6 +204,7 @@ router.get(
 // GET /api/payments/member-summaries — one entry per member (main payment screen)
 router.get(
   '/member-summaries',
+  requireGymPermission('gym.payments.read'),
   validate(getMemberPaymentSummariesSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -229,6 +235,7 @@ router.get(
 // GET /api/payments/received-daily — alias for /api/reports/payments-received-daily (portal probe)
 router.get(
   '/received-daily',
+  requireGymPermission('gym.financialReports.read'),
   validate(getPaymentsReceivedDailySchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -245,6 +252,7 @@ router.get(
 // POST /api/payments/bulk-mark-paid — pay multiple monthly installments at once (same member)
 router.post(
   '/bulk-mark-paid',
+  requireGymPermission('gym.payments.manage'),
   validate(bulkMarkPaidSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -279,6 +287,7 @@ router.post(
 // POST /api/payments/mark-month-paid — portal fallback path (memberId + month in body)
 router.post(
   '/mark-month-paid',
+  requireGymPermission('gym.payments.manage'),
   validate(markMonthPaidPaymentsSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -293,7 +302,10 @@ router.post(
 );
 
 // POST /api/payments/generate-overdue
-router.post('/generate-overdue', async (req: AuthRequest, res: Response) => {
+router.post(
+  '/generate-overdue',
+  requireGymPermission('gym.payments.manage'),
+  async (req: AuthRequest, res: Response) => {
   try {
     const gymId = req.gymId!;
     const count = await markOverduePayments(gymId);
@@ -301,10 +313,15 @@ router.post('/generate-overdue', async (req: AuthRequest, res: Response) => {
   } catch (error) {
     sendError(res, error as Error);
   }
-});
+  }
+);
 
 // GET /api/payments/one-time - Get all one-time payments
-router.get('/one-time', validate(getPaymentsSchema), async (req: AuthRequest, res: Response) => {
+router.get(
+  '/one-time',
+  requireGymPermission('gym.payments.read'),
+  validate(getPaymentsSchema),
+  async (req: AuthRequest, res: Response) => {
   try {
     const gymId = req.gymId!;
     const query = req.query as any;
@@ -360,11 +377,13 @@ router.get('/one-time', validate(getPaymentsSchema), async (req: AuthRequest, re
   } catch (error) {
     sendError(res, error as Error);
   }
-});
+  }
+);
 
 // PATCH /api/payments/one-time/:id/mark-paid - Mark one-time payment as paid
 router.patch(
   '/one-time/:id/mark-paid',
+  requireGymPermission('gym.payments.manage'),
   validate(markOneTimePaidSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -433,6 +452,7 @@ router.patch(
 // GET /api/payments/one-time/:id/receipt - Receipt for signup/admission payment
 router.get(
   '/one-time/:id/receipt',
+  requireGymPermission('gym.payments.read'),
   validate(getPaymentSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -504,6 +524,7 @@ router.get(
 // GET /api/payments/:id
 router.get(
   '/:id',
+  requireGymPermission('gym.payments.read'),
   validate(getPaymentSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -532,6 +553,7 @@ router.get(
 // POST /api/payments
 router.post(
   '/',
+  requireGymPermission('gym.payments.manage'),
   validate(createPaymentSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -598,6 +620,7 @@ router.post(
 // PUT /api/payments/:id
 router.put(
   '/:id',
+  requireGymPermission('gym.payments.manage'),
   validate(updatePaymentSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -648,6 +671,7 @@ router.put(
 // PATCH /api/payments/:id/mark-paid
 router.patch(
   '/:id/mark-paid',
+  requireGymPermission('gym.payments.manage'),
   validate(markPaidSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -686,6 +710,7 @@ router.patch(
 // PATCH /api/payments/:id/mark-unpaid — only the member's latest PAID installment by dueDate (LIFO)
 router.patch(
   '/:id/mark-unpaid',
+  requireGymPermission('gym.payments.delete'),
   validate(markPaidSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -702,6 +727,7 @@ router.patch(
 // GET /api/payments/:id/receipt
 router.get(
   '/:id/receipt',
+  requireGymPermission('gym.payments.read'),
   validate(getPaymentSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -782,6 +808,7 @@ router.get(
 // DELETE /api/payments/:id
 router.delete(
   '/:id',
+  requireGymPermission('gym.payments.delete'),
   validate(deletePaymentSchema),
   async (req: AuthRequest, res: Response) => {
     try {

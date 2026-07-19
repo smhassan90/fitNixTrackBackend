@@ -91,6 +91,8 @@ model User {
   password     String
   phone        String?
   role         UserRole  @default(STAFF)
+  /// Explicit gym feature permissions. Null preserves legacy role defaults; [] means no optional permissions.
+  permissionKeys Json?
   gymId        Int
   gymName      String?
   isActive     Boolean   @default(true)

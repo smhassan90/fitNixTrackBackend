@@ -1,6 +1,27 @@
 import { z } from 'zod';
+import { KNOWN_GYM_PERMISSION_KEYS } from '../constants/gymPermissions';
 
 const gymRole = z.enum(['GYM_ADMIN', 'GYM_MANAGER', 'GYM_STAFF']);
+const permissionKeys = z
+  .array(z.string())
+  .max(KNOWN_GYM_PERMISSION_KEYS.size)
+  .superRefine((keys, ctx) => {
+    keys.forEach((key, index) => {
+      if (!KNOWN_GYM_PERMISSION_KEYS.has(key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [index],
+          message: `Unknown gym permission key: ${key}`,
+        });
+      }
+    });
+    if (new Set(keys).size !== keys.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'permissionKeys must not contain duplicates',
+      });
+    }
+  });
 
 export const gymUserIdParamSchema = z.object({
   params: z.object({
@@ -21,6 +42,7 @@ export const gymUserCreateSchema = z.object({
     email: z.string().email('Invalid email format'),
     phone: z.string().max(64).optional().nullable(),
     role: gymRole,
+    permissionKeys: permissionKeys.optional().default([]),
     password: z
       .preprocess(
         (v) => (v === '' || v === undefined ? null : v),
@@ -47,6 +69,7 @@ export const gymUserPatchSchema = z.object({
       email: z.string().email('Invalid email format').optional(),
       phone: z.string().max(64).optional().nullable(),
       role: gymRole.optional(),
+      permissionKeys: permissionKeys.optional(),
       isActive: z.boolean().optional(),
       password: z
         .preprocess(

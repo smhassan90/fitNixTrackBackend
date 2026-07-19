@@ -24,7 +24,7 @@ afterEach(() => {
   }
 });
 
-function setupGymAuth(role: string) {
+function setupGymAuth(role: string, permissionKeys: string[] | null = null) {
   const previousSecret = process.env.JWT_SECRET;
   process.env.JWT_SECRET = 'test-secret';
   restores.push(() => {
@@ -35,6 +35,7 @@ function setupGymAuth(role: string) {
     email: 'gym@test.com',
     name: 'Gym Admin',
     role,
+    permissionKeys,
     gymId: 10,
     isActive: true,
     tokenVersion: 0,
@@ -65,6 +66,7 @@ test('GET /api/gym/users returns list for GYM_ADMIN', async () => {
       email: 'a@gym.com',
       phone: null,
       role: 'GYM_ADMIN',
+      permissionKeys: null,
       isActive: true,
       createdAt: new Date('2026-01-01T00:00:00.000Z'),
       lastLoginAt: null,
@@ -94,6 +96,36 @@ test('POST /api/gym/users forbidden for GYM_STAFF', async () => {
   assert.equal(res.status, 403);
 });
 
+test('GET /api/gym/users allows staff with explicit manage-team permission', async () => {
+  setupGymAuth('GYM_STAFF', ['gym.team.manage']);
+  mockMethod(prisma.user as any, 'findMany', (async () => []) as any);
+
+  const res = await request(buildApp())
+    .get('/api/gym/users')
+    .set('Authorization', `Bearer ${gymToken('GYM_STAFF')}`);
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.success, true);
+});
+
+test('GET /api/gym/permissions is available to every authenticated team member', async () => {
+  setupGymAuth('GYM_STAFF', []);
+
+  const res = await request(buildApp())
+    .get('/api/gym/permissions')
+    .set('Authorization', `Bearer ${gymToken('GYM_STAFF')}`);
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(
+    res.body.data.permissions.some((permission: { key: string }) =>
+      permission.key.includes('import')
+    ),
+    false
+  );
+  assert.equal(res.body.data.alwaysAvailable[0].key, 'gym.attendance.read');
+});
+
 test('POST /api/gym/users returns temporaryPassword when password omitted', async () => {
   setupGymAuth('GYM_ADMIN');
   let created: unknown;
@@ -106,6 +138,7 @@ test('POST /api/gym/users returns temporaryPassword when password omitted', asyn
       email: 'gym@test.com',
       name: 'Gym Admin',
       role: 'GYM_ADMIN',
+      permissionKeys: null,
       gymId: 10,
       isActive: true,
       tokenVersion: 0,
@@ -121,6 +154,7 @@ test('POST /api/gym/users returns temporaryPassword when password omitted', asyn
       email: 'new@test.com',
       phone: null,
       role: 'GYM_STAFF',
+      permissionKeys: [],
       isActive: true,
       createdAt: new Date(),
       lastLoginAt: null,

@@ -1,7 +1,11 @@
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { validate } from '../middleware/validation';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
+import {
+  authenticateToken,
+  AuthRequest,
+  requireGymPermission,
+} from '../middleware/auth';
 import { requireGymId } from '../middleware/multiTenant';
 import {
   getAttendanceReportSchema,
@@ -131,6 +135,7 @@ router.get(
 // GET /api/reports/financial-summary — owner KPIs (see reportService for metric definitions)
 router.get(
   '/financial-summary',
+  requireGymPermission('gym.financialReports.read'),
   validate(getFinancialSummarySchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -151,6 +156,7 @@ router.get(
 // GET /api/reports/payments-received-daily — collections by gym-local calendar day (fee_collections ledger)
 router.get(
   '/payments-received-daily',
+  requireGymPermission('gym.financialReports.read'),
   validate(getPaymentsReceivedDailySchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -167,6 +173,7 @@ router.get(
 // GET /api/reports/fee-collections — paginated collection ledger for logged-in gym
 router.get(
   '/fee-collections',
+  requireGymPermission('gym.financialReports.read'),
   validate(getFeeCollectionsSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -211,6 +218,7 @@ router.get(
 // GET /api/reports/revenue?startMonth=YYYY-MM&endMonth=YYYY-MM — billing-month revenue from fee_collections
 router.get(
   '/revenue',
+  requireGymPermission('gym.financialReports.read'),
   validate(getRevenueReportSchema),
   async (req: AuthRequest, res: Response) => {
     try {

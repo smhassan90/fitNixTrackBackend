@@ -3,6 +3,10 @@ import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma';
 import { UnauthorizedError, ForbiddenError } from '../utils/errors';
 import { sendError } from '../utils/response';
+import {
+  effectiveGymPermissionKeys,
+  expandGymPermissionKeys,
+} from '../constants/gymPermissions';
 
 export interface AuthRequest extends Request {
   user?: {
@@ -12,6 +16,8 @@ export interface AuthRequest extends Request {
     role: string;
     gymId: number;
     gymName?: string;
+    permissionKeys: string[];
+    usesLegacyPermissions: boolean;
   };
 }
 
@@ -84,6 +90,7 @@ export function authenticateToken(
           email: true,
           name: true,
           role: true,
+          permissionKeys: true,
           gymId: true,
           isActive: true,
           tokenVersion: true,
@@ -114,6 +121,9 @@ export function authenticateToken(
         return;
       }
 
+      const usesLegacyPermissions = dbUser.permissionKeys === null;
+      const permissionKeys = effectiveGymPermissionKeys(dbUser.role, dbUser.permissionKeys);
+
       req.user = {
         id: dbUser.id,
         email: dbUser.email,
@@ -121,6 +131,8 @@ export function authenticateToken(
         role: dbUser.role,
         gymId: dbUser.gymId,
         gymName: dbUser.gym.name ?? undefined,
+        permissionKeys,
+        usesLegacyPermissions,
       };
 
       next();
@@ -148,6 +160,36 @@ export function requireRole(...allowedRoles: string[]) {
 
     if (!normalizedAllowedRoles.includes(normalizedUserRole)) {
       sendError(res, new ForbiddenError('Unauthorized. Admin access required.'));
+      return;
+    }
+
+    next();
+  };
+}
+
+export function hasGymPermission(req: AuthRequest, permissionKey: string): boolean {
+  if (!req.user) return false;
+  if (String(req.user.role).toUpperCase() === 'GYM_ADMIN') return true;
+  return expandGymPermissionKeys(req.user.permissionKeys).has(permissionKey);
+}
+
+export function requireGymPermission(...permissionKeys: string[]) {
+  return (req: AuthRequest, res: Response, next: NextFunction): void => {
+    if (!req.user) {
+      sendError(res, new UnauthorizedError('Authentication required'));
+      return;
+    }
+
+    const allowed = permissionKeys.some((key) => hasGymPermission(req, key));
+    if (!allowed) {
+      sendError(
+        res,
+        new ForbiddenError(
+          permissionKeys.length === 1
+            ? `Missing required permission: ${permissionKeys[0]}`
+            : 'You do not have permission to perform this action'
+        )
+      );
       return;
     }
 

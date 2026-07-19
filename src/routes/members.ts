@@ -2,7 +2,11 @@ import { Router, Response } from 'express';
 import type { Trainer } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { validate } from '../middleware/validation';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
+import {
+  authenticateToken,
+  AuthRequest,
+  requireGymPermission,
+} from '../middleware/auth';
 import { requireGymId } from '../middleware/multiTenant';
 import {
   createMemberSchema,
@@ -216,6 +220,7 @@ router.use(requireGymId);
 // GET /api/members
 router.get(
   '/',
+  requireGymPermission('gym.members.read'),
   validate(getMembersSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -367,7 +372,10 @@ router.get(
 );
 
 // GET /api/members/next-member-number — preview next gym member ID (max legacyMemberId + 1)
-router.get('/next-member-number', async (req: AuthRequest, res: Response) => {
+router.get(
+  '/next-member-number',
+  requireGymPermission('gym.members.manage'),
+  async (req: AuthRequest, res: Response) => {
   try {
     const gymId = req.gymId!;
     const memberNumber = await allocateNextLegacyMemberId(gymId);
@@ -378,11 +386,13 @@ router.get('/next-member-number', async (req: AuthRequest, res: Response) => {
   } catch (error) {
     sendError(res, error as Error);
   }
-});
+  }
+);
 
 // GET /api/members/:id
 router.get(
   '/:id',
+  requireGymPermission('gym.members.read'),
   validate(getMemberSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -485,6 +495,7 @@ router.get(
 // POST /api/members/:id/photo — upload / replace member portrait (compressed ~50KB JPEG)
 router.post(
   '/:id/photo',
+  requireGymPermission('gym.members.manage'),
   validate(getMemberSchema),
   parseMemberPhotoUpload,
   async (req: AuthRequest, res: Response) => {
@@ -555,6 +566,7 @@ router.post(
 // DELETE /api/members/:id/photo — clear member portrait
 router.delete(
   '/:id/photo',
+  requireGymPermission('gym.members.manage'),
   validate(getMemberSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -618,6 +630,7 @@ router.delete(
 // POST /api/members
 router.post(
   '/',
+  requireGymPermission('gym.members.manage'),
   validate(createMemberSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -988,14 +1001,25 @@ async function updateMemberHandler(req: AuthRequest, res: Response): Promise<voi
 }
 
 // PUT /api/members/:id — full or partial update
-router.put('/:id', validate(updateMemberSchema), updateMemberHandler);
+router.put(
+  '/:id',
+  requireGymPermission('gym.members.manage'),
+  validate(updateMemberSchema),
+  updateMemberHandler
+);
 
 // PATCH /api/members/:id — same as PUT (partial update for edit forms)
-router.patch('/:id', validate(updateMemberSchema), updateMemberHandler);
+router.patch(
+  '/:id',
+  requireGymPermission('gym.members.manage'),
+  validate(updateMemberSchema),
+  updateMemberHandler
+);
 
 // PATCH /api/members/:id/deactivate
 router.patch(
   '/:id/deactivate',
+  requireGymPermission('gym.members.manage'),
   validate(deactivateMemberSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -1067,6 +1091,7 @@ router.patch(
 // PATCH /api/members/:id/reactivate
 router.patch(
   '/:id/reactivate',
+  requireGymPermission('gym.members.manage'),
   validate(reactivateMemberSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -1151,6 +1176,7 @@ router.patch(
 // GET /api/members/:id/payments - Get all payment history for a member
 router.get(
   '/:id/payments',
+  requireGymPermission('gym.payments.read'),
   validate(getMemberPaymentsSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -1331,6 +1357,7 @@ router.get(
 // POST /api/members/:id/payments/mark-month-paid — mark monthly installment for YYYY-MM (portal projected month)
 router.post(
   '/:id/payments/mark-month-paid',
+  requireGymPermission('gym.payments.manage'),
   validate(markMemberMonthPaidSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -1351,6 +1378,7 @@ router.post(
 // DELETE /api/members/:id
 router.delete(
   '/:id',
+  requireGymPermission('gym.members.delete'),
   validate(deleteMemberSchema),
   async (req: AuthRequest, res: Response) => {
     try {

@@ -1,6 +1,10 @@
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
+import {
+  authenticateToken,
+  AuthRequest,
+  requireGymPermission,
+} from '../middleware/auth';
 import { requireGymId } from '../middleware/multiTenant';
 import { validate } from '../middleware/validation';
 import { sendSuccess, sendError } from '../utils/response';
@@ -31,6 +35,7 @@ router.use(requireGymId);
 // Aliases for portal probes (same payloads as /api/reports/*)
 router.get(
   '/reports/financial-summary',
+  requireGymPermission('gym.financialReports.read'),
   validate(getFinancialSummarySchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -50,6 +55,7 @@ router.get(
 
 router.get(
   '/payments-received-daily',
+  requireGymPermission('gym.financialReports.read'),
   validate(getPaymentsReceivedDailySchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -65,6 +71,7 @@ router.get(
 
 router.get(
   '/fee-collections',
+  requireGymPermission('gym.financialReports.read'),
   validate(getFeeCollectionsSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -107,7 +114,10 @@ router.get(
 );
 
 // GET /api/dashboard/revenue?startMonth=YYYY-MM&endMonth=YYYY-MM
-router.get('/revenue', async (req: AuthRequest, res: Response) => {
+router.get(
+  '/revenue',
+  requireGymPermission('gym.financialReports.read'),
+  async (req: AuthRequest, res: Response) => {
   try {
     const gymId = req.gymId!;
     const { startMonth, endMonth } = req.query as { startMonth?: string; endMonth?: string };
@@ -127,10 +137,14 @@ router.get('/revenue', async (req: AuthRequest, res: Response) => {
   } catch (error) {
     sendError(res, error as Error);
   }
-});
+  }
+);
 
 // GET /api/dashboard/stats
-router.get('/stats', async (req: AuthRequest, res: Response) => {
+router.get(
+  '/stats',
+  requireGymPermission('gym.dashboard.read'),
+  async (req: AuthRequest, res: Response) => {
   try {
     const gymId = req.gymId!;
 
@@ -283,7 +297,8 @@ router.get('/stats', async (req: AuthRequest, res: Response) => {
   } catch (error) {
     sendError(res, error as Error);
   }
-});
+  }
+);
 
 // GET /api/dashboard/currently-in-gym
 router.get('/currently-in-gym', async (req: AuthRequest, res: Response) => {

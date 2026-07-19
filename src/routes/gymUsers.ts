@@ -1,13 +1,24 @@
 import { randomBytes } from 'crypto';
 import { Router, Response } from 'express';
 import bcrypt from 'bcryptjs';
-import { UserRole } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { validate } from '../middleware/validation';
-import { authenticateToken, AuthRequest, requireRole } from '../middleware/auth';
+import {
+  authenticateToken,
+  AuthRequest,
+  requireGymPermission,
+} from '../middleware/auth';
 import { requireGymId } from '../middleware/multiTenant';
 import { sendSuccess, sendError } from '../utils/response';
 import { ConflictError, ForbiddenError, NotFoundError } from '../utils/errors';
+import {
+  effectiveGymPermissionKeys,
+  expandGymPermissionKeys,
+  GYM_PERMISSION_DEFINITIONS,
+  legacyGymPermissionsForRole,
+  normalizeGymPermissionKeys,
+} from '../constants/gymPermissions';
 import {
   gymUserIdParamSchema,
   gymUserCreateSchema,
@@ -16,6 +27,36 @@ import {
 
 const router = Router();
 const BCRYPT_ROUNDS = 10;
+
+function teamUserDto<T extends {
+  role: UserRole;
+  permissionKeys: Prisma.JsonValue | null;
+}>(user: T) {
+  const usesLegacyPermissions = user.permissionKeys === null;
+  const keys = effectiveGymPermissionKeys(user.role, user.permissionKeys);
+  return {
+    ...user,
+    permissionKeys: keys,
+    usesLegacyPermissions,
+  };
+}
+
+function assertCanAssignTeamUser(
+  caller: NonNullable<AuthRequest['user']>,
+  targetRole: UserRole,
+  permissionKeys: string[]
+): void {
+  if (caller.role === 'GYM_ADMIN') return;
+  if (targetRole === 'GYM_ADMIN') {
+    throw new ForbiddenError('Only a gym administrator can assign the GYM_ADMIN role');
+  }
+  const callerPermissions = expandGymPermissionKeys(caller.permissionKeys);
+  const unowned = permissionKeys.find((key) => !callerPermissions.has(key));
+  if (unowned) {
+    throw new ForbiddenError(`You cannot assign a permission you do not have: ${unowned}`);
+  }
+}
+
 function assertXGymIdMatchesSession(req: AuthRequest): void {
   const h = req.headers['x-gym-id'] ?? (req.headers as any)['X-Gym-Id'];
   if (h === undefined || h === null || h === '') return;
@@ -65,7 +106,20 @@ async function assertAtLeastOneActiveAdmin(
 
 router.use(authenticateToken, requireGymId);
 
-router.get('/users', requireRole('GYM_ADMIN'), async (req: AuthRequest, res: Response) => {
+router.get('/permissions', (req: AuthRequest, res: Response) => {
+  sendSuccess(res, {
+    permissions: GYM_PERMISSION_DEFINITIONS,
+    alwaysAvailable: [
+      {
+        key: 'gym.attendance.read',
+        label: 'View attendance',
+        description: 'Attendance viewing is available to every active gym team member.',
+      },
+    ],
+  });
+});
+
+router.get('/users', requireGymPermission('gym.team.manage'), async (req: AuthRequest, res: Response) => {
   try {
     assertXGymIdMatchesSession(req);
     const gymId = req.gymId!;
@@ -78,12 +132,13 @@ router.get('/users', requireRole('GYM_ADMIN'), async (req: AuthRequest, res: Res
         email: true,
         phone: true,
         role: true,
+        permissionKeys: true,
         isActive: true,
         createdAt: true,
         lastLoginAt: true,
       },
     });
-    sendSuccess(res, { users: list });
+    sendSuccess(res, { users: list.map(teamUserDto) });
   } catch (e) {
     sendError(res, e as Error);
   }
@@ -91,13 +146,28 @@ router.get('/users', requireRole('GYM_ADMIN'), async (req: AuthRequest, res: Res
 
 router.post(
   '/users',
-  requireRole('GYM_ADMIN'),
+  requireGymPermission('gym.team.manage'),
   validate(gymUserCreateSchema),
   async (req: AuthRequest, res: Response) => {
     try {
       assertXGymIdMatchesSession(req);
       const gymId = req.gymId!;
-      const { name, email, phone, role, password: rawPassword } = req.body;
+      const {
+        name,
+        email,
+        phone,
+        role,
+        permissionKeys,
+        password: rawPassword,
+      } = req.body as {
+        name: string;
+        email: string;
+        phone?: string | null;
+        role: UserRole;
+        permissionKeys: string[];
+        password?: string | null;
+      };
+      assertCanAssignTeamUser(req.user!, role, permissionKeys);
       const norm = normalizeEmail(email);
       const dup = await prisma.user.findUnique({
         where: { gymId_email: { gymId, email: norm } },
@@ -125,6 +195,7 @@ router.post(
           email: norm,
           phone: phone && String(phone).trim() ? String(phone).trim() : null,
           role,
+          permissionKeys: permissionKeys as Prisma.InputJsonValue,
           password: passwordHash,
           gymId,
           gymName: gym.name,
@@ -137,13 +208,16 @@ router.post(
           email: true,
           phone: true,
           role: true,
+          permissionKeys: true,
           isActive: true,
           createdAt: true,
           lastLoginAt: true,
         },
       });
 
-      const payload: { user: typeof user; temporaryPassword?: string } = { user };
+      const payload: { user: ReturnType<typeof teamUserDto>; temporaryPassword?: string } = {
+        user: teamUserDto(user),
+      };
       if (!rawPassword) {
         payload.temporaryPassword = tempPassword;
       }
@@ -157,7 +231,7 @@ router.post(
 
 router.patch(
   '/users/:id',
-  requireRole('GYM_ADMIN'),
+  requireGymPermission('gym.team.manage'),
   validate(gymUserPatchSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -173,6 +247,17 @@ router.patch(
         return;
       }
 
+      if (caller.role !== 'GYM_ADMIN') {
+        if (existing.role === 'GYM_ADMIN') {
+          sendError(res, new ForbiddenError('Only a gym administrator can edit an administrator'));
+          return;
+        }
+        if (memberId === caller.id) {
+          sendError(res, new ForbiddenError('You cannot change your own team permissions'));
+          return;
+        }
+      }
+
       if (body.email !== undefined) {
         const norm = normalizeEmail(String(body.email));
         const other = await prisma.user.findFirst({
@@ -186,6 +271,13 @@ router.patch(
 
       const nextIsActive = body.isActive !== undefined ? body.isActive : existing.isActive;
       const nextRole: UserRole = (body.role as UserRole | undefined) ?? existing.role;
+      const nextPermissionKeys =
+        body.permissionKeys !== undefined
+          ? body.permissionKeys
+          : existing.permissionKeys === null
+            ? legacyGymPermissionsForRole(nextRole)
+            : normalizeGymPermissionKeys(existing.permissionKeys);
+      assertCanAssignTeamUser(caller, nextRole, nextPermissionKeys);
 
       if (memberId === caller.id) {
         if (body.isActive === false) {
@@ -212,6 +304,7 @@ router.patch(
         email?: string;
         phone?: string | null;
         role?: UserRole;
+        permissionKeys?: Prisma.InputJsonValue;
         isActive?: boolean;
         password?: string;
         tokenVersion?: { increment: number };
@@ -224,6 +317,9 @@ router.patch(
         data.phone = body.phone && String(body.phone).trim() ? String(body.phone).trim() : null;
       }
       if (body.role !== undefined) data.role = body.role;
+      if (body.permissionKeys !== undefined) {
+        data.permissionKeys = body.permissionKeys as Prisma.InputJsonValue;
+      }
       if (body.isActive !== undefined) data.isActive = body.isActive;
 
       if (body.password != null && String(body.password).length > 0) {
@@ -240,12 +336,13 @@ router.patch(
           email: true,
           phone: true,
           role: true,
+          permissionKeys: true,
           isActive: true,
           createdAt: true,
           lastLoginAt: true,
         },
       });
-      sendSuccess(res, { user: updated }, 'User updated');
+      sendSuccess(res, { user: teamUserDto(updated) }, 'User updated');
     } catch (e) {
       sendError(res, e as Error);
     }
@@ -254,7 +351,7 @@ router.patch(
 
 router.delete(
   '/users/:id',
-  requireRole('GYM_ADMIN'),
+  requireGymPermission('gym.team.manage'),
   validate(gymUserIdParamSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -266,6 +363,10 @@ router.delete(
       const existing = await prisma.user.findFirst({ where: { id: memberId, gymId } });
       if (!existing) {
         sendError(res, new NotFoundError('User', memberId));
+        return;
+      }
+      if (caller.role !== 'GYM_ADMIN' && existing.role === 'GYM_ADMIN') {
+        sendError(res, new ForbiddenError('Only a gym administrator can remove an administrator'));
         return;
       }
       if (memberId === caller.id) {

@@ -2,7 +2,12 @@ import { Router, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { validate } from '../middleware/validation';
-import { authenticateToken, AuthRequest, requireRole } from '../middleware/auth';
+import {
+  authenticateToken,
+  AuthRequest,
+  hasGymPermission,
+  requireGymPermission,
+} from '../middleware/auth';
 import { requireGymId } from '../middleware/multiTenant';
 import {
   createPackageSchema,
@@ -54,16 +59,14 @@ router.use(requireGymId);
 // GET /api/packages/features — active features for package form; ?all=true for catalog (GYM_ADMIN)
 router.get(
   '/features',
+  requireGymPermission('gym.packages.read'),
   validate(getPackageFeaturesQuerySchema),
   async (req: AuthRequest, res: Response) => {
     try {
       const includeAll = Boolean((req.query as { all?: boolean }).all);
-      if (includeAll) {
-        const role = String(req.user?.role || '').toUpperCase();
-        if (role !== 'GYM_ADMIN') {
-          sendError(res, new ForbiddenError('Only gym administrators can list inactive features'));
-          return;
-        }
+      if (includeAll && !hasGymPermission(req, 'gym.packageFeatures.manage')) {
+        sendError(res, new ForbiddenError('Missing required permission: gym.packageFeatures.manage'));
+        return;
       }
 
       const features = includeAll
@@ -91,7 +94,7 @@ router.get(
 // POST /api/packages/features — create feature (GYM_ADMIN)
 router.post(
   '/features',
-  requireRole('GYM_ADMIN'),
+  requireGymPermission('gym.packageFeatures.manage'),
   validate(createPackageFeatureSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -146,7 +149,7 @@ router.post(
 // PATCH /api/packages/features/:id — update feature (GYM_ADMIN)
 router.patch(
   '/features/:id',
-  requireRole('GYM_ADMIN'),
+  requireGymPermission('gym.packageFeatures.manage'),
   validate(updatePackageFeatureSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -213,7 +216,7 @@ router.patch(
 // DELETE /api/packages/features/:id — soft delete (GYM_ADMIN); blocked if used by packages
 router.delete(
   '/features/:id',
-  requireRole('GYM_ADMIN'),
+  requireGymPermission('gym.packageFeatures.manage'),
   validate(deletePackageFeatureSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -253,6 +256,7 @@ router.delete(
 // GET /api/packages - Get all packages from database for the authenticated gym
 router.get(
   '/',
+  requireGymPermission('gym.packages.read'),
   validate(getPackagesSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -339,6 +343,7 @@ router.get(
 // GET /api/packages/:id
 router.get(
   '/:id',
+  requireGymPermission('gym.packages.read'),
   validate(getPackageSchema),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -405,7 +410,7 @@ router.get(
 router.post(
   '/',
   validate(createPackageSchema),
-  requireRole('GYM_ADMIN', 'GYM_MANAGER'),
+  requireGymPermission('gym.packages.manage'),
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
@@ -506,7 +511,7 @@ router.post(
 router.put(
   '/:id',
   validate(updatePackageSchema),
-  requireRole('GYM_ADMIN', 'GYM_MANAGER'),
+  requireGymPermission('gym.packages.manage'),
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
@@ -574,7 +579,7 @@ router.put(
 router.delete(
   '/:id',
   validate(deletePackageSchema),
-  requireRole('GYM_ADMIN', 'GYM_MANAGER'),
+  requireGymPermission('gym.packages.manage'),
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;

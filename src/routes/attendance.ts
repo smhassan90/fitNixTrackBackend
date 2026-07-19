@@ -1,7 +1,11 @@
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { validate } from '../middleware/validation';
-import { authenticateToken, AuthRequest } from '../middleware/auth';
+import {
+  authenticateToken,
+  AuthRequest,
+  requireGymPermission,
+} from '../middleware/auth';
 import { requireGymId } from '../middleware/multiTenant';
 import {
   getAttendanceSchema,
@@ -19,7 +23,6 @@ import {
   getOverduePaymentDetailsByMemberIds,
   listMembersWithoutSignInSince,
 } from '../services/attendancePolicyService';
-import { requireRole } from '../middleware/auth';
 
 const router = Router();
 
@@ -53,7 +56,7 @@ router.get(
 router.post(
   '/apply-policies',
   validate(applyAttendancePoliciesSchema),
-  requireRole('GYM_ADMIN'),
+  requireGymPermission('gym.attendancePolicy.manage'),
   async (req: AuthRequest, res: Response) => {
     try {
       const gymId = req.gymId!;
