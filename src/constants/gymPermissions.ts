@@ -145,6 +145,8 @@ const IMPLIED_PERMISSIONS: Record<string, string[]> = {
   'gym.trainers.delete': ['gym.trainers.manage', 'gym.trainers.read'],
   'gym.packages.manage': ['gym.packages.read'],
   'gym.packageFeatures.manage': ['gym.packages.read'],
+  // Payment desk staff need member/settings context for receipts and member-linked payment screens.
+  'gym.payments.read': ['gym.members.read', 'gym.settings.read', 'gym.packages.read'],
   'gym.payments.manage': ['gym.payments.read'],
   'gym.payments.delete': ['gym.payments.manage', 'gym.payments.read'],
   'gym.devices.manage': ['gym.devices.read'],
@@ -152,8 +154,16 @@ const IMPLIED_PERMISSIONS: Record<string, string[]> = {
 };
 
 export function normalizeGymPermissionKeys(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.filter((key): key is string => (
+  let raw: unknown = value;
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.filter((key): key is string => (
     typeof key === 'string' && KNOWN_GYM_PERMISSION_KEYS.has(key)
   )))];
 }
@@ -211,4 +221,9 @@ export function effectiveGymPermissionKeys(role: string, storedKeys: unknown): s
   return storedKeys === null || storedKeys === undefined
     ? legacyGymPermissionsForRole(role)
     : normalizeGymPermissionKeys(storedKeys);
+}
+
+/** Stored/effective keys expanded with implied permissions (for login/me/UI). */
+export function effectiveExpandedGymPermissionKeys(role: string, storedKeys: unknown): string[] {
+  return [...expandGymPermissionKeys(effectiveGymPermissionKeys(role, storedKeys))];
 }

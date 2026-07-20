@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma';
 import { UnauthorizedError, ForbiddenError } from '../utils/errors';
 import { sendError } from '../utils/response';
 import {
-  effectiveGymPermissionKeys,
+  effectiveExpandedGymPermissionKeys,
   expandGymPermissionKeys,
 } from '../constants/gymPermissions';
 
@@ -122,7 +122,10 @@ export function authenticateToken(
       }
 
       const usesLegacyPermissions = dbUser.permissionKeys === null;
-      const permissionKeys = effectiveGymPermissionKeys(dbUser.role, dbUser.permissionKeys);
+      const permissionKeys = effectiveExpandedGymPermissionKeys(
+        dbUser.role,
+        dbUser.permissionKeys
+      );
 
       req.user = {
         id: dbUser.id,

@@ -13,6 +13,7 @@ import { requireGymId } from '../middleware/multiTenant';
 import { sendSuccess, sendError } from '../utils/response';
 import { ConflictError, ForbiddenError, NotFoundError } from '../utils/errors';
 import {
+  effectiveExpandedGymPermissionKeys,
   effectiveGymPermissionKeys,
   expandGymPermissionKeys,
   GYM_PERMISSION_DEFINITIONS,
@@ -33,7 +34,7 @@ function teamUserDto<T extends {
   permissionKeys: Prisma.JsonValue | null;
 }>(user: T) {
   const usesLegacyPermissions = user.permissionKeys === null;
-  const keys = effectiveGymPermissionKeys(user.role, user.permissionKeys);
+  const keys = effectiveExpandedGymPermissionKeys(user.role, user.permissionKeys);
   return {
     ...user,
     permissionKeys: keys,

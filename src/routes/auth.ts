@@ -8,7 +8,7 @@ import { loginSchema, meSchema } from '../validations/auth';
 import { sendSuccess, sendError } from '../utils/response';
 import { jwtSignOptions } from '../utils/jwtExpiresIn';
 import { UnauthorizedError, NotFoundError, ForbiddenError } from '../utils/errors';
-import { effectiveGymPermissionKeys } from '../constants/gymPermissions';
+import { effectiveExpandedGymPermissionKeys } from '../constants/gymPermissions';
 
 const router = Router();
 
@@ -112,7 +112,7 @@ router.post(
         {
           user: {
             ...userWithoutPassword,
-            permissionKeys: effectiveGymPermissionKeys(user.role, user.permissionKeys),
+            permissionKeys: effectiveExpandedGymPermissionKeys(user.role, user.permissionKeys),
             usesLegacyPermissions,
             gymName: user.gym?.name,
           },
@@ -174,7 +174,7 @@ router.get(
 
       sendSuccess(res, {
         ...user,
-        permissionKeys: effectiveGymPermissionKeys(user.role, user.permissionKeys),
+        permissionKeys: effectiveExpandedGymPermissionKeys(user.role, user.permissionKeys),
         usesLegacyPermissions: user.permissionKeys === null,
         gymName: user.gym?.name || user.gymName,
       });

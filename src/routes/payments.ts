@@ -235,7 +235,7 @@ router.get(
 // GET /api/payments/received-daily — alias for /api/reports/payments-received-daily (portal probe)
 router.get(
   '/received-daily',
-  requireGymPermission('gym.financialReports.read'),
+  requireGymPermission('gym.payments.read', 'gym.financialReports.read'),
   validate(getPaymentsReceivedDailySchema),
   async (req: AuthRequest, res: Response) => {
     try {
