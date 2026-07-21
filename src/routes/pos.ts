@@ -264,7 +264,8 @@ router.post(
         canManageDiscounts,
         req.body
       );
-      sendSuccess(res, { sale }, 'Sale completed', 201);
+      // data is the sale object itself (id, receiptNo, items, totals, ...)
+      sendSuccess(res, sale, 'Sale completed', 201);
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -331,7 +332,7 @@ router.post(
         req.user!.id,
         req.body.reason
       );
-      sendSuccess(res, { sale }, 'Sale voided');
+      sendSuccess(res, sale, 'Sale voided');
     } catch (error) {
       sendError(res, error as Error);
     }

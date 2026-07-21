@@ -2,6 +2,7 @@ import {
   PosDiscountType,
   PosSaleStatus,
   PosStockMovementType,
+  Prisma,
 } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { BadRequestError, NotFoundError } from '../../utils/errors';
@@ -18,6 +19,20 @@ type SaleItemInput = {
   discountType?: PosDiscountType;
   discountValue?: number;
 };
+
+type DbClient = Prisma.TransactionClient | typeof prisma;
+
+async function loadSale(gymId: number, saleId: number, db: DbClient = prisma) {
+  const sale = await db.posSale.findFirst({
+    where: { id: saleId, gymId },
+    include: {
+      items: { orderBy: { id: 'asc' } },
+      member: { select: { id: true, name: true, legacyMemberId: true } },
+    },
+  });
+  if (!sale) throw new NotFoundError('Sale', saleId);
+  return sale;
+}
 
 export async function createSale(
   gymId: number,
@@ -132,6 +147,8 @@ export async function createSale(
   const discountTotal = roundMoney(lineItems.reduce((sum, line) => sum + line.lineDiscount, 0));
   const total = roundMoney(lineItems.reduce((sum, line) => sum + line.lineTotal, 0));
 
+  // Reload via the same transaction client — a separate prisma query cannot see
+  // uncommitted rows and previously returned "Sale with id X not found".
   return prisma.$transaction(async (tx) => {
     const receiptNo = generateReceiptNo(gymId);
     const sale = await tx.posSale.create({
@@ -189,7 +206,7 @@ export async function createSale(
       }
     }
 
-    return getSale(gymId, sale.id);
+    return loadSale(gymId, sale.id, tx);
   });
 }
 
@@ -242,20 +259,12 @@ export async function voidSale(
       },
     });
 
-    return getSale(gymId, saleId);
+    return loadSale(gymId, saleId, tx);
   });
 }
 
 export async function getSale(gymId: number, saleId: number) {
-  const sale = await prisma.posSale.findFirst({
-    where: { id: saleId, gymId },
-    include: {
-      items: { orderBy: { id: 'asc' } },
-      member: { select: { id: true, name: true, legacyMemberId: true } },
-    },
-  });
-  if (!sale) throw new NotFoundError('Sale', saleId);
-  return sale;
+  return loadSale(gymId, saleId);
 }
 
 export async function listSales(
