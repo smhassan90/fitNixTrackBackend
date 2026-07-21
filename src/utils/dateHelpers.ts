@@ -138,6 +138,37 @@ export function calendarDateStringInGymTZ(date: Date, timeZone: string = getGymT
   return dateFormatterForTimezone(timeZone).format(date);
 }
 
+const DEFAULT_DATETIME_FMT: Intl.DateTimeFormatOptions = {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: true,
+};
+
+/** Wall-clock date+time in the gym timezone (for API display fields). */
+export function formatDateTimeInGymTZ(
+  date: Date,
+  options: Intl.DateTimeFormatOptions = {},
+  timeZone: string = getGymTimezone()
+): string {
+  return date.toLocaleString('en-US', { ...DEFAULT_DATETIME_FMT, ...options, timeZone });
+}
+
+/** Wall-clock time only in the gym timezone. */
+export function formatTimeInGymTZ(
+  date: Date,
+  timeZone: string = getGymTimezone()
+): string {
+  return date.toLocaleString('en-US', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
 /**
  * Start of the last calendar day of the month containing `ref` (in gym TZ), UTC midnight.
  * e.g. April 2026 → 2026-04-30T00:00:00.000Z

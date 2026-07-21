@@ -2,19 +2,14 @@ import { prisma } from '../lib/prisma';
 import { BadRequestError, ConflictError, NotFoundError } from '../utils/errors';
 import {
   calendarDateStringInGymTZ,
-  getGymTimezone,
+  formatTimeInGymTZ,
   parseDate,
 } from '../utils/dateHelpers';
 import { resolveMemberInternalId } from '../utils/memberLookup';
 import { getOverduePaymentDetailsByMemberIds } from './attendancePolicyService';
 
 function formatCheckInTime(checkInTime: Date): string {
-  return checkInTime.toLocaleString('en-US', {
-    timeZone: getGymTimezone(),
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  });
+  return formatTimeInGymTZ(checkInTime);
 }
 
 function attendanceDateForInstant(instant: Date): Date {

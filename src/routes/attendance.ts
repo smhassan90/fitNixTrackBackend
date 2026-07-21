@@ -18,7 +18,7 @@ import {
 } from '../validations/attendance';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
-import { parseDate, getStartOfDay, getEndOfDay } from '../utils/dateHelpers';
+import { parseDate, getStartOfDay, getEndOfDay, formatDateTimeInGymTZ } from '../utils/dateHelpers';
 import { resolveMemberInternalId } from '../utils/memberLookup';
 import {
   applyAttendancePolicies,
@@ -177,24 +177,10 @@ router.get(
         // Format dates
         const dateFormatted = record.date.toISOString().split('T')[0]; // YYYY-MM-DD
         const checkInFormatted = checkInTime
-          ? new Date(checkInTime).toLocaleString('en-US', {
-              year: 'numeric',
-              month: '2-digit',
-              day: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit',
-              hour12: true,
-            })
+          ? formatDateTimeInGymTZ(new Date(checkInTime))
           : null;
         const checkOutFormatted = checkOutTime
-          ? new Date(checkOutTime).toLocaleString('en-US', {
-              year: 'numeric',
-              month: '2-digit',
-              day: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit',
-              hour12: true,
-            })
+          ? formatDateTimeInGymTZ(new Date(checkOutTime))
           : null;
 
         return {
@@ -464,24 +450,10 @@ router.get(
         member: record.member.name,
         contact: contact,
         checkIn: checkInTime
-          ? new Date(checkInTime).toLocaleString('en-US', {
-              year: 'numeric',
-              month: '2-digit',
-              day: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit',
-              hour12: true,
-            })
+          ? formatDateTimeInGymTZ(new Date(checkInTime))
           : null,
         checkOut: checkOutTime
-          ? new Date(checkOutTime).toLocaleString('en-US', {
-              year: 'numeric',
-              month: '2-digit',
-              day: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit',
-              hour12: true,
-            })
+          ? formatDateTimeInGymTZ(new Date(checkOutTime))
           : null,
         status: record.status,
         duration: duration,

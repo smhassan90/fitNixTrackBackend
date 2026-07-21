@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma';
 import {
   calendarDateStringInGymTZ,
+  formatDateTimeInGymTZ,
   getGymTimezone,
   getStartOfDay,
   getEndOfDay,
@@ -319,14 +320,7 @@ export async function getCurrentlyInGymMembers(gymId: number): Promise<{
       memberName: record.member.name,
       contact: record.member.phone || record.member.email || 'N/A',
       checkInTime: checkInTime.toISOString(),
-      checkInFormatted: checkInTime.toLocaleString('en-US', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true,
-      }),
+      checkInFormatted: formatDateTimeInGymTZ(checkInTime),
       durationMinutes,
       durationFormatted,
       attendanceRecordId: record.id,
