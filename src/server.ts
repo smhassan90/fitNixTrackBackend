@@ -20,6 +20,7 @@ import settingsRoutes from './routes/settings';
 import platformRoutes from './routes/platform';
 import gymUsersRoutes from './routes/gymUsers';
 import importRoutes from './routes/import';
+import posRoutes from './routes/pos';
 
 // Load environment variables
 dotenv.config();
@@ -153,6 +154,7 @@ app.use('/api/device', (req, res, next) => getDeviceRoutes()(req, res, next));
 app.use('/api/settings', settingsRoutes);
 app.use('/api/import', importRoutes);
 app.use('/api/gym', gymUsersRoutes);
+app.use('/api/pos', posRoutes);
 
 // 404 handler
 app.use((req, res) => {

@@ -11,6 +11,7 @@ import locationRoutes from './locations';
 import adminBillingPlanRoutes from './adminBillingPlans';
 import adminPackageFeatureRoutes from './adminPackageFeatures';
 import uploadRoutes from './upload';
+import posRoutes from './pos';
 
 const router = Router();
 
@@ -25,5 +26,6 @@ router.use('/permissions', authenticatePlatformToken, permissionRoutes);
 router.use('/', authenticatePlatformToken, locationRoutes);
 router.use('/', authenticatePlatformToken, adminBillingPlanRoutes);
 router.use('/', authenticatePlatformToken, adminPackageFeatureRoutes);
+router.use('/pos', authenticatePlatformToken, posRoutes);
 
 export default router;

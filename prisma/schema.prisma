@@ -48,6 +48,10 @@ model Gym {
   gymSubscription        GymSubscription?
   billingPayments        BillingPayment[]
   pendingAttendanceLogs  PendingAttendanceLog[]
+  gymPosSubcategories    GymPosSubcategory[]
+  posProducts            PosProduct[]
+  posStockMovements      PosStockMovement[]
+  posSales               PosSale[]
 
   @@map("gyms")
 }
@@ -268,6 +272,7 @@ model Member {
   deviceUserMappings DeviceUserMapping[]
   oneTimePayments    OneTimePayment[]
   feeCollections     FeeCollection[]
+  posSales           PosSale[]
 
   @@index([gymId])
   @@index([packageId])
@@ -568,4 +573,213 @@ model DeviceUserMapping {
   @@index([memberId])
   @@index([deviceUserId])
   @@map("device_user_mappings")
+}
+
+// ─── Point of Sale (POS) ───────────────────────────────────────────────────
+
+enum PosProductType {
+  NUTRIENT
+  ACCESSORY
+}
+
+enum PosProductForm {
+  PACKAGED
+  SERVING
+}
+
+enum PosStockMovementType {
+  RESTOCK
+  SALE
+  ADJUSTMENT
+  RETURN
+}
+
+enum PosSaleStatus {
+  COMPLETED
+  VOIDED
+}
+
+enum PosDiscountType {
+  NONE
+  PERCENT
+  FLAT
+}
+
+model PosCategory {
+  id          Int            @id @default(autoincrement())
+  productType PosProductType
+  name        String         @db.VarChar(128)
+  code        String?        @unique @db.VarChar(64)
+  description String?        @db.Text
+  sortOrder   Int            @default(0)
+  isActive    Boolean        @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  subcategories PosSubcategory[]
+
+  @@unique([productType, name])
+  @@index([productType, isActive, sortOrder])
+  @@map("pos_categories")
+}
+
+model PosSubcategory {
+  id           Int       @id @default(autoincrement())
+  categoryId   Int
+  name         String    @db.VarChar(128)
+  code         String?   @unique @db.VarChar(64)
+  description  String?   @db.Text
+  /// JSON array of allowed forms for NUTRIENT subcategories, e.g. ["PACKAGED","SERVING"]
+  allowedForms Json?
+  sortOrder    Int       @default(0)
+  isActive     Boolean   @default(true)
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  category   PosCategory         @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  gymEnabled GymPosSubcategory[]
+  products   PosProduct[]
+
+  @@unique([categoryId, name])
+  @@index([categoryId, isActive, sortOrder])
+  @@map("pos_subcategories")
+}
+
+model GymPosSubcategory {
+  gymId         Int
+  subcategoryId Int
+  enabledAt     DateTime @default(now())
+
+  gym         Gym            @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  subcategory PosSubcategory @relation(fields: [subcategoryId], references: [id], onDelete: Cascade)
+
+  @@id([gymId, subcategoryId])
+  @@index([subcategoryId])
+  @@map("gym_pos_subcategories")
+}
+
+model PosProduct {
+  id                Int              @id @default(autoincrement())
+  gymId             Int
+  subcategoryId     Int
+  productType       PosProductType
+  form              PosProductForm   @default(PACKAGED)
+  name              String           @db.VarChar(255)
+  sku               String?          @db.VarChar(64)
+  description       String?          @db.Text
+  imageUrl          String?          @db.VarChar(2048)
+  brand             String?          @db.VarChar(128)
+  price             Float
+  discountType      PosDiscountType  @default(NONE)
+  discountValue     Float            @default(0)
+  calories          Float?
+  proteinG          Float?
+  carbsG            Float?
+  fatG              Float?
+  fiberG            Float?
+  sugarG            Float?
+  servingSizeG      Float?
+  servingLabel      String?          @db.VarChar(64)
+  material          String?          @db.VarChar(128)
+  color             String?          @db.VarChar(64)
+  size              String?          @db.VarChar(64)
+  trackInventory    Boolean          @default(true)
+  stockQuantity     Int              @default(0)
+  lowStockThreshold Int              @default(5)
+  isActive          Boolean          @default(true)
+  deletedAt         DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  gym            Gym                @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  subcategory    PosSubcategory     @relation(fields: [subcategoryId], references: [id], onDelete: Restrict)
+  stockMovements PosStockMovement[]
+  saleItems      PosSaleItem[]
+
+  @@unique([gymId, sku])
+  @@index([gymId, subcategoryId, isActive])
+  @@index([gymId, productType])
+  @@map("pos_products")
+}
+
+model PosStockMovement {
+  id          Int                  @id @default(autoincrement())
+  gymId       Int
+  productId   Int
+  type        PosStockMovementType
+  quantity    Int
+  stockAfter  Int
+  note        String?              @db.Text
+  saleId      Int?
+  createdById Int
+  createdAt   DateTime             @default(now())
+
+  gym     Gym        @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  product PosProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sale    PosSale?   @relation(fields: [saleId], references: [id], onDelete: SetNull)
+
+  @@index([gymId, productId])
+  @@index([gymId, createdAt])
+  @@index([saleId])
+  @@map("pos_stock_movements")
+}
+
+model PosSale {
+  id            Int           @id @default(autoincrement())
+  gymId         Int
+  receiptNo     String        @unique @db.VarChar(64)
+  status        PosSaleStatus @default(COMPLETED)
+  subtotal      Float
+  discountTotal Float         @default(0)
+  total         Float
+  memberId      Int?
+  soldById      Int
+  notes         String?       @db.Text
+  soldAt        DateTime      @default(now())
+  voidedAt      DateTime?
+  voidedById    Int?
+  voidReason    String?       @db.Text
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  gym            Gym                @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  member         Member?            @relation(fields: [memberId], references: [id], onDelete: SetNull)
+  items          PosSaleItem[]
+  stockMovements PosStockMovement[]
+
+  @@index([gymId, soldAt])
+  @@index([gymId, status])
+  @@index([memberId])
+  @@map("pos_sales")
+}
+
+model PosSaleItem {
+  id              Int              @id @default(autoincrement())
+  saleId          Int
+  productId       Int
+  productName     String           @db.VarChar(255)
+  productType     PosProductType
+  categoryId      Int
+  categoryName    String           @db.VarChar(128)
+  subcategoryId   Int
+  subcategoryName String           @db.VarChar(128)
+  form            PosProductForm
+  quantity        Int
+  unitPrice       Float
+  discountType    PosDiscountType  @default(NONE)
+  discountValue   Float            @default(0)
+  lineSubtotal    Float
+  lineDiscount    Float            @default(0)
+  lineTotal       Float
+
+  sale    PosSale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product PosProduct @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([saleId])
+  @@index([productId])
+  @@index([subcategoryId])
+  @@index([categoryId])
+  @@map("pos_sale_items")
 }

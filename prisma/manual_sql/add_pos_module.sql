@@ -1,0 +1,7 @@
+-- Point of Sale (POS) module — apply via:
+--   npx prisma migrate deploy
+-- or run the full SQL in:
+--   prisma/migrations/20260721120000_pos_module/migration.sql
+--
+-- Seed default categories/subcategories:
+--   npx tsx prisma/seed-pos-catalog.ts

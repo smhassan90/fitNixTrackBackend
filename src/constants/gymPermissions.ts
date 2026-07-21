@@ -132,6 +132,42 @@ export const GYM_PERMISSION_DEFINITIONS: GymPermissionDefinition[] = [
     description: 'Create, edit, disable, and assign permissions to team members.',
     group: 'Administration',
   },
+  {
+    key: 'gym.pos.catalog.read',
+    label: 'View POS catalog',
+    description: 'View POS categories, products, stock levels, and sales history.',
+    group: 'Point of Sale',
+  },
+  {
+    key: 'gym.pos.products.manage',
+    label: 'Manage POS products',
+    description: 'Create, edit, and deactivate gym POS products.',
+    group: 'Point of Sale',
+  },
+  {
+    key: 'gym.pos.inventory.manage',
+    label: 'Manage POS inventory',
+    description: 'Restock products and adjust inventory counts.',
+    group: 'Point of Sale',
+  },
+  {
+    key: 'gym.pos.sell',
+    label: 'Sell POS products',
+    description: 'Process POS checkout and create sales.',
+    group: 'Point of Sale',
+  },
+  {
+    key: 'gym.pos.discounts.manage',
+    label: 'Manage POS discounts',
+    description: 'Apply custom discounts beyond product defaults during checkout.',
+    group: 'Point of Sale',
+  },
+  {
+    key: 'gym.pos.revenue.read',
+    label: 'View POS revenue',
+    description: 'View POS revenue summaries and sales analytics.',
+    group: 'Point of Sale',
+  },
 ];
 
 export const KNOWN_GYM_PERMISSION_KEYS = new Set(
@@ -151,6 +187,11 @@ const IMPLIED_PERMISSIONS: Record<string, string[]> = {
   'gym.payments.delete': ['gym.payments.manage', 'gym.payments.read'],
   'gym.devices.manage': ['gym.devices.read'],
   'gym.settings.manage': ['gym.settings.read'],
+  'gym.pos.products.manage': ['gym.pos.catalog.read'],
+  'gym.pos.inventory.manage': ['gym.pos.catalog.read'],
+  'gym.pos.sell': ['gym.pos.catalog.read'],
+  'gym.pos.discounts.manage': ['gym.pos.sell', 'gym.pos.catalog.read'],
+  'gym.pos.revenue.read': ['gym.pos.catalog.read'],
 };
 
 export function normalizeGymPermissionKeys(value: unknown): string[] {
