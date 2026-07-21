@@ -7,6 +7,13 @@ import {
 import { prisma } from '../../lib/prisma';
 import { BadRequestError, NotFoundError } from '../../utils/errors';
 import {
+  calendarDateStringInGymTZ,
+  getGymTimezone,
+  startOfGymCalendarDayUtc,
+  startOfNextGymCalendarDayUtc,
+} from '../../utils/dateHelpers';
+import { findMemberByIdOrNumber } from '../../utils/memberLookup';
+import {
   assertValidDiscount,
   computeLineAmounts,
   generateReceiptNo,
@@ -22,16 +29,103 @@ type SaleItemInput = {
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
 
+type SaleWithRelations = {
+  id: number;
+  gymId: number;
+  receiptNo: string;
+  status: PosSaleStatus;
+  subtotal: number;
+  discountTotal: number;
+  total: number;
+  memberId: number | null;
+  soldById: number;
+  notes: string | null;
+  soldAt: Date;
+  voidedAt: Date | null;
+  voidedById: number | null;
+  voidReason: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  items: Array<Record<string, unknown>>;
+  member: {
+    id: number;
+    name: string;
+    phone: string | null;
+    legacyMemberId: string | null;
+  } | null;
+};
+
+function serializeSale(sale: SaleWithRelations) {
+  return {
+    id: sale.id,
+    gymId: sale.gymId,
+    receiptNo: sale.receiptNo,
+    status: sale.status,
+    memberId: sale.memberId,
+    memberName: sale.member?.name ?? null,
+    memberPhone: sale.member?.phone ?? null,
+    memberNumber: sale.member?.legacyMemberId?.trim() || null,
+    subtotal: sale.subtotal,
+    discountTotal: sale.discountTotal,
+    total: sale.total,
+    soldById: sale.soldById,
+    notes: sale.notes,
+    soldAt: sale.soldAt,
+    createdAt: sale.createdAt,
+    updatedAt: sale.updatedAt,
+    voidedAt: sale.voidedAt,
+    voidedById: sale.voidedById,
+    voidReason: sale.voidReason,
+    items: sale.items,
+    member: sale.member
+      ? {
+          id: sale.member.id,
+          name: sale.member.name,
+          phone: sale.member.phone,
+          legacyMemberId: sale.member.legacyMemberId,
+        }
+      : null,
+  };
+}
+
+const saleInclude = {
+  items: { orderBy: { id: 'asc' as const } },
+  member: {
+    select: {
+      id: true,
+      name: true,
+      phone: true,
+      legacyMemberId: true,
+    },
+  },
+};
+
 async function loadSale(gymId: number, saleId: number, db: DbClient = prisma) {
   const sale = await db.posSale.findFirst({
     where: { id: saleId, gymId },
-    include: {
-      items: { orderBy: { id: 'asc' } },
-      member: { select: { id: true, name: true, legacyMemberId: true } },
-    },
+    include: saleInclude,
   });
   if (!sale) throw new NotFoundError('Sale', saleId);
-  return sale;
+  return serializeSale(sale as SaleWithRelations);
+}
+
+async function resolveSaleMemberId(
+  gymId: number,
+  rawMemberId: number | string | null | undefined
+): Promise<number | null> {
+  if (rawMemberId === null || rawMemberId === undefined || rawMemberId === '') {
+    return null;
+  }
+  const member = await findMemberByIdOrNumber(gymId, rawMemberId, {
+    id: true,
+    name: true,
+    phone: true,
+    legacyMemberId: true,
+  });
+  if (!member) {
+    throw new BadRequestError('Member not found in this gym');
+  }
+  return member.id;
 }
 
 export async function createSale(
@@ -39,7 +133,7 @@ export async function createSale(
   soldById: number,
   canManageDiscounts: boolean,
   input: {
-    memberId?: number | null;
+    memberId?: number | string | null;
     notes?: string | null;
     items: SaleItemInput[];
   }
@@ -53,12 +147,7 @@ export async function createSale(
     throw new BadRequestError('Duplicate products in one sale must be merged into a single line item');
   }
 
-  if (input.memberId) {
-    const member = await prisma.member.findFirst({
-      where: { id: input.memberId, gymId },
-    });
-    if (!member) throw new BadRequestError('Member not found in this gym');
-  }
+  const memberId = await resolveSaleMemberId(gymId, input.memberId);
 
   const products = await prisma.posProduct.findMany({
     where: {
@@ -147,8 +236,6 @@ export async function createSale(
   const discountTotal = roundMoney(lineItems.reduce((sum, line) => sum + line.lineDiscount, 0));
   const total = roundMoney(lineItems.reduce((sum, line) => sum + line.lineTotal, 0));
 
-  // Reload via the same transaction client — a separate prisma query cannot see
-  // uncommitted rows and previously returned "Sale with id X not found".
   return prisma.$transaction(async (tx) => {
     const receiptNo = generateReceiptNo(gymId);
     const sale = await tx.posSale.create({
@@ -159,7 +246,7 @@ export async function createSale(
         subtotal,
         discountTotal,
         total,
-        memberId: input.memberId ?? null,
+        memberId,
         soldById,
         notes: input.notes ?? null,
       },
@@ -297,73 +384,66 @@ export async function listSales(
       orderBy: { soldAt: 'desc' },
       skip: (filters.page - 1) * filters.limit,
       take: filters.limit,
-      include: {
-        items: true,
-        member: { select: { id: true, name: true, legacyMemberId: true } },
-      },
+      include: saleInclude,
     }),
   ]);
 
-  return { sales, total };
+  return {
+    sales: sales.map((sale) => serializeSale(sale as SaleWithRelations)),
+    total,
+  };
+}
+
+function parseReportDateBound(value: string | undefined, bound: 'from' | 'to'): Date | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return bound === 'from'
+      ? startOfGymCalendarDayUtc(trimmed)
+      : new Date(startOfNextGymCalendarDayUtc(trimmed).getTime() - 1);
+  }
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new BadRequestError(`Invalid ${bound} date`);
+  }
+  return parsed;
+}
+
+function defaultReportRange(): { from: Date; to: Date } {
+  const tz = getGymTimezone();
+  const todayYmd = calendarDateStringInGymTZ(new Date(), tz);
+  const [y, m] = todayYmd.split('-').map(Number);
+  const monthStartYmd = `${y}-${String(m).padStart(2, '0')}-01`;
+  return {
+    from: startOfGymCalendarDayUtc(monthStartYmd, tz),
+    to: new Date(startOfNextGymCalendarDayUtc(todayYmd, tz).getTime() - 1),
+  };
 }
 
 export async function getGymPosSummary(
   gymId: number,
-  from?: Date,
-  to?: Date,
+  fromInput?: string,
+  toInput?: string,
   groupBy: 'day' | 'category' | 'subcategory' | 'product' = 'day'
 ) {
-  const dateFilter = from || to
-    ? PrismaDateFilter(from, to)
-    : undefined;
+  const defaults = defaultReportRange();
+  const from = parseReportDateBound(fromInput, 'from') ?? defaults.from;
+  const to = parseReportDateBound(toInput, 'to') ?? defaults.to;
 
   const salesWhere = {
     gymId,
     status: PosSaleStatus.COMPLETED,
-    ...(dateFilter ? { soldAt: dateFilter } : {}),
+    soldAt: { gte: from, lte: to },
   };
 
-  const [totals, grouped] = await Promise.all([
-    prisma.posSale.aggregate({
-      where: salesWhere,
-      _sum: { total: true, discountTotal: true, subtotal: true },
-      _count: { id: true },
-    }),
-    groupSalesItems(gymId, from, to, groupBy),
-  ]);
-
-  return {
-    summary: {
-      saleCount: totals._count.id,
-      subtotal: roundMoney(totals._sum.subtotal ?? 0),
-      discountTotal: roundMoney(totals._sum.discountTotal ?? 0),
-      total: roundMoney(totals._sum.total ?? 0),
-    },
-    grouped,
-  };
-}
-
-function PrismaDateFilter(from?: Date, to?: Date) {
-  return {
-    ...(from ? { gte: from } : {}),
-    ...(to ? { lte: to } : {}),
-  };
-}
-
-async function groupSalesItems(
-  gymId: number,
-  from?: Date,
-  to?: Date,
-  groupBy: 'day' | 'category' | 'subcategory' | 'product' = 'day'
-) {
   const sales = await prisma.posSale.findMany({
-    where: {
-      gymId,
-      status: PosSaleStatus.COMPLETED,
-      ...(from || to ? { soldAt: PrismaDateFilter(from, to) } : {}),
-    },
+    where: salesWhere,
     select: {
+      id: true,
       soldAt: true,
+      subtotal: true,
+      discountTotal: true,
+      total: true,
       items: {
         select: {
           productId: true,
@@ -373,41 +453,101 @@ async function groupSalesItems(
           subcategoryId: true,
           subcategoryName: true,
           quantity: true,
+          lineSubtotal: true,
+          lineDiscount: true,
           lineTotal: true,
         },
       },
     },
+    orderBy: { soldAt: 'asc' },
   });
 
-  const bucket = new Map<string, { key: string; label: string; quantity: number; revenue: number }>();
+  type Row = {
+    key: string;
+    label: string;
+    saleCount: number;
+    subtotal: number;
+    discountTotal: number;
+    total: number;
+  };
+
+  const bucket = new Map<string, Row & { saleIds: Set<number> }>();
+
+  const bump = (key: string, label: string, saleId: number, amounts: {
+    subtotal: number;
+    discountTotal: number;
+    total: number;
+  }) => {
+    const existing = bucket.get(key) ?? {
+      key,
+      label,
+      saleCount: 0,
+      subtotal: 0,
+      discountTotal: 0,
+      total: 0,
+      saleIds: new Set<number>(),
+    };
+    if (!existing.saleIds.has(saleId)) {
+      existing.saleIds.add(saleId);
+      existing.saleCount += 1;
+    }
+    existing.subtotal = roundMoney(existing.subtotal + amounts.subtotal);
+    existing.discountTotal = roundMoney(existing.discountTotal + amounts.discountTotal);
+    existing.total = roundMoney(existing.total + amounts.total);
+    bucket.set(key, existing);
+  };
 
   for (const sale of sales) {
+    if (groupBy === 'day') {
+      const key = calendarDateStringInGymTZ(sale.soldAt);
+      bump(key, key, sale.id, {
+        subtotal: sale.subtotal,
+        discountTotal: sale.discountTotal,
+        total: sale.total,
+      });
+      continue;
+    }
+
     for (const item of sale.items) {
       let key: string;
       let label: string;
-      switch (groupBy) {
-        case 'category':
-          key = String(item.categoryId);
-          label = item.categoryName;
-          break;
-        case 'subcategory':
-          key = String(item.subcategoryId);
-          label = item.subcategoryName;
-          break;
-        case 'product':
-          key = String(item.productId);
-          label = item.productName;
-          break;
-        default:
-          key = sale.soldAt.toISOString().slice(0, 10);
-          label = key;
+      if (groupBy === 'category') {
+        key = String(item.categoryId);
+        label = item.categoryName;
+      } else if (groupBy === 'subcategory') {
+        key = String(item.subcategoryId);
+        label = item.subcategoryName;
+      } else {
+        key = String(item.productId);
+        label = item.productName;
       }
-      const existing = bucket.get(key) ?? { key, label, quantity: 0, revenue: 0 };
-      existing.quantity += item.quantity;
-      existing.revenue = roundMoney(existing.revenue + item.lineTotal);
-      bucket.set(key, existing);
+      bump(key, label, sale.id, {
+        subtotal: item.lineSubtotal,
+        discountTotal: item.lineDiscount,
+        total: item.lineTotal,
+      });
     }
   }
 
-  return [...bucket.values()].sort((a, b) => b.revenue - a.revenue);
+  const rows = [...bucket.values()]
+    .map(({ saleIds: _saleIds, ...row }) => row)
+    .sort((a, b) => {
+      if (groupBy === 'day') return a.key.localeCompare(b.key);
+      return b.total - a.total;
+    });
+
+  const totals = {
+    saleCount: sales.length,
+    subtotal: roundMoney(sales.reduce((sum, s) => sum + s.subtotal, 0)),
+    discountTotal: roundMoney(sales.reduce((sum, s) => sum + s.discountTotal, 0)),
+    total: roundMoney(sales.reduce((sum, s) => sum + s.total, 0)),
+  };
+
+  return {
+    rows,
+    totals,
+    from: from.toISOString(),
+    to: to.toISOString(),
+    groupBy,
+  };
 }

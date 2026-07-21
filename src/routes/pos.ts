@@ -30,6 +30,10 @@ import {
   voidSale,
 } from '../services/pos/posSaleService';
 import {
+  startOfGymCalendarDayUtc,
+  startOfNextGymCalendarDayUtc,
+} from '../utils/dateHelpers';
+import {
   posCatalogQuerySchema,
   posGymReportQuerySchema,
   posGymSubcategoriesPutSchema,
@@ -287,8 +291,16 @@ router.get(
       };
       const { sales, total } = await listSales(req.user!.gymId, {
         status: query.status,
-        from: query.from ? new Date(query.from) : undefined,
-        to: query.to ? new Date(query.to) : undefined,
+        from: query.from
+          ? (/^\d{4}-\d{2}-\d{2}$/.test(query.from)
+            ? startOfGymCalendarDayUtc(query.from)
+            : new Date(query.from))
+          : undefined,
+        to: query.to
+          ? (/^\d{4}-\d{2}-\d{2}$/.test(query.to)
+            ? new Date(startOfNextGymCalendarDayUtc(query.to).getTime() - 1)
+            : new Date(query.to))
+          : undefined,
         page: Number(query.page ?? 1),
         limit: Number(query.limit ?? 20),
       });
@@ -313,7 +325,7 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const sale = await getSale(req.user!.gymId, Number(req.params.id));
-      sendSuccess(res, { sale });
+      sendSuccess(res, sale);
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -352,8 +364,8 @@ router.get(
       };
       const data = await getGymPosSummary(
         req.user!.gymId,
-        query.from ? new Date(query.from) : undefined,
-        query.to ? new Date(query.to) : undefined,
+        query.from,
+        query.to,
         query.groupBy ?? 'day'
       );
       sendSuccess(res, data);

@@ -108,7 +108,11 @@ export const posInventoryAdjustSchema = z.object({
 
 export const posSaleCreateSchema = z.object({
   body: z.object({
-    memberId: positiveInt.optional().nullable(),
+    memberId: z.union([
+      z.coerce.number().int().positive(),
+      z.string().trim().min(1),
+      z.null(),
+    ]).optional().nullable(),
     notes: z.string().trim().max(2000).optional().nullable(),
     items: z.array(z.object({
       productId: positiveInt,
@@ -130,11 +134,22 @@ export const posSaleVoidSchema = z.object({
   }),
 });
 
+const optionalDateQuery = z
+  .string()
+  .trim()
+  .refine(
+    (v) =>
+      /^\d{4}-\d{2}-\d{2}$/.test(v)
+      || !Number.isNaN(new Date(v).getTime()),
+    'Date must be YYYY-MM-DD or ISO datetime'
+  )
+  .optional();
+
 export const posSalesListQuerySchema = z.object({
   query: z.object({
     status: z.enum(['COMPLETED', 'VOIDED']).optional(),
-    from: z.string().datetime().optional(),
-    to: z.string().datetime().optional(),
+    from: optionalDateQuery,
+    to: optionalDateQuery,
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
   }),
@@ -142,8 +157,8 @@ export const posSalesListQuerySchema = z.object({
 
 export const posGymReportQuerySchema = z.object({
   query: z.object({
-    from: z.string().datetime().optional(),
-    to: z.string().datetime().optional(),
+    from: optionalDateQuery,
+    to: optionalDateQuery,
     groupBy: z.enum(['day', 'category', 'subcategory', 'product']).default('day'),
   }),
 });
