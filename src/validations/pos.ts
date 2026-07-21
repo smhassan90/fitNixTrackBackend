@@ -134,16 +134,17 @@ export const posSaleVoidSchema = z.object({
   }),
 });
 
-const optionalDateQuery = z
-  .string()
-  .trim()
-  .refine(
-    (v) =>
-      /^\d{4}-\d{2}-\d{2}$/.test(v)
-      || !Number.isNaN(new Date(v).getTime()),
-    'Date must be YYYY-MM-DD or ISO datetime'
-  )
-  .optional();
+/**
+ * Portal date pickers send YYYY-MM-DD. Also accept ISO datetime.
+ * Keep validation loose here; range bounds are applied in gym TZ in the service.
+ */
+const optionalDateQuery = z.preprocess((raw) => {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}, z.string().min(1).optional());
 
 export const posSalesListQuerySchema = z.object({
   query: z.object({

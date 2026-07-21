@@ -69,8 +69,8 @@ export const platformPosCatalogQuerySchema = z.object({
 
 export const platformPosAnalyticsQuerySchema = z.object({
   query: z.object({
-    from: z.string().datetime().optional(),
-    to: z.string().datetime().optional(),
+    from: z.string().optional(),
+    to: z.string().optional(),
     gymId: positiveInt.optional(),
     productType: productTypeSchema.optional(),
     categoryId: positiveInt.optional(),
