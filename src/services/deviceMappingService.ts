@@ -1,4 +1,9 @@
 import { prisma } from '../lib/prisma';
+import {
+  calendarDateStringInGymTZ,
+  getGymTimezone,
+  parseDate,
+} from '../utils/dateHelpers';
 
 export function normalizeMemberName(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -197,9 +202,8 @@ export async function applyPunchToAttendance(input: {
   deviceSerialNumber?: string | null;
 }): Promise<boolean> {
   const { gymId, memberId, deviceUserId, logDate, type, state, deviceSerialNumber } = input;
-  const dateOnly = new Date(
-    Date.UTC(logDate.getUTCFullYear(), logDate.getUTCMonth(), logDate.getUTCDate())
-  );
+  // Attendance day = gym calendar day of the punch (not UTC midnight of the instant).
+  const dateOnly = parseDate(calendarDateStringInGymTZ(logDate, getGymTimezone()));
 
   const existingRecord = await prisma.attendanceRecord.findUnique({
     where: {

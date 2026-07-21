@@ -31,7 +31,7 @@ import { NotFoundError, BadRequestError } from '../utils/errors';
 import { ZKTService, syncAttendanceFromDevice, syncUsersFromDevice, autoCheckoutIncompleteRecords } from '../services/zktService';
 import { ensureGymSyncApiKey } from '../services/gymSyncApiKeyService';
 import { generateSyncApiKey } from '../utils/syncApiKey';
-import { parseDate } from '../utils/dateHelpers';
+import { parseDate, parseDevicePunchInstant, getGymTimezone } from '../utils/dateHelpers';
 import { formatDeviceForPortal, formatSyncResultDto } from '../utils/deviceDto';
 import {
   applyAttendancePolicies,
@@ -287,18 +287,11 @@ router.post(
 
           deviceUserId = resolveCanonicalDeviceUserId(deviceUserIdMap, deviceUserId);
 
-          let logDate: Date;
-          if (log.recordTime) {
-            logDate = new Date(log.recordTime);
-          } else if (log.timestamp) {
-            const ts = Number(log.timestamp);
-            logDate = new Date(ts > 1e12 ? ts : ts * 1000);
-          } else {
-            skippedNoTimestamp++;
-            continue;
-          }
-
-          if (isNaN(logDate.getTime())) {
+          const logDate = parseDevicePunchInstant(
+            log.recordTime ?? log.timestamp,
+            getGymTimezone()
+          );
+          if (!logDate) {
             skippedNoTimestamp++;
             continue;
           }
@@ -756,12 +749,8 @@ router.get(
           console.log(`Sample log entry:`, JSON.stringify(logs[0], null, 2));
           // Show date range of logs
           const dates = logs
-            .map((log: any) => {
-              if (log.recordTime) return new Date(log.recordTime);
-              if (log.timestamp) return new Date(log.timestamp * 1000);
-              return null;
-            })
-            .filter((d: Date | null): d is Date => d !== null && !isNaN(d.getTime()))
+            .map((log: any) => parseDevicePunchInstant(log.recordTime ?? log.timestamp, getGymTimezone()))
+            .filter((d: Date | null): d is Date => d !== null)
             .map((d: Date) => d.toISOString().split('T')[0]);
           if (dates.length > 0) {
           const uniqueDates = [...new Set(dates)].sort();
@@ -856,21 +845,13 @@ router.get(
         const deviceUserIdMap = await buildDeviceUserIdentifierMap(id);
 
         for (const log of logs) {
-          // Handle both timestamp formats
-          let logDate: Date;
-          if (log.recordTime) {
-            logDate = new Date(log.recordTime);
-          } else if (log.timestamp) {
-            logDate = new Date(log.timestamp * 1000);
-          } else {
+          const logDate = parseDevicePunchInstant(
+            log.recordTime ?? log.timestamp,
+            getGymTimezone()
+          );
+          if (!logDate) {
             skippedNoTimestamp++;
             continue; // Skip logs without timestamp
-          }
-          
-          // Validate date
-          if (isNaN(logDate.getTime())) {
-            skippedNoTimestamp++;
-            continue;
           }
           
           // If we have a sync start time, only include logs after it

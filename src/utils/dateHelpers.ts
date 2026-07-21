@@ -330,6 +330,76 @@ function parseYmdParts(dateStr: string): { y: number; mo: number; d: number } {
 }
 
 /**
+ * Convert a gym wall-clock date+time to the matching UTC instant.
+ * Used when biometric devices send local clock strings with no timezone.
+ */
+export function instantFromGymWallClock(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number,
+  timeZone: string = getGymTimezone()
+): Date {
+  const ymd = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  const dayStart = startOfGymCalendarDayUtc(ymd, timeZone);
+  return new Date(
+    dayStart.getTime() + ((hour * 60 + minute) * 60 + second) * 1000
+  );
+}
+
+const DEVICE_NAIVE_DATETIME =
+  /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?$/;
+
+/**
+ * Parse a device punch time into a true UTC Date.
+ * - Strings with Z / ±offset: absolute instant (trusted).
+ * - Naive strings (device wall clock): interpreted in gym timezone.
+ * - Numeric unix seconds/ms: treated as true epoch UTC.
+ */
+export function parseDevicePunchInstant(
+  input: string | number | Date | null | undefined,
+  timeZone: string = getGymTimezone()
+): Date | null {
+  if (input == null) return null;
+
+  if (input instanceof Date) {
+    return Number.isNaN(input.getTime()) ? null : input;
+  }
+
+  if (typeof input === 'number') {
+    const ts = input > 1e12 ? input : input * 1000;
+    const d = new Date(ts);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  const raw = String(input).trim();
+  if (!raw) return null;
+
+  if (/(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)) {
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  const m = DEVICE_NAIVE_DATETIME.exec(raw);
+  if (m) {
+    return instantFromGymWallClock(
+      Number(m[1]),
+      Number(m[2]),
+      Number(m[3]),
+      Number(m[4]),
+      Number(m[5]),
+      m[6] != null ? Number(m[6]) : 0,
+      timeZone
+    );
+  }
+
+  const fallback = new Date(raw);
+  return Number.isNaN(fallback.getTime()) ? null : fallback;
+}
+
+/**
  * UTC instant of the first millisecond that falls on `dateStr` (YYYY-MM-DD) in the gym wall calendar.
  * Used for inclusive date-range filters on `createdAt` / `paidDate`.
  */

@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma';
+import { getGymTimezone, parseDevicePunchInstant } from '../utils/dateHelpers';
 import { applyAttendancePolicies } from './attendancePolicyService';
 import {
   applyPunchToAttendance,
@@ -394,18 +395,11 @@ export async function syncAttendanceFromDevice(
     let filteredLogs = logs;
     if (startDate || endDate) {
       filteredLogs = logs.filter((log) => {
-        // Handle both timestamp formats
-        let logDate: Date;
-        if (log.recordTime) {
-          logDate = new Date(log.recordTime);
-        } else if (log.timestamp) {
-          const ts = Number(log.timestamp);
-          logDate = new Date(ts > 1e12 ? ts : ts * 1000);
-        } else {
-          return false; // Skip logs without timestamp
-        }
-        
-        if (isNaN(logDate.getTime())) return false;
+        const logDate = parseDevicePunchInstant(
+          log.recordTime ?? log.timestamp,
+          getGymTimezone()
+        );
+        if (!logDate) return false;
         if (startDate && logDate < startDate) return false;
         if (endDate && logDate > endDate) return false;
         return true;
@@ -445,22 +439,13 @@ export async function syncAttendanceFromDevice(
 
         deviceUserId = resolveCanonicalDeviceUserId(deviceUserIdMap, deviceUserId);
 
-        // Handle timestamp - support both formats
-        let logDate: Date;
-        if (log.recordTime) {
-          logDate = new Date(log.recordTime);
-        } else if (log.timestamp) {
-          const ts = Number(log.timestamp);
-          logDate = new Date(ts > 1e12 ? ts : ts * 1000);
-        } else {
-          console.warn(`Log entry missing timestamp/recordTime:`, JSON.stringify(log));
-          errors++;
-          continue;
-        }
-
-        // Validate date
-        if (isNaN(logDate.getTime())) {
-          console.warn(`Invalid date in log entry:`, JSON.stringify(log));
+        // Handle timestamp - support both formats; naive device clock → gym TZ
+        const logDate = parseDevicePunchInstant(
+          log.recordTime ?? log.timestamp,
+          getGymTimezone()
+        );
+        if (!logDate) {
+          console.warn(`Log entry missing/invalid timestamp/recordTime:`, JSON.stringify(log));
           errors++;
           continue;
         }
