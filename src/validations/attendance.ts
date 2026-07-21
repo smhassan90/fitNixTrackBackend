@@ -39,3 +39,23 @@ export const getOverdueCheckinsSchema = z.object({
       .optional(),
   }),
 });
+
+export const manualCheckInSchema = z.object({
+  body: z.object({
+    memberId: z.union([z.number().int().positive(), z.string().min(1)]),
+    checkInTime: z
+      .string()
+      .refine((v) => !Number.isNaN(new Date(v).getTime()), 'checkInTime must be a valid ISO datetime')
+      .optional(),
+  }),
+});
+
+export const manualCheckOutSchema = z.object({
+  body: z.object({
+    memberId: z.union([z.number().int().positive(), z.string().min(1)]),
+    checkOutTime: z
+      .string()
+      .refine((v) => !Number.isNaN(new Date(v).getTime()), 'checkOutTime must be a valid ISO datetime')
+      .optional(),
+  }),
+});

@@ -13,6 +13,8 @@ import {
   getNoSignInMembersSchema,
   applyAttendancePoliciesSchema,
   getOverdueCheckinsSchema,
+  manualCheckInSchema,
+  manualCheckOutSchema,
 } from '../validations/attendance';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
@@ -23,6 +25,7 @@ import {
   getOverduePaymentDetailsByMemberIds,
   listMembersWithoutSignInSince,
 } from '../services/attendancePolicyService';
+import { manualCheckIn, manualCheckOut } from '../services/manualAttendanceService';
 
 const router = Router();
 
@@ -354,6 +357,52 @@ router.get(
         // Pass this back as `since` on the next poll to only get new check-ins
         serverTime: now.toISOString(),
       });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// POST /api/attendance/manual-check-in
+router.post(
+  '/manual-check-in',
+  validate(manualCheckInSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { memberId, checkInTime } = req.body as {
+        memberId: number | string;
+        checkInTime?: string;
+      };
+      const record = await manualCheckIn(
+        gymId,
+        memberId,
+        checkInTime ? new Date(checkInTime) : undefined
+      );
+      sendSuccess(res, { record }, 'Member checked in', 201);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// POST /api/attendance/manual-check-out
+router.post(
+  '/manual-check-out',
+  validate(manualCheckOutSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { memberId, checkOutTime } = req.body as {
+        memberId: number | string;
+        checkOutTime?: string;
+      };
+      const record = await manualCheckOut(
+        gymId,
+        memberId,
+        checkOutTime ? new Date(checkOutTime) : undefined
+      );
+      sendSuccess(res, { record }, 'Member checked out');
     } catch (error) {
       sendError(res, error as Error);
     }
