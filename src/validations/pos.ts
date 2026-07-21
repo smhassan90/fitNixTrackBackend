@@ -85,7 +85,8 @@ export const posProductListQuerySchema = z.object({
     isActive: z.enum(['true', 'false']).optional(),
     search: z.string().trim().max(255).optional(),
     page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(50),
+  /** POS grids often load the full catalog; allow higher than generic list endpoints. */
+    limit: z.coerce.number().int().min(1).max(500).default(50),
   }),
 });
 
