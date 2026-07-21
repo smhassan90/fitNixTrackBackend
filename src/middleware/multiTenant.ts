@@ -2,16 +2,19 @@ import { Response, NextFunction } from 'express';
 import { AuthRequest } from './auth';
 import { UnauthorizedError } from '../utils/errors';
 import { sendError } from '../utils/response';
+import { getGymTimezoneById } from '../services/gymTimezoneService';
+import { runWithGymContext } from '../utils/gymContext';
 
 /**
  * Gym scope: requires authenticated gym user with numeric gymId (set by authenticateToken from DB).
  * Suspended gyms are rejected in authenticateToken before reaching here.
+ * Loads per-gym timezone from DB into request context for date helpers.
  */
-export function requireGymId(
+export async function requireGymId(
   req: AuthRequest,
   res: Response,
   next: NextFunction
-): void {
+): Promise<void> {
   if (!req.user?.gymId) {
     sendError(res, new UnauthorizedError('Gym ID not found in token'));
     return;
@@ -29,7 +32,13 @@ export function requireGymId(
   }
 
   req.gymId = gymId;
-  next();
+
+  try {
+    const timezone = await getGymTimezoneById(gymId);
+    runWithGymContext({ gymId, timezone }, () => next());
+  } catch (error) {
+    sendError(res, error as Error);
+  }
 }
 
 // Extend Express Request type
@@ -41,4 +50,3 @@ declare global {
     }
   }
 }
-

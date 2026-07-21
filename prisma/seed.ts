@@ -14,6 +14,7 @@ async function main() {
       address: '123 Main Street, Karachi',
       phone: '+92-300-1234567',
       email: 'main@fitnix.com',
+      timezone: 'Asia/Karachi',
     },
   });
 
@@ -23,6 +24,7 @@ async function main() {
       address: '456 Downtown Avenue, Lahore',
       phone: '+92-300-7654321',
       email: 'downtown@fitnix.com',
+      timezone: 'Asia/Karachi',
     },
   });
 

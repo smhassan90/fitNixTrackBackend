@@ -101,6 +101,7 @@ test('POST /gyms creates gym with active plan', async () => {
             id: 101,
             name: data.name,
             slug: data.slug,
+            timezone: data.timezone,
             tenantStatus: data.tenantStatus,
           }),
           update: async ({ data }: any) => ({
@@ -137,6 +138,7 @@ test('POST /gyms creates gym with active plan', async () => {
     address: 'Main road',
     city: 'Karachi',
     country: 'Pakistan',
+    timezone: 'Asia/Karachi',
     ownerAdmin: {
       name: 'Owner',
       email: 'owner@gym-a.com',

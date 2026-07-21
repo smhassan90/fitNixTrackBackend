@@ -1,9 +1,16 @@
 import { z } from 'zod';
 import { KNOWN_PLATFORM_PERMISSION_KEYS } from '../constants/platformPermissions';
+import { isValidIanaTimezone } from '../services/gymTimezoneService';
 
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD');
 
 const slugRegex = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+export const ianaTimezoneSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .refine(isValidIanaTimezone, 'Invalid IANA timezone (e.g. Asia/Karachi)');
 
 /** Platform subscription prepaid cycles (YEARLY kept as alias input → prefer ANNUAL). */
 const billingCycleZ = z.enum(['MONTHLY', 'BIANNUAL', 'ANNUAL', 'QUARTERLY', 'YEARLY']);
@@ -65,6 +72,7 @@ export const platformCreateGymSchema = z.object({
       address: z.string().max(500).optional().nullable(),
       city: z.string().min(1).max(120),
       country: z.string().min(1).max(120),
+      timezone: ianaTimezoneSchema,
       ownerAdmin: z.object({
         name: z.string().min(1).max(191),
         email: z.string().email().max(191),
@@ -101,6 +109,7 @@ export const platformPatchGymSchema = z.object({
       country: z.string().max(120).optional().nullable(),
       phone: z.string().max(40).optional().nullable(),
       email: z.string().email().max(191).optional().nullable(),
+      timezone: ianaTimezoneSchema.optional(),
     })
     .refine((b) => Object.keys(b).length > 0, { message: 'At least one field required' }),
 });

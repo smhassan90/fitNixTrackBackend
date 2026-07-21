@@ -30,6 +30,7 @@ function formatSettingsResponse(gym: {
   address: string | null;
   phone: string | null;
   email: string | null;
+  timezone: string;
   admissionFee: number | null;
   maxMemberDiscount: number | null;
   autoCheckoutHours: number;
@@ -54,6 +55,7 @@ function formatSettingsResponse(gym: {
       address: gym.address,
       phone: gym.phone,
       email: gym.email,
+      timezone: gym.timezone,
     },
   };
 }
@@ -75,6 +77,7 @@ router.get(
           address: true,
           phone: true,
           email: true,
+          timezone: true,
           admissionFee: true,
           maxMemberDiscount: true,
           autoCheckoutHours: true,
@@ -142,6 +145,7 @@ router.put(
           address: true,
           phone: true,
           email: true,
+          timezone: true,
           admissionFee: true,
           maxMemberDiscount: true,
           autoCheckoutHours: true,

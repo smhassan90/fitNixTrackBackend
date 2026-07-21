@@ -8,6 +8,8 @@ import {
   buildSyncDiagnostic,
   diagnosticDetails,
 } from '../utils/syncDiagnostics';
+import { getGymTimezoneById } from '../services/gymTimezoneService';
+import { runWithGymContext } from '../utils/gymContext';
 
 export interface ApiKeyAuthRequest extends Request {
   deviceId?: number;
@@ -268,7 +270,8 @@ export async function authenticateApiKey(
     req.deviceId = device.id;
     req.gymId = device.gymId;
 
-    next();
+    const timezone = await getGymTimezoneById(device.gymId);
+    runWithGymContext({ gymId: device.gymId, timezone }, () => next());
   } catch (error) {
     const deviceIdParam = parseInt(req.params.id, 10) || -1;
     const diagnostic = buildSyncDiagnostic({

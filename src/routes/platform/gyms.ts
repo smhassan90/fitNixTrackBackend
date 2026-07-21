@@ -21,6 +21,7 @@ import { writePlatformAuditLog } from '../../services/platformAuditService';
 import { parseDate } from '../../utils/dateHelpers';
 import { locationCatalogService } from '../../services/locationCatalogService';
 import { findGymOwnerAdmin } from '../../services/gymOwnerAdminService';
+import { invalidateGymTimezoneCache } from '../../services/gymTimezoneService';
 import {
   addPlanBillingCycle,
   normalizePlanBillingCycle,
@@ -168,6 +169,7 @@ router.get(
           country: g.country,
           phone: g.phone,
           email: g.email,
+          timezone: g.timezone,
           tenantStatus: g.tenantStatus,
           createdAt: g.createdAt,
           membersCount: g._count.members,
@@ -366,6 +368,7 @@ router.post(
         address,
         city,
         country,
+        timezone,
         ownerAdmin,
         planId,
         dueDate,
@@ -419,6 +422,7 @@ router.post(
             address: address ?? null,
             city: normalizedLocation.city,
             country: normalizedLocation.country,
+            timezone,
             phone: ownerAdmin.phone ?? null,
             tenantStatus,
           },
@@ -489,6 +493,7 @@ router.post(
             id: result.gym.id,
             name: result.gym.name,
             slug: result.gym.slug,
+            timezone: result.gym.timezone,
             tenantStatus: result.gym.tenantStatus,
           },
           ownerAdmin: result.user,
@@ -640,6 +645,7 @@ router.patch(
       if (body.address !== undefined) data.address = body.address as string | null;
       if (body.phone !== undefined) data.phone = body.phone as string | null;
       if (body.email !== undefined) data.email = body.email as string | null;
+      if (body.timezone !== undefined) data.timezone = body.timezone as string;
 
       const updated = await prisma.gym.update({
         where: { id },
@@ -659,6 +665,10 @@ router.patch(
           })
         ) as Prisma.InputJsonValue,
       });
+
+      if (body.timezone !== undefined) {
+        invalidateGymTimezoneCache(id);
+      }
 
       sendSuccess(res, updated, 'Gym updated');
     } catch (error) {

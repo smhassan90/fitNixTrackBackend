@@ -28,6 +28,11 @@ async function main() {
       column: 'photoUrl',
       ddl: 'ALTER TABLE `members` ADD COLUMN `photoUrl` VARCHAR(2048) NULL AFTER `comments`',
     },
+    {
+      table: 'gyms',
+      column: 'timezone',
+      ddl: "ALTER TABLE `gyms` ADD COLUMN `timezone` VARCHAR(64) NOT NULL DEFAULT 'UTC' AFTER `syncApiKey`",
+    },
   ];
 
   for (const check of checks) {

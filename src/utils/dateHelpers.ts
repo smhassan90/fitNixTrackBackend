@@ -1,3 +1,5 @@
+import { getGymContext } from './gymContext';
+
 /**
  * Format date to YYYY-MM-DD string
  */
@@ -119,9 +121,14 @@ function dateFormatterForTimezone(timeZone: string): Intl.DateTimeFormat {
 }
 
 /**
- * IANA zone for billing/overdue/display (e.g. Asia/Karachi). Match the gym wall clock / frontend locale.
+ * IANA zone for billing/overdue/display. Prefer per-gym DB timezone (request context),
+ * then legacy GYM_TIMEZONE env, then UTC.
  */
 export function getGymTimezone(): string {
+  const ctx = getGymContext();
+  if (ctx?.timezone) {
+    return ctx.timezone;
+  }
   const tz = process.env.GYM_TIMEZONE?.trim();
   return tz && tz.length > 0 ? tz : 'UTC';
 }
