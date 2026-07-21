@@ -42,7 +42,7 @@ export const getOverdueCheckinsSchema = z.object({
 
 export const manualCheckInSchema = z.object({
   body: z.object({
-    memberId: z.union([z.number().int().positive(), z.string().min(1)]),
+    memberId: z.coerce.number().int().positive(),
     checkInTime: z
       .string()
       .refine((v) => !Number.isNaN(new Date(v).getTime()), 'checkInTime must be a valid ISO datetime')

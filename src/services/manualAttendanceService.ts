@@ -2,6 +2,35 @@ import { prisma } from '../lib/prisma';
 import { BadRequestError, ConflictError, NotFoundError } from '../utils/errors';
 import { getStartOfDay } from '../utils/dateHelpers';
 import { resolveMemberInternalId } from '../utils/memberLookup';
+import { getOverduePaymentDetailsByMemberIds } from './attendancePolicyService';
+
+function formatCheckInTime(checkInTime: Date): string {
+  return new Date(checkInTime).toLocaleString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
+export type ManualCheckInPortalResponse = {
+  message: string;
+  checkInTime: string;
+  checkInFormatted: string;
+  attendanceRecordId: string;
+  overdueAlerts: Array<{
+    attendanceRecordId: number;
+    memberId: number;
+    memberNumber: string | null;
+    legacyMemberId: string | null;
+    memberName: string;
+    contact: string;
+    checkInTime: string;
+    overdueCount: number;
+    overdueAmount: number;
+    overdueSince: string;
+    overdueMonths: string[];
+  }>;
+};
 
 async function resolveActiveMemberId(gymId: number, rawMemberId: number | string): Promise<number> {
   const memberId = await resolveMemberInternalId(gymId, rawMemberId);
@@ -25,7 +54,7 @@ export async function manualCheckIn(
   gymId: number,
   rawMemberId: number | string,
   checkInTimeInput?: Date
-) {
+): Promise<ManualCheckInPortalResponse> {
   const memberId = await resolveActiveMemberId(gymId, rawMemberId);
   const checkInTime = checkInTimeInput ?? new Date();
   const dateOnly = getStartOfDay(checkInTime);
@@ -44,35 +73,62 @@ export async function manualCheckIn(
     throw new ConflictError('Member has already completed attendance for this date');
   }
 
-  if (existing) {
-    return prisma.attendanceRecord.update({
-      where: { id: existing.id },
-      data: {
-        checkInTime,
-        status: 'PRESENT',
-      },
-      include: {
-        member: {
-          select: { id: true, legacyMemberId: true, name: true, phone: true, email: true },
+  const record = existing
+    ? await prisma.attendanceRecord.update({
+        where: { id: existing.id },
+        data: {
+          checkInTime,
+          status: 'PRESENT',
         },
-      },
-    });
-  }
+        include: {
+          member: {
+            select: { id: true, legacyMemberId: true, name: true, phone: true, email: true },
+          },
+        },
+      })
+    : await prisma.attendanceRecord.create({
+        data: {
+          gymId,
+          memberId,
+          date: dateOnly,
+          status: 'PRESENT',
+          checkInTime,
+        },
+        include: {
+          member: {
+            select: { id: true, legacyMemberId: true, name: true, phone: true, email: true },
+          },
+        },
+      });
 
-  return prisma.attendanceRecord.create({
-    data: {
-      gymId,
-      memberId,
-      date: dateOnly,
-      status: 'PRESENT',
-      checkInTime,
-    },
-    include: {
-      member: {
-        select: { id: true, legacyMemberId: true, name: true, phone: true, email: true },
-      },
-    },
-  });
+  const checkIn = record.checkInTime!;
+  const overdueByMember = await getOverduePaymentDetailsByMemberIds(gymId, [record.memberId]);
+  const overdueInfo = overdueByMember.get(record.memberId);
+  const memberNumber = record.member.legacyMemberId?.trim() || null;
+
+  const overdueAlerts = overdueInfo
+    ? [{
+        attendanceRecordId: record.id,
+        memberId: record.member.id,
+        memberNumber,
+        legacyMemberId: memberNumber,
+        memberName: record.member.name,
+        contact: record.member.phone || record.member.email || 'N/A',
+        checkInTime: checkIn.toISOString(),
+        overdueCount: overdueInfo.overdueCount,
+        overdueAmount: overdueInfo.overdueAmount,
+        overdueSince: overdueInfo.overdueSince,
+        overdueMonths: overdueInfo.overdueMonths,
+      }]
+    : [];
+
+  return {
+    message: 'Member checked in successfully.',
+    checkInTime: checkIn.toISOString(),
+    checkInFormatted: formatCheckInTime(checkIn),
+    attendanceRecordId: String(record.id),
+    overdueAlerts,
+  };
 }
 
 export async function manualCheckOut(

@@ -374,12 +374,12 @@ router.post(
         memberId: number | string;
         checkInTime?: string;
       };
-      const record = await manualCheckIn(
+      const data = await manualCheckIn(
         gymId,
         memberId,
         checkInTime ? new Date(checkInTime) : undefined
       );
-      sendSuccess(res, { record }, 'Member checked in', 201);
+      sendSuccess(res, data, undefined, 201);
     } catch (error) {
       sendError(res, error as Error);
     }
