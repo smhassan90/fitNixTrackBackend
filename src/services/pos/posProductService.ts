@@ -9,6 +9,7 @@ import { prisma } from '../../lib/prisma';
 import { BadRequestError, ConflictError, NotFoundError } from '../../utils/errors';
 import {
   assertFormAllowed,
+  effectiveAllowedForms,
 } from './posHelpers';
 import {
   assertGymSubcategoryEnabled,
@@ -143,7 +144,8 @@ export async function createGymProduct(gymId: number, userId: number, input: Pro
     throw new BadRequestError('productType does not match subcategory');
   }
 
-  const form = input.form ?? 'PACKAGED';
+  const allowed = effectiveAllowedForms(sub.category.productType, sub.allowedForms);
+  const form = input.form ?? (allowed.length === 1 ? allowed[0] : 'PACKAGED');
   assertFormAllowed(sub.category.productType, form, sub.allowedForms);
   validateProductFields(sub.category.productType, form, input);
 

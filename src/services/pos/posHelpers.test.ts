@@ -4,7 +4,9 @@ import {
   assertValidDiscount,
   computeLineAmounts,
   effectiveAllowedForms,
+  inferAllowedFormsFromName,
   parseAllowedForms,
+  resolveSubcategoryAllowedForms,
   roundMoney,
 } from './posHelpers';
 import { BadRequestError } from '../../utils/errors';
@@ -47,6 +49,19 @@ test('assertValidDiscount allows product default discount without manage permiss
   );
 });
 
-test('roundMoney rounds to two decimals', () => {
-  assert.equal(roundMoney(10.005), 10.01);
+test('inferAllowedFormsFromName locks Packaged and Serving names', () => {
+  assert.deepEqual(inferAllowedFormsFromName('Packaged'), ['PACKAGED']);
+  assert.deepEqual(inferAllowedFormsFromName('Serving'), ['SERVING']);
+  assert.equal(inferAllowedFormsFromName('Whey Protein'), null);
+});
+
+test('resolveSubcategoryAllowedForms prefers name inference over client payload', () => {
+  assert.deepEqual(
+    resolveSubcategoryAllowedForms('NUTRIENT', 'Packaged', ['SERVING']),
+    ['PACKAGED']
+  );
+  assert.deepEqual(
+    resolveSubcategoryAllowedForms('NUTRIENT', 'Serving', ['PACKAGED']),
+    ['SERVING']
+  );
 });

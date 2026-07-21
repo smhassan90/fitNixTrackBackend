@@ -8,7 +8,7 @@ import { BadRequestError, ConflictError, NotFoundError } from '../../utils/error
 import {
   effectiveAllowedForms,
   normalizeOptionalCode,
-  parseAllowedForms,
+  resolveSubcategoryAllowedForms,
 } from './posHelpers';
 
 export type PosCatalogTree = Array<{
@@ -218,9 +218,11 @@ export async function createPlatformSubcategory(input: {
 
   const name = input.name.trim();
   const code = normalizeOptionalCode(input.code);
-  const allowedForms = category.productType === 'ACCESSORY'
-    ? ['PACKAGED']
-    : parseAllowedForms(input.allowedForms ?? null);
+  const allowedForms = resolveSubcategoryAllowedForms(
+    category.productType,
+    name,
+    input.allowedForms
+  );
 
   const existing = await prisma.posSubcategory.findFirst({
     where: {
@@ -281,10 +283,13 @@ export async function updatePlatformSubcategory(
   }
 
   let allowedForms: PosProductForm[] | null | undefined;
-  if (input.allowedForms !== undefined) {
-    allowedForms = existing.category.productType === 'ACCESSORY'
-      ? ['PACKAGED']
-      : parseAllowedForms(input.allowedForms);
+  const nextName = name ?? existing.name;
+  if (input.allowedForms !== undefined || name !== undefined) {
+    allowedForms = resolveSubcategoryAllowedForms(
+      existing.category.productType,
+      nextName,
+      input.allowedForms !== undefined ? input.allowedForms : undefined
+    );
   }
 
   return prisma.posSubcategory.update({

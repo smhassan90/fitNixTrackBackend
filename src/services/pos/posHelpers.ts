@@ -33,6 +33,29 @@ export function defaultAllowedForms(productType: PosProductType): PosProductForm
   return productType === 'NUTRIENT' ? ['PACKAGED', 'SERVING'] : ['PACKAGED'];
 }
 
+/**
+ * When subcategory is named Packaged / Serving, lock allowedForms to that form
+ * so super admin does not need a separate "is it packaged or serving?" choice.
+ */
+export function inferAllowedFormsFromName(name: string): PosProductForm[] | null {
+  const normalized = name.trim().toLowerCase().replace(/[_-]+/g, ' ');
+  if (normalized === 'packaged' || normalized === 'package') return ['PACKAGED'];
+  if (normalized === 'serving' || normalized === 'servings') return ['SERVING'];
+  return null;
+}
+
+export function resolveSubcategoryAllowedForms(
+  productType: PosProductType,
+  name: string,
+  allowedForms?: PosProductForm[] | null
+): PosProductForm[] | null {
+  if (productType === 'ACCESSORY') return ['PACKAGED'];
+  const inferred = inferAllowedFormsFromName(name);
+  if (inferred) return inferred;
+  if (allowedForms === undefined || allowedForms === null) return null;
+  return parseAllowedForms(allowedForms);
+}
+
 export function effectiveAllowedForms(
   productType: PosProductType,
   allowedForms: unknown
