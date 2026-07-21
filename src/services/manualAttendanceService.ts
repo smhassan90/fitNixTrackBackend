@@ -1,15 +1,24 @@
 import { prisma } from '../lib/prisma';
 import { BadRequestError, ConflictError, NotFoundError } from '../utils/errors';
-import { getStartOfDay } from '../utils/dateHelpers';
+import {
+  calendarDateStringInGymTZ,
+  getGymTimezone,
+  parseDate,
+} from '../utils/dateHelpers';
 import { resolveMemberInternalId } from '../utils/memberLookup';
 import { getOverduePaymentDetailsByMemberIds } from './attendancePolicyService';
 
 function formatCheckInTime(checkInTime: Date): string {
-  return new Date(checkInTime).toLocaleString('en-US', {
+  return checkInTime.toLocaleString('en-US', {
+    timeZone: getGymTimezone(),
     hour: '2-digit',
     minute: '2-digit',
     hour12: true,
   });
+}
+
+function attendanceDateForInstant(instant: Date): Date {
+  return parseDate(calendarDateStringInGymTZ(instant));
 }
 
 export type ManualCheckInPortalResponse = {
@@ -53,11 +62,10 @@ async function resolveActiveMemberId(gymId: number, rawMemberId: number | string
 export async function manualCheckIn(
   gymId: number,
   rawMemberId: number | string,
-  checkInTimeInput?: Date
+  checkInTime: Date
 ): Promise<ManualCheckInPortalResponse> {
   const memberId = await resolveActiveMemberId(gymId, rawMemberId);
-  const checkInTime = checkInTimeInput ?? new Date();
-  const dateOnly = getStartOfDay(checkInTime);
+  const dateOnly = attendanceDateForInstant(checkInTime);
 
   const existing = await prisma.attendanceRecord.findUnique({
     where: {
@@ -134,11 +142,10 @@ export async function manualCheckIn(
 export async function manualCheckOut(
   gymId: number,
   rawMemberId: number | string,
-  checkOutTimeInput?: Date
+  checkOutTime: Date
 ) {
   const memberId = await resolveActiveMemberId(gymId, rawMemberId);
-  const checkOutTime = checkOutTimeInput ?? new Date();
-  const dateOnly = getStartOfDay(checkOutTime);
+  const dateOnly = attendanceDateForInstant(checkOutTime);
 
   const existing = await prisma.attendanceRecord.findUnique({
     where: {

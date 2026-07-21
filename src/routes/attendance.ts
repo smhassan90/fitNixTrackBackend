@@ -372,13 +372,9 @@ router.post(
       const gymId = req.gymId!;
       const { memberId, checkInTime } = req.body as {
         memberId: number | string;
-        checkInTime?: string;
+        checkInTime: string;
       };
-      const data = await manualCheckIn(
-        gymId,
-        memberId,
-        checkInTime ? new Date(checkInTime) : undefined
-      );
+      const data = await manualCheckIn(gymId, memberId, new Date(checkInTime));
       sendSuccess(res, data, undefined, 201);
     } catch (error) {
       sendError(res, error as Error);
@@ -395,13 +391,9 @@ router.post(
       const gymId = req.gymId!;
       const { memberId, checkOutTime } = req.body as {
         memberId: number | string;
-        checkOutTime?: string;
+        checkOutTime: string;
       };
-      const record = await manualCheckOut(
-        gymId,
-        memberId,
-        checkOutTime ? new Date(checkOutTime) : undefined
-      );
+      const record = await manualCheckOut(gymId, memberId, new Date(checkOutTime));
       sendSuccess(res, { record }, 'Member checked out');
     } catch (error) {
       sendError(res, error as Error);

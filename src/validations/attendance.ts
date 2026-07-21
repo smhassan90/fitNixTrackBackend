@@ -40,22 +40,27 @@ export const getOverdueCheckinsSchema = z.object({
   }),
 });
 
+/** ISO 8601 datetime with explicit timezone (Z or ±offset) from the client clock. */
+const clientIsoDateTime = z
+  .string()
+  .refine((v) => !Number.isNaN(new Date(v).getTime()), 'Must be a valid ISO datetime')
+  .refine(
+    (v) => /(?:Z|[+-]\d{2}:?\d{2})$/i.test(v.trim()),
+    'Must include timezone (send client local time as ISO, e.g. new Date().toISOString())'
+  );
+
 export const manualCheckInSchema = z.object({
   body: z.object({
     memberId: z.coerce.number().int().positive(),
-    checkInTime: z
-      .string()
-      .refine((v) => !Number.isNaN(new Date(v).getTime()), 'checkInTime must be a valid ISO datetime')
-      .optional(),
+    /** Client-local check-in instant; frontend must send its timezone-aware ISO string. */
+    checkInTime: clientIsoDateTime,
   }),
 });
 
 export const manualCheckOutSchema = z.object({
   body: z.object({
     memberId: z.union([z.number().int().positive(), z.string().min(1)]),
-    checkOutTime: z
-      .string()
-      .refine((v) => !Number.isNaN(new Date(v).getTime()), 'checkOutTime must be a valid ISO datetime')
-      .optional(),
+    /** Client-local check-out instant; frontend must send its timezone-aware ISO string. */
+    checkOutTime: clientIsoDateTime,
   }),
 });
