@@ -63,6 +63,14 @@ export function authenticateToken(
         return;
       }
 
+      if (decoded.principal === 'mobile') {
+        sendError(
+          res,
+          new ForbiddenError('This token is for the mobile app. Use gym staff credentials for this API.')
+        );
+        return;
+      }
+
       let userId: number;
       if (typeof decoded.id === 'string') {
         const parsed = parseInt(decoded.id, 10);

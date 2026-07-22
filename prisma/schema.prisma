@@ -53,6 +53,11 @@ model Gym {
   posProducts            PosProduct[]
   posStockMovements      PosStockMovement[]
   posSales               PosSale[]
+  workoutLogs            WorkoutLog[]
+  mobileOrders           MobileOrder[]
+  mobileOtpSessions      MobileOtpSession[]
+  mobileNotifications    MobileNotification[]
+  mobilePushTokens       MobilePushToken[]
 
   @@map("gyms")
 }
@@ -236,6 +241,37 @@ model PlatformAuditLog {
   @@map("platform_audit_logs")
 }
 
+enum MobileAccountType {
+  MEMBER
+  TRAINER
+}
+
+enum WorkoutBodyPart {
+  CHEST
+  BICEPS
+  TRICEPS
+  BACK
+  SHOULDERS
+  LEGS
+  ABS
+  CARDIO
+  FULL_BODY
+}
+
+enum MobileOrderStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
+enum MobileNotificationType {
+  PAYMENT_OVERDUE
+  PAYMENT_DUE_SOON
+  ORDER_READY
+  ORDER_COMPLETED
+  GENERAL
+}
+
 model Member {
   id                    Int       @id @default(autoincrement())
   gymId                 Int
@@ -262,6 +298,8 @@ model Member {
   oneTimePaymentAmount  Float?    // Total one-time payment (admission + package + trainer fees)
   oneTimePaymentPaid    Boolean   @default(false) // Whether one-time payment was completed
   monthlyPaymentAmount  Float?    // Monthly recurring payment amount (for income calculation)
+  mobileTokenVersion    Int       @default(0)
+  mobileLastLoginAt     DateTime?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
@@ -274,6 +312,10 @@ model Member {
   oneTimePayments    OneTimePayment[]
   feeCollections     FeeCollection[]
   posSales           PosSale[]
+  workoutLogs        WorkoutLog[]
+  mobileOrders       MobileOrder[]
+  mobileNotifications MobileNotification[]
+  mobilePushTokens   MobilePushToken[]
 
   @@index([gymId])
   @@index([packageId])
@@ -298,12 +340,19 @@ model Trainer {
   charges        Float?
   startTime      String?   @db.VarChar(5) // HH:mm format
   endTime        String?   @db.VarChar(5) // HH:mm format
-  isActive       Boolean   @default(true)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  isActive             Boolean   @default(true)
+  mobileTokenVersion   Int       @default(0)
+  mobileLastLoginAt    DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
-  gym     Gym             @relation(fields: [gymId], references: [id], onDelete: Cascade)
-  members MemberTrainer[]
+  gym                  Gym             @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  members              MemberTrainer[]
+  workoutLogs          WorkoutLog[]    @relation("TrainerWorkoutLogs")
+  loggedWorkouts       WorkoutLog[]    @relation("WorkoutLoggedByTrainer")
+  mobileOrders         MobileOrder[]
+  mobileNotifications  MobileNotification[]
+  mobilePushTokens     MobilePushToken[]
 
   @@index([gymId])
   @@index([gymId, phone])
@@ -783,4 +832,147 @@ model PosSaleItem {
   @@index([subcategoryId])
   @@index([categoryId])
   @@map("pos_sale_items")
+}
+
+// ─── Mobile App ────────────────────────────────────────────────────────────
+
+model WorkoutLog {
+  id                 Int               @id @default(autoincrement())
+  gymId              Int
+  /// Subject of the workout — member or trainer logging for themselves.
+  accountType        MobileAccountType
+  memberId           Int?
+  trainerId          Int?
+  /// Who created the log (member self, or trainer on behalf of member/trainer).
+  loggedByType       MobileAccountType
+  loggedByMemberId   Int?
+  loggedByTrainerId  Int?
+  date               DateTime          @db.Date
+  bodyParts          Json              // WorkoutBodyPart[] e.g. ["CHEST","LEGS"]
+  notes              String?           @db.Text
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  gym               Gym      @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  member            Member?  @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  trainer           Trainer? @relation("TrainerWorkoutLogs", fields: [trainerId], references: [id], onDelete: Cascade)
+  loggedByTrainer   Trainer? @relation("WorkoutLoggedByTrainer", fields: [loggedByTrainerId], references: [id], onDelete: SetNull)
+
+  @@unique([gymId, memberId, date], map: "workout_member_day_uniq")
+  @@unique([gymId, trainerId, date], map: "workout_trainer_day_uniq")
+  @@index([gymId, date])
+  @@index([memberId, date])
+  @@index([trainerId, date])
+  @@map("workout_logs")
+}
+
+model MobileOrder {
+  id              Int               @id @default(autoincrement())
+  gymId           Int
+  orderNo         String            @unique @db.VarChar(64)
+  status          MobileOrderStatus @default(PENDING)
+  placedByType    MobileAccountType
+  memberId        Int?
+  trainerId       Int?
+  subtotal        Float
+  total           Float
+  notes           String?           @db.Text
+  posSaleId       Int?
+  completedAt     DateTime?
+  cancelledAt     DateTime?
+  cancelReason    String?           @db.Text
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  gym     Gym               @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  member  Member?           @relation(fields: [memberId], references: [id], onDelete: SetNull)
+  trainer Trainer?          @relation(fields: [trainerId], references: [id], onDelete: SetNull)
+  items   MobileOrderItem[]
+
+  @@index([gymId, status])
+  @@index([memberId])
+  @@index([trainerId])
+  @@index([gymId, createdAt])
+  @@map("mobile_orders")
+}
+
+model MobileOrderItem {
+  id           Int     @id @default(autoincrement())
+  orderId      Int
+  productId    Int
+  productName  String  @db.VarChar(255)
+  productType  PosProductType
+  quantity     Int
+  unitPrice    Float
+  lineTotal    Float
+  calories     Float?
+  proteinG     Float?
+  carbsG       Float?
+  fatG         Float?
+
+  order MobileOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("mobile_order_items")
+}
+
+model MobileOtpSession {
+  id        Int      @id @default(autoincrement())
+  gymId     Int
+  phone     String   @db.VarChar(40)
+  otpHash   String   @db.VarChar(128)
+  expiresAt DateTime
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  gym Gym @relation(fields: [gymId], references: [id], onDelete: Cascade)
+
+  @@index([gymId, phone])
+  @@index([expiresAt])
+  @@map("mobile_otp_sessions")
+}
+
+model MobileNotification {
+  id          Int                    @id @default(autoincrement())
+  gymId       Int
+  accountType MobileAccountType
+  memberId    Int?
+  trainerId   Int?
+  type        MobileNotificationType
+  title       String                 @db.VarChar(255)
+  body        String                 @db.Text
+  metadata    Json?
+  isRead      Boolean                @default(false)
+  createdAt   DateTime               @default(now())
+
+  gym     Gym      @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  member  Member?  @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  trainer Trainer? @relation(fields: [trainerId], references: [id], onDelete: Cascade)
+
+  @@index([gymId, memberId, isRead])
+  @@index([gymId, trainerId, isRead])
+  @@index([createdAt])
+  @@map("mobile_notifications")
+}
+
+model MobilePushToken {
+  id          Int               @id @default(autoincrement())
+  gymId       Int
+  accountType MobileAccountType
+  memberId    Int?
+  trainerId   Int?
+  deviceToken String            @db.VarChar(512)
+  platform    String            @db.VarChar(16) // ios | android
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  gym     Gym      @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  member  Member?  @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  trainer Trainer? @relation(fields: [trainerId], references: [id], onDelete: Cascade)
+
+  @@unique([gymId, accountType, memberId, trainerId, deviceToken])
+  @@index([memberId])
+  @@index([trainerId])
+  @@map("mobile_push_tokens")
 }

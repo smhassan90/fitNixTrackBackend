@@ -30,6 +30,11 @@ import {
   voidSale,
 } from '../services/pos/posSaleService';
 import {
+  listPendingMobileOrdersForGym,
+  completeMobileOrderFromPortal,
+  cancelMobileOrderFromPortal,
+} from '../services/mobileOrderService';
+import {
   startOfGymCalendarDayUtc,
   startOfNextGymCalendarDayUtc,
 } from '../utils/dateHelpers';
@@ -49,6 +54,11 @@ import {
   posSaleVoidSchema,
   posStockHistoryQuerySchema,
 } from '../validations/pos';
+import {
+  mobilePortalOrderListSchema,
+  mobilePortalOrderCompleteSchema,
+  mobilePortalOrderCancelSchema,
+} from '../validations/mobile';
 
 const router = Router();
 
@@ -369,6 +379,67 @@ router.get(
         query.groupBy ?? 'day'
       );
       sendSuccess(res, data);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// ─── Mobile app orders (placed from phone, paid at counter) ─────────────────
+
+router.get(
+  '/mobile-orders',
+  requireGymPermission('gym.pos.sell'),
+  validate(mobilePortalOrderListSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const query = req.query as { page?: string; limit?: string };
+      const result = await listPendingMobileOrdersForGym(req.user!.gymId, {
+        page: Number(query.page ?? 1),
+        limit: Number(query.limit ?? 50),
+      });
+      sendSuccess(res, {
+        orders: result.orders,
+        pagination: buildPagination(result.page, result.limit, result.total),
+      });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+router.post(
+  '/mobile-orders/:id/complete',
+  requireGymPermission('gym.pos.sell'),
+  validate(mobilePortalOrderCompleteSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const canManageDiscounts = hasGymPermission(req, 'gym.pos.discounts.manage');
+      const result = await completeMobileOrderFromPortal(
+        req.user!.gymId,
+        Number(req.params.id),
+        req.user!.id,
+        canManageDiscounts
+      );
+      sendSuccess(res, result, 'Mobile order completed');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+router.post(
+  '/mobile-orders/:id/cancel',
+  requireGymPermission('gym.pos.sell'),
+  validate(mobilePortalOrderCancelSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const order = await cancelMobileOrderFromPortal(
+        req.user!.gymId,
+        Number(req.params.id),
+        req.body.reason
+      );
+      sendSuccess(res, { order }, 'Mobile order cancelled');
     } catch (error) {
       sendError(res, error as Error);
     }
