@@ -37,6 +37,7 @@ function serializeCategory(row: {
   description: string | null;
   sortOrder: number;
   isActive: boolean;
+  deletedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }) {
@@ -48,8 +49,34 @@ function serializeCategory(row: {
     description: row.description,
     sortOrder: row.sortOrder,
     isActive: row.isActive,
+    deletedAt: row.deletedAt ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+  };
+}
+
+function serializeSubcategoryResponse(sub: {
+  id: number;
+  categoryId: number;
+  name: string;
+  code: string | null;
+  description: string | null;
+  allowedForms: unknown;
+  sortOrder: number;
+  isActive: boolean;
+  deletedAt?: Date | null;
+  category: { productType: 'NUTRIENT' | 'ACCESSORY' };
+}) {
+  return {
+    id: sub.id,
+    categoryId: sub.categoryId,
+    name: sub.name,
+    code: sub.code,
+    description: sub.description,
+    allowedForms: effectiveAllowedForms(sub.category.productType, sub.allowedForms),
+    sortOrder: sub.sortOrder,
+    isActive: sub.isActive,
+    deletedAt: sub.deletedAt ?? null,
   };
 }
 
@@ -80,14 +107,24 @@ router.post(
   validate(platformPosCategoryCreateSchema),
   async (req: PlatformRequest, res: Response) => {
     try {
-      const category = await createPlatformCategory(req.body);
+      const { category, reactivated } = await createPlatformCategory(req.body);
       await writePlatformAuditLog({
         actorUserId: req.platformUser!.id,
         actorRole: req.platformUser!.role,
-        actionType: 'POS_CATEGORY_CREATE',
-        metadata: { categoryId: category.id, name: category.name } as Prisma.InputJsonValue,
+        actionType: reactivated ? 'POS_CATEGORY_REACTIVATE' : 'POS_CATEGORY_CREATE',
+        metadata: {
+          categoryId: category.id,
+          name: category.name,
+          productType: category.productType,
+          reactivated,
+        } as Prisma.InputJsonValue,
       });
-      sendSuccess(res, serializeCategory(category), 'Category created', 201);
+      sendSuccess(
+        res,
+        serializeCategory(category),
+        reactivated ? 'Category reactivated' : 'Category created',
+        reactivated ? 200 : 201
+      );
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -142,23 +179,24 @@ router.post(
   validate(platformPosSubcategoryCreateSchema),
   async (req: PlatformRequest, res: Response) => {
     try {
-      const subcategory = await createPlatformSubcategory(req.body);
+      const { subcategory, reactivated } = await createPlatformSubcategory(req.body);
       await writePlatformAuditLog({
         actorUserId: req.platformUser!.id,
         actorRole: req.platformUser!.role,
-        actionType: 'POS_SUBCATEGORY_CREATE',
-        metadata: { subcategoryId: subcategory.id, name: subcategory.name } as Prisma.InputJsonValue,
+        actionType: reactivated ? 'POS_SUBCATEGORY_REACTIVATE' : 'POS_SUBCATEGORY_CREATE',
+        metadata: {
+          subcategoryId: subcategory.id,
+          name: subcategory.name,
+          categoryId: subcategory.categoryId,
+          reactivated,
+        } as Prisma.InputJsonValue,
       });
-      sendSuccess(res, {
-        id: subcategory.id,
-        categoryId: subcategory.categoryId,
-        name: subcategory.name,
-        code: subcategory.code,
-        description: subcategory.description,
-        allowedForms: effectiveAllowedForms(subcategory.category.productType, subcategory.allowedForms),
-        sortOrder: subcategory.sortOrder,
-        isActive: subcategory.isActive,
-      }, 'Subcategory created', 201);
+      sendSuccess(
+        res,
+        serializeSubcategoryResponse(subcategory),
+        reactivated ? 'Subcategory reactivated' : 'Subcategory created',
+        reactivated ? 200 : 201
+      );
     } catch (error) {
       sendError(res, error as Error);
     }
@@ -179,16 +217,7 @@ router.patch(
         actionType: 'POS_SUBCATEGORY_UPDATE',
         metadata: { subcategoryId: id } as Prisma.InputJsonValue,
       });
-      sendSuccess(res, {
-        id: subcategory.id,
-        categoryId: subcategory.categoryId,
-        name: subcategory.name,
-        code: subcategory.code,
-        description: subcategory.description,
-        allowedForms: effectiveAllowedForms(subcategory.category.productType, subcategory.allowedForms),
-        sortOrder: subcategory.sortOrder,
-        isActive: subcategory.isActive,
-      });
+      sendSuccess(res, serializeSubcategoryResponse(subcategory));
     } catch (error) {
       sendError(res, error as Error);
     }

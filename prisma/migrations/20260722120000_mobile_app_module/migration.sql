@@ -118,7 +118,7 @@ CREATE TABLE `mobile_push_tokens` (
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `updatedAt` DATETIME(3) NOT NULL,
 
-    UNIQUE INDEX `mobile_push_tokens_gymId_accountType_memberId_trainerId_deviceToken_key`(`gymId`, `accountType`, `memberId`, `trainerId`, `deviceToken`),
+    UNIQUE INDEX `mobile_push_tokens_uniq`(`gymId`, `accountType`, `memberId`, `trainerId`, `deviceToken`),
     INDEX `mobile_push_tokens_memberId_idx`(`memberId`),
     INDEX `mobile_push_tokens_trainerId_idx`(`trainerId`),
     PRIMARY KEY (`id`)

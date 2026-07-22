@@ -971,7 +971,7 @@ model MobilePushToken {
   member  Member?  @relation(fields: [memberId], references: [id], onDelete: Cascade)
   trainer Trainer? @relation(fields: [trainerId], references: [id], onDelete: Cascade)
 
-  @@unique([gymId, accountType, memberId, trainerId, deviceToken])
+  @@unique([gymId, accountType, memberId, trainerId, deviceToken], map: "mobile_push_tokens_uniq")
   @@index([memberId])
   @@index([trainerId])
   @@map("mobile_push_tokens")
