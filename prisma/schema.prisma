@@ -976,3 +976,38 @@ model MobilePushToken {
   @@index([trainerId])
   @@map("mobile_push_tokens")
 }
+
+/// Google-authenticated personal users (not linked to a gym member profile).
+model MobileGoogleUser {
+  id           Int       @id @default(autoincrement())
+  googleSub    String    @unique @db.VarChar(128)
+  email        String    @unique @db.VarChar(191)
+  name         String    @db.VarChar(191)
+  photoUrl     String?   @db.VarChar(2048)
+  tokenVersion Int       @default(0)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  workouts GuestWorkoutLog[]
+
+  @@index([email])
+  @@map("mobile_google_users")
+}
+
+/// Personal gym-activity logs for Google guests (no gym association).
+model GuestWorkoutLog {
+  id           Int      @id @default(autoincrement())
+  googleUserId Int
+  date         DateTime @db.Date
+  bodyParts    Json
+  notes        String?  @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  googleUser MobileGoogleUser @relation(fields: [googleUserId], references: [id], onDelete: Cascade)
+
+  @@unique([googleUserId, date], map: "guest_workout_day_uniq")
+  @@index([googleUserId, date])
+  @@map("guest_workout_logs")
+}

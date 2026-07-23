@@ -28,6 +28,19 @@ export const mobileLookupGymsSchema = z.object({
   }),
 });
 
+export const mobileGoogleAuthSchema = z.object({
+  body: z.object({
+    idToken: z.string().min(20),
+  }),
+});
+
+export const mobileGoogleSelectSchema = z.object({
+  body: z.object({
+    idToken: z.string().min(20),
+    accountId: z.coerce.number().int().positive(),
+  }),
+});
+
 export const mobileWorkoutUpsertSchema = z.object({
   body: z.object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),

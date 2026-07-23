@@ -5,25 +5,32 @@ import { prisma } from '../lib/prisma';
 import { UnauthorizedError, ForbiddenError } from '../utils/errors';
 import { sendError } from '../utils/response';
 
+export type MobileSessionAccountType = MobileAccountType | 'GUEST';
+
 export interface MobileAuthRequest extends Request {
   mobileUser?: {
-    gymId: number;
-    accountType: MobileAccountType;
+    gymId: number | null;
+    accountType: MobileSessionAccountType;
     memberId?: number;
     trainerId?: number;
+    googleUserId?: number;
     name: string;
     phone: string | null;
+    email?: string | null;
+    linked: boolean;
   };
 }
 
 type MobileJwtPayload = {
   principal?: string;
-  gymId?: number;
-  accountType?: MobileAccountType;
+  gymId?: number | null;
+  accountType?: MobileSessionAccountType;
   memberId?: number;
   trainerId?: number;
+  googleUserId?: number;
   name?: string;
   phone?: string | null;
+  email?: string | null;
   tokenVersion?: number;
 };
 
@@ -55,7 +62,50 @@ export function authenticateMobileToken(
         return;
       }
 
-      if (!decoded.gymId || !decoded.accountType) {
+      if (!decoded.accountType) {
+        sendError(res, new UnauthorizedError('Invalid token'));
+        return;
+      }
+
+      if (decoded.accountType === 'GUEST') {
+        if (!decoded.googleUserId) {
+          sendError(res, new UnauthorizedError('Invalid token'));
+          return;
+        }
+        const guest = await prisma.mobileGoogleUser.findUnique({
+          where: { id: decoded.googleUserId },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            tokenVersion: true,
+          },
+        });
+        if (!guest) {
+          sendError(res, new UnauthorizedError('Invalid guest session'));
+          return;
+        }
+        if (
+          decoded.tokenVersion !== undefined &&
+          decoded.tokenVersion !== guest.tokenVersion
+        ) {
+          sendError(res, new UnauthorizedError('Session expired. Please sign in again.'));
+          return;
+        }
+        req.mobileUser = {
+          gymId: null,
+          accountType: 'GUEST',
+          googleUserId: guest.id,
+          name: guest.name,
+          phone: null,
+          email: guest.email,
+          linked: false,
+        };
+        next();
+        return;
+      }
+
+      if (!decoded.gymId) {
         sendError(res, new UnauthorizedError('Invalid token'));
         return;
       }
@@ -81,6 +131,7 @@ export function authenticateMobileToken(
             id: true,
             name: true,
             phone: true,
+            email: true,
             isActive: true,
             mobileTokenVersion: true,
           },
@@ -102,6 +153,8 @@ export function authenticateMobileToken(
           memberId: member.id,
           name: member.name,
           phone: member.phone,
+          email: member.email,
+          linked: true,
         };
       } else {
         if (!decoded.trainerId) {
@@ -135,6 +188,7 @@ export function authenticateMobileToken(
           trainerId: trainer.id,
           name: trainer.name,
           phone: trainer.phone,
+          linked: true,
         };
       }
 
@@ -152,6 +206,23 @@ export function requireTrainer(req: MobileAuthRequest, res: Response, next: Next
   }
   if (req.mobileUser.accountType !== 'TRAINER') {
     sendError(res, new ForbiddenError('Trainer access required'));
+    return;
+  }
+  next();
+}
+
+export function requireGymLinked(req: MobileAuthRequest, res: Response, next: NextFunction): void {
+  if (!req.mobileUser) {
+    sendError(res, new UnauthorizedError('Authentication required'));
+    return;
+  }
+  if (req.mobileUser.accountType === 'GUEST' || !req.mobileUser.linked) {
+    sendError(
+      res,
+      new ForbiddenError(
+        'This feature is available only for gym members linked by Gmail on their profile.'
+      )
+    );
     return;
   }
   next();
