@@ -1,10 +1,35 @@
 import { z } from 'zod';
 import { KNOWN_PLATFORM_PERMISSION_KEYS } from '../constants/platformPermissions';
 import { isValidIanaTimezone } from '../services/gymTimezoneService';
+import { GYM_THEME_KEYS, HEX_COLOR_REGEX } from '../constants/gymTheme';
 
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD');
 
 const slugRegex = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+const hexColorSchema = z
+  .string()
+  .regex(HEX_COLOR_REGEX, 'Must be a hex color like #RRGGBB');
+
+/** Optional brand theme; each provided key must be #RRGGBB. */
+export const gymThemeSchema = z
+  .object({
+    ink: hexColorSchema.optional(),
+    surface: hexColorSchema.optional(),
+    primary: hexColorSchema.optional(),
+    primaryDark: hexColorSchema.optional(),
+    canvas: hexColorSchema.optional(),
+  })
+  .strict()
+  .superRefine((theme, ctx) => {
+    const hasAny = GYM_THEME_KEYS.some((k) => theme[k] !== undefined);
+    if (!hasAny) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'theme must include at least one color key',
+      });
+    }
+  });
 
 export const ianaTimezoneSchema = z
   .string()
@@ -73,6 +98,7 @@ export const platformCreateGymSchema = z.object({
       city: z.string().min(1).max(120),
       country: z.string().min(1).max(120),
       timezone: ianaTimezoneSchema,
+      theme: gymThemeSchema.optional(),
       ownerAdmin: z.object({
         name: z.string().min(1).max(191),
         email: z.string().email().max(191),
@@ -110,6 +136,7 @@ export const platformPatchGymSchema = z.object({
       phone: z.string().max(40).optional().nullable(),
       email: z.string().email().max(191).optional().nullable(),
       timezone: ianaTimezoneSchema.optional(),
+      theme: gymThemeSchema.optional(),
     })
     .refine((b) => Object.keys(b).length > 0, { message: 'At least one field required' }),
 });

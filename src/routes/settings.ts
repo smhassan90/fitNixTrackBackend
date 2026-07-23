@@ -18,6 +18,8 @@ import {
   getGymAttendancePolicy,
 } from '../services/attendancePolicyService';
 import { DEFAULT_MAX_MEMBER_DISCOUNT } from '../services/memberDiscountPolicy';
+import { resolveGymTheme } from '../constants/gymTheme';
+import { Prisma } from '@prisma/client';
 
 const router = Router();
 
@@ -35,6 +37,7 @@ function formatSettingsResponse(gym: {
   maxMemberDiscount: number | null;
   autoCheckoutHours: number;
   absenceInactiveDays: number | null;
+  theme?: Prisma.JsonValue | null;
 }) {
   const autoCheckoutHours = gym.autoCheckoutHours ?? DEFAULT_AUTO_CHECKOUT_HOURS;
   const absenceInactiveDays = gym.absenceInactiveDays ?? null;
@@ -56,6 +59,7 @@ function formatSettingsResponse(gym: {
       phone: gym.phone,
       email: gym.email,
       timezone: gym.timezone,
+      theme: resolveGymTheme(gym.theme),
     },
   };
 }
@@ -82,6 +86,7 @@ router.get(
           maxMemberDiscount: true,
           autoCheckoutHours: true,
           absenceInactiveDays: true,
+          theme: true,
         },
       });
 
@@ -150,6 +155,7 @@ router.put(
           maxMemberDiscount: true,
           autoCheckoutHours: true,
           absenceInactiveDays: true,
+          theme: true,
         },
       });
 

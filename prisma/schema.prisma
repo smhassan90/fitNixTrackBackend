@@ -33,6 +33,8 @@ model Gym {
   absenceInactiveDays   Int?             // Mark member inactive after N days without check-in (null = disabled)
   syncApiKey            String?          @unique @db.VarChar(128) // Permanent per-gym tablet sync key (no expiry)
   timezone              String           @default("UTC") @db.VarChar(64) // IANA zone for billing/attendance calendar
+  /// Brand colors for portal/mobile: { ink, surface, primary, primaryDark, canvas }. Null → defaults.
+  theme                 Json?
   tenantStatus   GymTenantStatus  @default(ACTIVE)
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt

@@ -27,6 +27,7 @@ import {
   normalizePlanBillingCycle,
 } from '../../utils/planPricing';
 import gymOwnerAdminRoutes from './gymOwnerAdmin';
+import { DEFAULT_GYM_THEME, mergeGymTheme, resolveGymTheme } from '../../constants/gymTheme';
 
 const router = Router();
 
@@ -170,6 +171,7 @@ router.get(
           phone: g.phone,
           email: g.email,
           timezone: g.timezone,
+          theme: resolveGymTheme(g.theme),
           tenantStatus: g.tenantStatus,
           createdAt: g.createdAt,
           membersCount: g._count.members,
@@ -369,6 +371,7 @@ router.post(
         city,
         country,
         timezone,
+        theme: themeInput,
         ownerAdmin,
         planId,
         dueDate,
@@ -424,6 +427,9 @@ router.post(
             country: normalizedLocation.country,
             timezone,
             phone: ownerAdmin.phone ?? null,
+            theme: (themeInput
+              ? mergeGymTheme(null, themeInput)
+              : { ...DEFAULT_GYM_THEME }) as Prisma.InputJsonValue,
             tenantStatus,
           },
         });
@@ -494,6 +500,7 @@ router.post(
             name: result.gym.name,
             slug: result.gym.slug,
             timezone: result.gym.timezone,
+            theme: resolveGymTheme(result.gym.theme),
             tenantStatus: result.gym.tenantStatus,
           },
           ownerAdmin: result.user,
@@ -564,6 +571,7 @@ router.get(
 
       sendSuccess(res, {
         ...gym,
+        theme: resolveGymTheme(gym.theme),
         membersCount: gym._count.members,
         trainersCount: gym._count.trainers,
         pendingAmount: pendingAgg._sum.amount ?? 0,
@@ -646,6 +654,12 @@ router.patch(
       if (body.phone !== undefined) data.phone = body.phone as string | null;
       if (body.email !== undefined) data.email = body.email as string | null;
       if (body.timezone !== undefined) data.timezone = body.timezone as string;
+      if (body.theme !== undefined) {
+        data.theme = mergeGymTheme(
+          existing.theme,
+          body.theme as Partial<Record<string, string>>
+        ) as Prisma.InputJsonValue;
+      }
 
       const updated = await prisma.gym.update({
         where: { id },
@@ -670,7 +684,11 @@ router.patch(
         invalidateGymTimezoneCache(id);
       }
 
-      sendSuccess(res, updated, 'Gym updated');
+      sendSuccess(
+        res,
+        { ...updated, theme: resolveGymTheme(updated.theme) },
+        'Gym updated'
+      );
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         sendError(res, new ValidationError('Slug or unique field conflict'));
