@@ -4,6 +4,7 @@ import { MobileAccountType } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { BadRequestError, NotFoundError, UnauthorizedError } from '../utils/errors';
 import { normalizePhone, phonesMatch } from '../utils/phoneNormalize';
+import { isWhatsAppOtpEnabled, sendWhatsAppOtp } from './whatsappOtpService';
 
 const OTP_TTL_MS = 5 * 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
@@ -12,10 +13,15 @@ function generateOtp(): string {
   if (process.env.MOBILE_OTP_DEV_CODE) {
     return process.env.MOBILE_OTP_DEV_CODE;
   }
-  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV !== 'production' && !isWhatsAppOtpEnabled()) {
     return '123456';
   }
   return String(crypto.randomInt(100000, 999999));
+}
+
+function allowDevOtpInResponse(): boolean {
+  if (process.env.MOBILE_OTP_EXPOSE_DEV_CODE === 'true') return true;
+  return process.env.NODE_ENV !== 'production' && !isWhatsAppOtpEnabled();
 }
 
 async function resolveGym(gymSlug?: string, gymId?: number) {
@@ -88,22 +94,38 @@ export async function requestMobileOtp(input: {
   const otp = generateOtp();
   const otpHash = await bcrypt.hash(otp, 10);
   const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+  const phoneKey = normalizePhone(input.phone);
 
   await prisma.mobileOtpSession.deleteMany({
-    where: { gymId: gym.id, phone: normalizePhone(input.phone) },
+    where: { gymId: gym.id, phone: phoneKey },
   });
 
   await prisma.mobileOtpSession.create({
     data: {
       gymId: gym.id,
-      phone: normalizePhone(input.phone),
+      phone: phoneKey,
       otpHash,
       expiresAt,
     },
   });
 
-  if (process.env.NODE_ENV !== 'production' || process.env.MOBILE_OTP_DEV_CODE) {
-    console.info(`[Mobile OTP] gym=${gym.slug ?? gym.id} phone=${input.phone} otp=${otp}`);
+  let deliveryChannel: 'whatsapp' | 'dev' = 'dev';
+  let deliveredTo: string | null = null;
+
+  if (isWhatsAppOtpEnabled()) {
+    // One authentication WhatsApp message per OTP request (login only).
+    const sent = await sendWhatsAppOtp(input.phone, otp);
+    deliveryChannel = 'whatsapp';
+    deliveredTo = sent.to;
+  } else if (process.env.NODE_ENV === 'production') {
+    await prisma.mobileOtpSession.deleteMany({
+      where: { gymId: gym.id, phone: phoneKey },
+    });
+    throw new BadRequestError(
+      'OTP delivery is not configured. Configure WhatsApp Cloud API env vars to send login codes.'
+    );
+  } else {
+    console.info(`[Mobile OTP][dev] gym=${gym.slug ?? gym.id} phone=${input.phone} otp=${otp}`);
   }
 
   return {
@@ -124,8 +146,10 @@ export async function requestMobileOtp(input: {
       })),
     ],
     otpSent: true,
+    channel: deliveryChannel,
+    deliveredTo,
     expiresInSeconds: OTP_TTL_MS / 1000,
-    ...(process.env.NODE_ENV !== 'production' && { devOtp: otp }),
+    ...(allowDevOtpInResponse() && { devOtp: otp }),
   };
 }
 
