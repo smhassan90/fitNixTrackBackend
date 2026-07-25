@@ -38,6 +38,7 @@ import {
   startOfGymCalendarDayUtc,
   startOfNextGymCalendarDayUtc,
 } from '../utils/dateHelpers';
+import { normalizeEmailOrNull } from '../services/mobileGoogleAuthService';
 import {
   formatMemberStatusFields,
   resolveMemberStatusEffectiveDate,
@@ -735,7 +736,7 @@ router.post(
               legacyMemberId: assignedLegacyMemberId,
               name,
               phone: phone || null,
-              email: email || null,
+              email: normalizeEmailOrNull(email),
               gender: gender || null,
               dateOfBirth: dob,
               cnic: cnic || null,
@@ -923,7 +924,7 @@ async function updateMemberHandler(req: AuthRequest, res: Response): Promise<voi
       }
       if (name !== undefined) updateData.name = name;
       if (phone !== undefined) updateData.phone = phone;
-      if (email !== undefined) updateData.email = email;
+      if (email !== undefined) updateData.email = normalizeEmailOrNull(email);
       if (gender !== undefined) updateData.gender = gender;
       if (dateOfBirth !== undefined) updateData.dateOfBirth = dob;
       if (cnic !== undefined) updateData.cnic = cnic;

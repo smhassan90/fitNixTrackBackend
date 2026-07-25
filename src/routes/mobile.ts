@@ -19,8 +19,11 @@ import {
 } from '../services/mobileOtpService';
 import {
   loginWithGoogleIdToken,
-  selectGoogleMemberAccount,
+  selectGoogleAccount,
+  selectGoogleGym,
   logoutGoogleGuest,
+  loginWithDevEmail,
+  isDevLoginEnabled,
 } from '../services/mobileGoogleAuthService';
 import { upsertWorkout, listWorkouts, getWorkoutByDate, deleteWorkout } from '../services/mobileWorkoutService';
 import {
@@ -49,6 +52,8 @@ import {
   getMemberPayments,
   listTrainerMembers,
   getTrainerMemberOverview,
+  getTrainerMembersDailyActivity,
+  assertTrainerMemberAccess,
 } from '../services/mobileMemberService';
 import { listGymProducts } from '../services/pos/posProductService';
 import { getGymCatalog } from '../services/pos/posCatalogService';
@@ -58,6 +63,8 @@ import {
   mobileLookupGymsSchema,
   mobileGoogleAuthSchema,
   mobileGoogleSelectSchema,
+  mobileGoogleSelectGymSchema,
+  mobileDevLoginSchema,
   mobileWorkoutUpsertSchema,
   mobileWorkoutListSchema,
   mobileWorkoutDateParamSchema,
@@ -74,6 +81,7 @@ import {
   mobileNotificationIdParamSchema,
   mobilePushTokenSchema,
   mobileTrainerMembersSchema,
+  mobileTrainerMembersActivitySchema,
   mobileTrainerMemberIdParamSchema,
 } from '../validations/mobile';
 
@@ -227,8 +235,18 @@ router.post('/auth/verify-otp', validate(mobileVerifyOtpSchema), async (req, res
 router.post('/auth/google', validate(mobileGoogleAuthSchema), async (req, res: Response) => {
   try {
     const result = await loginWithGoogleIdToken(req.body.idToken);
+    if (result.needsGymSelection) {
+      sendSuccess(res, {
+        needsGymSelection: true,
+        needsAccountSelection: false,
+        email: result.email,
+        gyms: result.gyms,
+      });
+      return;
+    }
     if (result.needsAccountSelection) {
       sendSuccess(res, {
+        needsGymSelection: false,
         needsAccountSelection: true,
         email: result.email,
         accounts: result.accounts,
@@ -236,6 +254,38 @@ router.post('/auth/google', validate(mobileGoogleAuthSchema), async (req, res: R
       return;
     }
     sendSuccess(res, {
+      needsGymSelection: false,
+      needsAccountSelection: false,
+      ...issueSessionResponse(result.session),
+    });
+  } catch (error) {
+    sendError(res, error as Error);
+  }
+});
+
+router.post('/auth/google/select-gym', validate(mobileGoogleSelectGymSchema), async (req, res: Response) => {
+  try {
+    const result = await selectGoogleGym(req.body.idToken, req.body.gymId);
+    if (result.needsAccountSelection) {
+      sendSuccess(res, {
+        needsGymSelection: false,
+        needsAccountSelection: true,
+        email: result.email,
+        accounts: result.accounts,
+      });
+      return;
+    }
+    if (result.needsGymSelection) {
+      sendSuccess(res, {
+        needsGymSelection: true,
+        needsAccountSelection: false,
+        email: result.email,
+        gyms: result.gyms,
+      });
+      return;
+    }
+    sendSuccess(res, {
+      needsGymSelection: false,
       needsAccountSelection: false,
       ...issueSessionResponse(result.session),
     });
@@ -246,10 +296,57 @@ router.post('/auth/google', validate(mobileGoogleAuthSchema), async (req, res: R
 
 router.post('/auth/google/select', validate(mobileGoogleSelectSchema), async (req, res: Response) => {
   try {
-    const session = await selectGoogleMemberAccount(req.body.idToken, req.body.accountId);
+    const session = await selectGoogleAccount(
+      req.body.idToken,
+      req.body.accountType,
+      req.body.accountId
+    );
     sendSuccess(res, {
+      needsGymSelection: false,
       needsAccountSelection: false,
       ...issueSessionResponse(session),
+    });
+  } catch (error) {
+    sendError(res, error as Error);
+  }
+});
+
+// TEMPORARY: email-only sign-in for Expo Go testing. Requires MOBILE_DEV_LOGIN_ENABLED=true.
+router.post('/auth/dev-login', validate(mobileDevLoginSchema), async (req, res: Response) => {
+  try {
+    if (!isDevLoginEnabled()) {
+      sendError(res, new UnauthorizedError('Dev login is disabled'));
+      return;
+    }
+
+    const result = await loginWithDevEmail(req.body.email, {
+      gymId: req.body.gymId,
+      accountType: req.body.accountType,
+      accountId: req.body.accountId,
+    });
+
+    if (result.needsGymSelection) {
+      sendSuccess(res, {
+        needsGymSelection: true,
+        needsAccountSelection: false,
+        email: result.email,
+        gyms: result.gyms,
+      });
+      return;
+    }
+    if (result.needsAccountSelection) {
+      sendSuccess(res, {
+        needsGymSelection: false,
+        needsAccountSelection: true,
+        email: result.email,
+        accounts: result.accounts,
+      });
+      return;
+    }
+    sendSuccess(res, {
+      needsGymSelection: false,
+      needsAccountSelection: false,
+      ...issueSessionResponse(result.session),
     });
   } catch (error) {
     sendError(res, error as Error);
@@ -437,6 +534,7 @@ router.get('/payments', requireGymLinked, validate(mobilePaymentsSchema), async 
 
     if (u.accountType === 'TRAINER' && q.memberId) {
       memberId = Number(q.memberId);
+      await assertTrainerMemberAccess(u.gymId!, u.trainerId!, memberId);
     } else if (u.accountType === 'TRAINER') {
       sendSuccess(res, { payments: [], summary: { overdueCount: 0, nextDue: null }, page: 1, limit: 20, total: 0 });
       return;
@@ -564,6 +662,23 @@ router.post('/push-token', requireGymLinked, validate(mobilePushTokenSchema), as
 });
 
 // ─── Trainer: members ──────────────────────────────────────────────────────
+
+router.get(
+  '/trainer/members/activity',
+  requireGymLinked,
+  requireTrainer,
+  validate(mobileTrainerMembersActivitySchema),
+  async (req: MobileAuthRequest, res: Response) => {
+    try {
+      const u = req.mobileUser!;
+      const date = (req.query as { date?: string }).date;
+      const result = await getTrainerMembersDailyActivity(u.gymId!, u.trainerId!, date);
+      sendSuccess(res, result);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
 
 router.get('/trainer/members', requireGymLinked, requireTrainer, validate(mobileTrainerMembersSchema), async (req: MobileAuthRequest, res: Response) => {
   try {

@@ -37,7 +37,25 @@ export const mobileGoogleAuthSchema = z.object({
 export const mobileGoogleSelectSchema = z.object({
   body: z.object({
     idToken: z.string().min(20),
+    accountType: z.enum(['MEMBER', 'TRAINER']),
     accountId: z.coerce.number().int().positive(),
+  }),
+});
+
+export const mobileGoogleSelectGymSchema = z.object({
+  body: z.object({
+    idToken: z.string().min(20),
+    gymId: z.coerce.number().int().positive(),
+  }),
+});
+
+/** TEMPORARY: Expo Go testing without native Google Sign-In. */
+export const mobileDevLoginSchema = z.object({
+  body: z.object({
+    email: z.string().email().max(191),
+    gymId: z.coerce.number().int().positive().optional(),
+    accountType: z.enum(['MEMBER', 'TRAINER']).optional(),
+    accountId: z.coerce.number().int().positive().optional(),
   }),
 });
 
@@ -198,6 +216,12 @@ export const mobileTrainerMembersSchema = z.object({
     search: z.string().max(100).optional(),
     page: z.coerce.number().int().positive().optional(),
     limit: z.coerce.number().int().positive().optional(),
+  }),
+});
+
+export const mobileTrainerMembersActivitySchema = z.object({
+  query: z.object({
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   }),
 });
 

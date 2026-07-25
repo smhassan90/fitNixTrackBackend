@@ -12,6 +12,7 @@ const PACKAGE_ALIASES: Record<string, string[]> = {
 const TRAINER_ALIASES: Record<string, string[]> = {
   name: ['name', 'trainer', 'trainer name', 'full name'],
   phone: ['phone', 'mobile', 'mobile no', 'mobile number', 'contact', 'contact no', 'cell'],
+  email: ['email', 'email address'],
   gender: ['gender', 'sex'],
   dateOfBirth: ['date of birth', 'dob', 'birth date'],
   specialization: ['specialization', 'speciality', 'specialty', 'expertise'],
@@ -131,7 +132,7 @@ export function mapPaymentRow(row: CsvRow): MappedRow {
 export const IMPORT_TEMPLATES = {
   packages: 'name,price,discount,duration\nMonthly Plan,5000,0,1 month\nQuarterly Plan,14000,0,3 months\nAnnual Plan,50000,0,12 months',
   trainers:
-    'Full Name,Phone,Gender,Specialization,Charges,Available Timings\nAli Warsi,03001234567,Male,Strength training (Body building),Rs. 2000,Mon-Sat 7PM to 12AM',
+    'Full Name,Phone,Email,Gender,Specialization,Charges,Available Timings\nAli Warsi,03001234567,ali@gmail.com,Male,Strength training (Body building),Rs. 2000,Mon-Sat 7PM to 12AM',
   members:
     'Member ID,Name,Gender,Phone,Joining Date,Expiry Date,Package,Trainer,Status\n1,Ali Khan,Male,03001234567,15-05-2023,15-06-2023,1 Month,John Trainer,Active',
   payments:

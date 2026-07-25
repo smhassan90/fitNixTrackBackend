@@ -336,6 +336,8 @@ model Trainer {
   gymId          Int
   name           String
   phone          String?   @db.VarChar(40)
+  /// Normalized (trim + lower). Unique per gym when set — same email may exist at other gyms.
+  email          String?   @db.VarChar(191)
   gender         String?
   dateOfBirth    DateTime?
   specialization String?   @db.Text
@@ -356,7 +358,9 @@ model Trainer {
   mobileNotifications  MobileNotification[]
   mobilePushTokens     MobilePushToken[]
 
+  @@unique([gymId, email])
   @@index([gymId])
+  @@index([email])
   @@index([gymId, phone])
   @@index([gymId, isActive])
   @@map("trainers")

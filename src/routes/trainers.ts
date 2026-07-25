@@ -19,8 +19,19 @@ import {
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import { parseDate, startOfGymCalendarDayUtc, startOfNextGymCalendarDayUtc } from '../utils/dateHelpers';
+import { normalizeEmailOrNull } from '../services/mobileGoogleAuthService';
+import { Prisma } from '@prisma/client';
 
 const router = Router();
+
+function isTrainerEmailUniqueViolation(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === 'P2002' &&
+    Array.isArray(error.meta?.target) &&
+    (error.meta.target as string[]).some((t) => String(t).includes('email'))
+  );
+}
 
 // All routes require authentication and gymId
 router.use(authenticateToken);
@@ -75,6 +86,7 @@ router.get(
         where.OR = [
           { name: { contains: search } },
           { phone: { contains: search } },
+          { email: { contains: search } },
           { specialization: { contains: search } },
           ...(Number.isNaN(searchNum) ? [] : [{ id: searchNum }]),
         ];
@@ -165,6 +177,7 @@ router.post(
       const {
         name,
         phone,
+        email,
         gender,
         dateOfBirth,
         specialization,
@@ -183,6 +196,7 @@ router.post(
           gymId,
           name,
           phone: phone && String(phone).trim() ? String(phone).trim() : null,
+          email: normalizeEmailOrNull(email),
           gender: gender || null,
           dateOfBirth: dob,
           specialization: specialization || null,
@@ -202,6 +216,10 @@ router.post(
 
       sendSuccess(res, trainer, 'Trainer created successfully', 201);
     } catch (error) {
+      if (isTrainerEmailUniqueViolation(error)) {
+        sendError(res, new ValidationError('A trainer with this email already exists in this gym'));
+        return;
+      }
       sendError(res, error as Error);
     }
   }
@@ -215,6 +233,7 @@ async function updateTrainerHandler(req: AuthRequest, res: Response) {
     const {
       name,
       phone,
+      email,
       gender,
       dateOfBirth,
       specialization,
@@ -240,6 +259,7 @@ async function updateTrainerHandler(req: AuthRequest, res: Response) {
     if (phone !== undefined) {
       updateData.phone = phone && String(phone).trim() ? String(phone).trim() : null;
     }
+    if (email !== undefined) updateData.email = normalizeEmailOrNull(email);
     if (gender !== undefined) updateData.gender = gender;
     if (dateOfBirth !== undefined) updateData.dateOfBirth = dob;
     if (specialization !== undefined) updateData.specialization = specialization;
@@ -262,6 +282,10 @@ async function updateTrainerHandler(req: AuthRequest, res: Response) {
 
     sendSuccess(res, trainer, 'Trainer updated successfully');
   } catch (error) {
+    if (isTrainerEmailUniqueViolation(error)) {
+      sendError(res, new ValidationError('A trainer with this email already exists in this gym'));
+      return;
+    }
     sendError(res, error as Error);
   }
 }
