@@ -65,7 +65,7 @@ async function findAccountsByPhone(gymId: number, phone: string) {
     }),
     prisma.trainer.findMany({
       where: { gymId, isActive: true, phone: { not: null } },
-      select: { id: true, name: true, phone: true, specialization: true },
+      select: { id: true, name: true, phone: true, email: true, specialization: true },
     }),
   ]);
 
@@ -142,6 +142,7 @@ export async function requestMobileOtp(input: {
         accountType: 'TRAINER' as MobileAccountType,
         id: t.id,
         name: t.name,
+        email: t.email,
         specialization: t.specialization,
       })),
     ],
@@ -240,6 +241,7 @@ export async function verifyMobileOtp(input: {
       id: trainer.id,
       name: trainer.name,
       phone: trainer.phone,
+      email: trainer.email,
       specialization: trainer.specialization,
       startTime: trainer.startTime,
       endTime: trainer.endTime,
