@@ -101,7 +101,7 @@ async function ensureMemberStatusColumnsOrThrow(): Promise<void> {
   const available = await hasMemberStatusColumns();
   if (!available) {
     throw new ValidationError(
-      'Member status columns are not migrated yet. Please run prisma db push (or production migration) first.'
+      'Member status columns are not migrated yet.  Please run prisma db push (or production migration) first.'
     );
   }
 }
