@@ -167,6 +167,7 @@ export function authenticateMobileToken(
             id: true,
             name: true,
             phone: true,
+            email: true,
             isActive: true,
             mobileTokenVersion: true,
           },
@@ -188,6 +189,7 @@ export function authenticateMobileToken(
           trainerId: trainer.id,
           name: trainer.name,
           phone: trainer.phone,
+          email: trainer.email ?? decoded.email ?? null,
           linked: true,
         };
       }
