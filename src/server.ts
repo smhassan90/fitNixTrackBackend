@@ -22,6 +22,8 @@ import gymUsersRoutes from './routes/gymUsers';
 import importRoutes from './routes/import';
 import posRoutes from './routes/pos';
 import mobileRoutes from './routes/mobile';
+import accountDeletionRequestsRoutes from './routes/accountDeletionRequests';
+import meRoutes from './routes/me';
 
 // Load environment variables
 dotenv.config();
@@ -157,6 +159,8 @@ app.use('/api/import', importRoutes);
 app.use('/api/gym', gymUsersRoutes);
 app.use('/api/pos', posRoutes);
 app.use('/api/mobile', mobileRoutes);
+app.use('/api/account-deletion-requests', accountDeletionRequestsRoutes);
+app.use('/api/me', meRoutes);
 
 // 404 handler
 app.use((req, res) => {

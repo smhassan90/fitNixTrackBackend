@@ -13,6 +13,7 @@ import adminBillingPlanRoutes from './adminBillingPlans';
 import adminPackageFeatureRoutes from './adminPackageFeatures';
 import uploadRoutes from './upload';
 import posRoutes from './pos';
+import accountDeletionRequestRoutes from './accountDeletionRequests';
 
 const router = Router();
 
@@ -25,6 +26,7 @@ router.use('/audit-logs', authenticatePlatformToken, auditRoutes);
 router.use('/users', authenticatePlatformToken, userRoutes);
 router.use('/permissions', authenticatePlatformToken, permissionRoutes);
 router.use('/timezones', authenticatePlatformToken, timezoneRoutes);
+router.use('/account-deletion-requests', accountDeletionRequestRoutes);
 router.use('/', authenticatePlatformToken, locationRoutes);
 router.use('/', authenticatePlatformToken, adminBillingPlanRoutes);
 router.use('/', authenticatePlatformToken, adminPackageFeatureRoutes);

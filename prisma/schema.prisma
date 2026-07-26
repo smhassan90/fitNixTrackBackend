@@ -1017,3 +1017,50 @@ model GuestWorkoutLog {
   @@index([googleUserId, date])
   @@map("guest_workout_logs")
 }
+
+enum AccountDeletionStatus {
+  pending
+  in_progress
+  completed
+  rejected
+  cancelled
+}
+
+enum AccountDeletionAccountType {
+  member
+  trainer
+  other
+}
+
+enum AccountDeletionSource {
+  web
+  app
+}
+
+/// Google Play–compliant account & data deletion requests (public web form + in-app).
+model AccountDeletionRequest {
+  id                     String                     @id @db.VarChar(40)
+  fullName               String                     @db.VarChar(100)
+  email                  String?                    @db.VarChar(191)
+  phone                  String?                    @db.VarChar(40)
+  accountType            AccountDeletionAccountType
+  gymName                String?                    @db.VarChar(200)
+  reason                 String?                    @db.Text
+  source                 AccountDeletionSource      @default(web)
+  status                 AccountDeletionStatus      @default(pending)
+  matchedMemberId        Int?
+  matchedTrainerId       Int?
+  matchedGymId           Int?
+  processedAt            DateTime?
+  processedByPlatformUserId Int?
+  processorNotes         String?                    @db.Text
+  requesterIp            String?                    @db.VarChar(64)
+  createdAt              DateTime                   @default(now())
+  updatedAt              DateTime                   @updatedAt
+
+  @@index([status])
+  @@index([email])
+  @@index([phone])
+  @@index([createdAt])
+  @@map("account_deletion_requests")
+}
