@@ -389,6 +389,7 @@ router.get('/me', async (req: MobileAuthRequest, res: Response) => {
         name: u.name,
         phone: u.phone,
         email: u.email ?? null,
+        photoUrl: u.photoUrl ?? null,
         linked: u.linked,
       },
     });

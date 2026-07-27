@@ -17,6 +17,7 @@ export interface MobileAuthRequest extends Request {
     name: string;
     phone: string | null;
     email?: string | null;
+    photoUrl?: string | null;
     linked: boolean;
   };
 }
@@ -78,6 +79,7 @@ export function authenticateMobileToken(
             id: true,
             name: true,
             email: true,
+            photoUrl: true,
             tokenVersion: true,
           },
         });
@@ -99,6 +101,7 @@ export function authenticateMobileToken(
           name: guest.name,
           phone: null,
           email: guest.email,
+          photoUrl: guest.photoUrl,
           linked: false,
         };
         next();
@@ -132,6 +135,7 @@ export function authenticateMobileToken(
             name: true,
             phone: true,
             email: true,
+            photoUrl: true,
             isActive: true,
             mobileTokenVersion: true,
           },
@@ -154,6 +158,7 @@ export function authenticateMobileToken(
           name: member.name,
           phone: member.phone,
           email: member.email,
+          photoUrl: member.photoUrl,
           linked: true,
         };
       } else {
