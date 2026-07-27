@@ -4,12 +4,18 @@ import {
   authenticateMobileToken,
   MobileAuthRequest,
   requireTrainer,
+  requireMember,
   requireGymLinked,
 } from '../middleware/mobileAuth';
+import { parseMobileMemberPhotoUpload } from '../middleware/mobileMemberPhotoMultipart';
 import { validate } from '../middleware/validation';
 import { sendSuccess, sendError, buildPagination } from '../utils/response';
 import { jwtSignOptions } from '../utils/jwtExpiresIn';
-import { UnauthorizedError } from '../utils/errors';
+import {
+  UnauthorizedError,
+  ValidationError,
+  UploadFailedError,
+} from '../utils/errors';
 import { WORKOUT_BODY_PARTS, BODY_PART_LABELS } from '../constants/bodyParts';
 import {
   requestMobileOtp,
@@ -55,8 +61,20 @@ import {
   getTrainerMembersDailyActivity,
   assertTrainerMemberAccess,
 } from '../services/mobileMemberService';
+import {
+  setMemberHeightCm,
+  listMemberBodyMeasurements,
+  upsertMemberBodyMeasurement,
+  getTrainerMemberBody,
+} from '../services/mobileBodyService';
+import {
+  compressMemberPhoto,
+  storeMemberPhoto,
+  deleteStoredMemberPhoto,
+} from '../services/memberPhotoService';
 import { listGymProducts } from '../services/pos/posProductService';
 import { getGymCatalog } from '../services/pos/posCatalogService';
+import { prisma } from '../lib/prisma';
 import {
   mobileRequestOtpSchema,
   mobileVerifyOtpSchema,
@@ -84,6 +102,12 @@ import {
   mobileTrainerMembersActivitySchema,
   mobileTrainerMemberIdParamSchema,
 } from '../validations/mobile';
+import {
+  mobileBodyHeightSchema,
+  mobileBodyMeasurementsListSchema,
+  mobileBodyMeasurementUpsertSchema,
+  mobileTrainerMemberBodySchema,
+} from '../validations/mobileBody';
 
 const router = Router();
 
@@ -390,6 +414,7 @@ router.get('/me', async (req: MobileAuthRequest, res: Response) => {
         phone: u.phone,
         email: u.email ?? null,
         photoUrl: u.photoUrl ?? null,
+        heightCm: u.accountType === 'MEMBER' ? (u.heightCm ?? null) : null,
         linked: u.linked,
       },
     });
@@ -397,6 +422,119 @@ router.get('/me', async (req: MobileAuthRequest, res: Response) => {
     sendError(res, error as Error);
   }
 });
+
+/**
+ * Overwrite member portrait (same Member.photoUrl field as portal).
+ * POST /me/photo — multipart field "photo", max 100KB.
+ */
+router.post(
+  '/me/photo',
+  requireGymLinked,
+  requireMember,
+  parseMobileMemberPhotoUpload,
+  async (req: MobileAuthRequest, res: Response) => {
+    try {
+      const u = req.mobileUser!;
+      const file = (req as MobileAuthRequest & { file?: Express.Multer.File }).file;
+      if (!file?.buffer?.length) {
+        sendError(res, new ValidationError('Missing file field "photo"'));
+        return;
+      }
+
+      const member = await prisma.member.findFirst({
+        where: { id: u.memberId!, gymId: u.gymId! },
+        select: { id: true, photoUrl: true },
+      });
+      if (!member) {
+        sendError(res, new UnauthorizedError('Member not found'));
+        return;
+      }
+
+      let compressed;
+      try {
+        compressed = await compressMemberPhoto(file.buffer);
+      } catch (err) {
+        sendError(res, err instanceof Error ? err : new ValidationError('Invalid image'));
+        return;
+      }
+
+      let photoUrl: string;
+      try {
+        photoUrl = await storeMemberPhoto(compressed, u.gymId!);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Upload failed';
+        sendError(res, new UploadFailedError(message));
+        return;
+      }
+
+      await prisma.member.update({
+        where: { id: member.id },
+        data: { photoUrl },
+      });
+
+      if (member.photoUrl && member.photoUrl !== photoUrl) {
+        await deleteStoredMemberPhoto(member.photoUrl);
+      }
+
+      // Keep request-scoped user in sync for any downstream middleware in this cycle.
+      u.photoUrl = photoUrl;
+
+      sendSuccess(res, { photoUrl });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// ─── Body: height + monthly measurements (MEMBER) ──────────────────────────
+
+router.get(
+  '/body/measurements',
+  requireGymLinked,
+  requireMember,
+  validate(mobileBodyMeasurementsListSchema),
+  async (req: MobileAuthRequest, res: Response) => {
+    try {
+      const limit = (req.query as { limit?: number }).limit;
+      const result = await listMemberBodyMeasurements(req.mobileUser!.memberId!, limit);
+      sendSuccess(res, result);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+router.put(
+  '/body/height',
+  requireGymLinked,
+  requireMember,
+  validate(mobileBodyHeightSchema),
+  async (req: MobileAuthRequest, res: Response) => {
+    try {
+      const result = await setMemberHeightCm(req.mobileUser!.memberId!, req.body.heightCm);
+      req.mobileUser!.heightCm = result.heightCm;
+      sendSuccess(res, result);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+router.put(
+  '/body/measurements/:month',
+  requireGymLinked,
+  requireMember,
+  validate(mobileBodyMeasurementUpsertSchema),
+  async (req: MobileAuthRequest, res: Response) => {
+    try {
+      const month = String(req.params.month);
+      const row = await upsertMemberBodyMeasurement(req.mobileUser!.memberId!, month, req.body);
+      sendSuccess(res, row);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
 
 router.get('/config/body-parts', (_req, res: Response) => {
   sendSuccess(res, {
@@ -690,6 +828,24 @@ router.get('/trainer/members', requireGymLinked, requireTrainer, validate(mobile
     sendError(res, error as Error);
   }
 });
+
+router.get(
+  '/trainer/members/:memberId/body',
+  requireGymLinked,
+  requireTrainer,
+  validate(mobileTrainerMemberBodySchema),
+  async (req: MobileAuthRequest, res: Response) => {
+    try {
+      const u = req.mobileUser!;
+      const memberId = Number(req.params.memberId);
+      const limit = (req.query as { limit?: number }).limit;
+      const result = await getTrainerMemberBody(u.gymId!, u.trainerId!, memberId, limit);
+      sendSuccess(res, result);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
 
 router.get('/trainer/members/:memberId', requireGymLinked, requireTrainer, validate(mobileTrainerMemberIdParamSchema), async (req: MobileAuthRequest, res: Response) => {
   try {

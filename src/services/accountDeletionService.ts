@@ -265,6 +265,7 @@ async function anonymizeMember(memberId: number) {
       email: null,
       phone: null,
       photoUrl: null,
+      heightCm: null,
       cnic: null,
       comments: null,
       gender: null,

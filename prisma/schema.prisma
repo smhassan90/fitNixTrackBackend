@@ -288,6 +288,8 @@ model Member {
   comments              String?   @db.Text
   /// Compressed member portrait URL (Vercel Blob or `/uploads/members/...`). Kept ~50KB.
   photoUrl              String?   @db.VarChar(2048)
+  /// Standing height in centimeters (once / editable). Not monthly.
+  heightCm              Float?
   packageId             Int?
   discount              Float?
   membershipStart       DateTime?
@@ -318,6 +320,7 @@ model Member {
   mobileOrders       MobileOrder[]
   mobileNotifications MobileNotification[]
   mobilePushTokens   MobilePushToken[]
+  bodyMeasurements   MemberBodyMeasurement[]
 
   @@index([gymId])
   @@index([packageId])
@@ -329,6 +332,27 @@ model Member {
   @@unique([gymId, legacyMemberId])
   @@index([gymId, legacyMemberId])
   @@map("members")
+}
+
+/// Monthly body measurements for mobile progress tracking (per member, YYYY-MM).
+model MemberBodyMeasurement {
+  id        Int      @id @default(autoincrement())
+  memberId  Int
+  /// Calendar month key, e.g. "2026-07"
+  month     String   @db.Char(7)
+  weightKg  Float?
+  armsCm    Float?
+  thighsCm  Float?
+  chestCm   Float?
+  waistCm   Float?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, month])
+  @@index([memberId, month])
+  @@map("member_body_measurements")
 }
 
 model Trainer {

@@ -18,6 +18,7 @@ export interface MobileAuthRequest extends Request {
     phone: string | null;
     email?: string | null;
     photoUrl?: string | null;
+    heightCm?: number | null;
     linked: boolean;
   };
 }
@@ -136,6 +137,7 @@ export function authenticateMobileToken(
             phone: true,
             email: true,
             photoUrl: true,
+            heightCm: true,
             isActive: true,
             mobileTokenVersion: true,
           },
@@ -159,6 +161,7 @@ export function authenticateMobileToken(
           phone: member.phone,
           email: member.email,
           photoUrl: member.photoUrl,
+          heightCm: member.heightCm,
           linked: true,
         };
       } else {
@@ -213,6 +216,18 @@ export function requireTrainer(req: MobileAuthRequest, res: Response, next: Next
   }
   if (req.mobileUser.accountType !== 'TRAINER') {
     sendError(res, new ForbiddenError('Trainer access required'));
+    return;
+  }
+  next();
+}
+
+export function requireMember(req: MobileAuthRequest, res: Response, next: NextFunction): void {
+  if (!req.mobileUser) {
+    sendError(res, new UnauthorizedError('Authentication required'));
+    return;
+  }
+  if (req.mobileUser.accountType !== 'MEMBER' || !req.mobileUser.memberId || !req.mobileUser.linked) {
+    sendError(res, new ForbiddenError('Member access required'));
     return;
   }
   next();

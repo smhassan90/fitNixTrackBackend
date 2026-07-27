@@ -58,6 +58,27 @@ export class BadRequestError extends AppError {
   }
 }
 
+export class PayloadTooLargeError extends AppError {
+  constructor(message: string = 'Payload too large', details?: any) {
+    super('PAYLOAD_TOO_LARGE', message, 413, details);
+    this.name = 'PayloadTooLargeError';
+  }
+}
+
+export class InvalidImageTypeError extends AppError {
+  constructor(message: string = 'Invalid image type', details?: any) {
+    super('INVALID_IMAGE_TYPE', message, 400, details);
+    this.name = 'InvalidImageTypeError';
+  }
+}
+
+export class UploadFailedError extends AppError {
+  constructor(message: string = 'Upload failed', details?: any) {
+    super('UPLOAD_FAILED', message, 500, details);
+    this.name = 'UploadFailedError';
+  }
+}
+
 export class DatabaseConnectionError extends AppError {
   constructor(message: string = 'Database connection failed', details?: any) {
     super('DATABASE_CONNECTION_ERROR', message, 503, details);
