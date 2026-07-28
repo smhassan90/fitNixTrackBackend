@@ -149,6 +149,12 @@ export const mobileProductsSchema = z.object({
   }),
 });
 
+export const mobileProductIdParamSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+});
+
 export const mobileAttendanceSchema = z.object({
   query: z.object({
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),

@@ -15,6 +15,7 @@ import {
   UnauthorizedError,
   ValidationError,
   UploadFailedError,
+  NotFoundError,
 } from '../utils/errors';
 import { WORKOUT_BODY_PARTS, BODY_PART_LABELS } from '../constants/bodyParts';
 import {
@@ -72,7 +73,7 @@ import {
   storeMemberPhoto,
   deleteStoredMemberPhoto,
 } from '../services/memberPhotoService';
-import { listGymProducts } from '../services/pos/posProductService';
+import { getGymProduct, listGymProducts } from '../services/pos/posProductService';
 import { getGymCatalog } from '../services/pos/posCatalogService';
 import { prisma } from '../lib/prisma';
 import {
@@ -93,6 +94,7 @@ import {
   mobileOrderIdParamSchema,
   mobileOrderCancelSchema,
   mobileProductsSchema,
+  mobileProductIdParamSchema,
   mobileAttendanceSchema,
   mobilePaymentsSchema,
   mobileNotificationsSchema,
@@ -716,6 +718,18 @@ router.get('/products', requireGymLinked, validate(mobileProductsSchema), async 
       products,
       pagination: buildPagination(Number(q.page ?? 1), Number(q.limit ?? 50), total),
     });
+  } catch (error) {
+    sendError(res, error as Error);
+  }
+});
+
+router.get('/products/:id', requireGymLinked, validate(mobileProductIdParamSchema), async (req: MobileAuthRequest, res: Response) => {
+  try {
+    const product = await getGymProduct(req.mobileUser!.gymId!, Number(req.params.id));
+    if (!product.isActive) {
+      throw new NotFoundError('Product', Number(req.params.id));
+    }
+    sendSuccess(res, { product });
   } catch (error) {
     sendError(res, error as Error);
   }
