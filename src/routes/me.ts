@@ -40,7 +40,7 @@ router.post(
       let gymName: string | null = null;
       let matchedMemberId: number | null = null;
       let matchedTrainerId: number | null = null;
-      let matchedGymId: number | null = u.gymId;
+      const matchedGymId: number | null = u.gymId;
 
       if (u.accountType === 'MEMBER' && u.memberId) {
         accountType = 'member';
