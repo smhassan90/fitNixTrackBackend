@@ -23,6 +23,12 @@ import {
   updateGymProduct,
 } from '../services/pos/posProductService';
 import {
+  compressProductImage,
+  deleteStoredProductImage,
+  resolveLocalProductImagePath,
+  storeProductImage,
+} from '../services/pos/posProductImageService';
+import {
   createSale,
   getGymPosSummary,
   getSale,
@@ -59,8 +65,53 @@ import {
   mobilePortalOrderCompleteSchema,
   mobilePortalOrderCancelSchema,
 } from '../validations/mobile';
+import { parseProductImageUpload } from '../middleware/productImageMultipart';
+import { NotFoundError, UploadFailedError, ValidationError } from '../utils/errors';
+import { prisma } from '../lib/prisma';
 
 const router = Router();
+
+/**
+ * Public product image serve for <img src> (no JWT).
+ * Redirects to blob URL or streams local file.
+ */
+router.get(
+  '/products/:id/image',
+  validate(posProductIdParamSchema),
+  async (req, res: Response) => {
+    try {
+      const productId = Number(req.params.id);
+      const product = await prisma.posProduct.findFirst({
+        where: { id: productId },
+        select: { imageUrl: true },
+      });
+
+      if (!product?.imageUrl) {
+        sendError(res, new NotFoundError('Product image', productId));
+        return;
+      }
+
+      const imageUrl = product.imageUrl;
+
+      if (/^https?:\/\//i.test(imageUrl)) {
+        res.redirect(302, imageUrl);
+        return;
+      }
+
+      const localPath = resolveLocalProductImagePath(imageUrl);
+      if (!localPath) {
+        sendError(res, new NotFoundError('Product image', productId));
+        return;
+      }
+
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.type('image/jpeg');
+      res.sendFile(localPath);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
 
 router.use(authenticateToken);
 router.use(requireGymId);
@@ -179,6 +230,110 @@ router.patch(
         req.body
       );
       sendSuccess(res, { product });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+/**
+ * Upload / replace product image.
+ * POST multipart field: image | photo | file
+ */
+router.post(
+  '/products/:id/image',
+  requireGymPermission('gym.pos.products.manage'),
+  validate(posProductIdParamSchema),
+  parseProductImageUpload,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.user!.gymId;
+      const productId = Number(req.params.id);
+      const file = (req as AuthRequest & { file?: Express.Multer.File }).file;
+
+      if (!file?.buffer?.length) {
+        sendError(res, new ValidationError('Missing image file field (image, photo, or file)'));
+        return;
+      }
+
+      const existing = await prisma.posProduct.findFirst({
+        where: { id: productId, gymId },
+        select: { id: true, imageUrl: true },
+      });
+      if (!existing) {
+        sendError(res, new NotFoundError('Product', productId));
+        return;
+      }
+
+      let compressed;
+      try {
+        compressed = await compressProductImage(file.buffer);
+      } catch (err) {
+        sendError(res, err instanceof Error ? err : new ValidationError('Invalid image'));
+        return;
+      }
+
+      let imageUrl: string;
+      try {
+        imageUrl = await storeProductImage(compressed, gymId);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Upload failed';
+        sendError(res, new UploadFailedError(message));
+        return;
+      }
+
+      const product = await prisma.posProduct.update({
+        where: { id: productId },
+        data: { imageUrl },
+      });
+
+      if (existing.imageUrl && existing.imageUrl !== imageUrl) {
+        await deleteStoredProductImage(existing.imageUrl);
+      }
+
+      sendSuccess(
+        res,
+        {
+          product: {
+            id: product.id,
+            imageUrl: product.imageUrl,
+          },
+          imageUrl,
+        },
+        'Product image uploaded'
+      );
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+router.delete(
+  '/products/:id/image',
+  requireGymPermission('gym.pos.products.manage'),
+  validate(posProductIdParamSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.user!.gymId;
+      const productId = Number(req.params.id);
+
+      const existing = await prisma.posProduct.findFirst({
+        where: { id: productId, gymId },
+        select: { id: true, imageUrl: true },
+      });
+      if (!existing) {
+        sendError(res, new NotFoundError('Product', productId));
+        return;
+      }
+
+      const previousUrl = existing.imageUrl;
+      await prisma.posProduct.update({
+        where: { id: productId },
+        data: { imageUrl: null },
+      });
+      await deleteStoredProductImage(previousUrl);
+
+      sendSuccess(res, { product: { id: productId, imageUrl: null } }, 'Product image removed');
     } catch (error) {
       sendError(res, error as Error);
     }

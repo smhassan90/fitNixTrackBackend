@@ -101,6 +101,7 @@ const uploadsRoot =
 try {
   fs.mkdirSync(path.join(uploadsRoot, 'logos'), { recursive: true });
   fs.mkdirSync(path.join(uploadsRoot, 'members'), { recursive: true });
+  fs.mkdirSync(path.join(uploadsRoot, 'products'), { recursive: true });
 } catch (err) {
   console.warn('Could not create uploads directory:', err);
 }
