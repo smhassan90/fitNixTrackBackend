@@ -23,6 +23,13 @@ test('manage and delete permissions imply the required read permissions', () => 
   assert.equal(expanded.has('gym.devices.read'), true);
 });
 
+test('employee attendance manage implies employee and attendance read', () => {
+  const expanded = expandGymPermissionKeys(['gym.employeeAttendance.manage', 'gym.employees.delete']);
+  assert.equal(expanded.has('gym.employeeAttendance.read'), true);
+  assert.equal(expanded.has('gym.employees.read'), true);
+  assert.equal(expanded.has('gym.employees.manage'), true);
+});
+
 test('explicit empty permissions remain empty for non-admin users', () => {
   assert.deepEqual(effectiveGymPermissionKeys('GYM_STAFF', []), []);
 });

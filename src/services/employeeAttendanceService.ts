@@ -230,9 +230,19 @@ export async function markEmployeeAttendance(
     throw new BadRequestError('Check-out time cannot be before check-in time');
   }
 
-  if (input.status === 'ABSENT') {
-    // Absent days do not keep check-in/out times unless explicitly provided.
-  }
+  const clearTimesForAbsent =
+    input.status === 'ABSENT' && input.checkInTime === undefined && input.checkOutTime === undefined;
+
+  const nextCheckIn = clearTimesForAbsent
+    ? null
+    : input.checkInTime !== undefined
+      ? checkInTime
+      : undefined;
+  const nextCheckOut = clearTimesForAbsent
+    ? null
+    : input.checkOutTime !== undefined
+      ? checkOutTime
+      : undefined;
 
   const record = await prisma.employeeAttendanceRecord.upsert({
     where: {
@@ -247,18 +257,14 @@ export async function markEmployeeAttendance(
       employeeId: input.employeeId,
       date: dateOnly,
       status: input.status,
-      checkInTime: input.status === 'ABSENT' && !checkInTime ? null : checkInTime,
-      checkOutTime: input.status === 'ABSENT' && !checkOutTime ? null : checkOutTime,
+      checkInTime: clearTimesForAbsent ? null : checkInTime,
+      checkOutTime: clearTimesForAbsent ? null : checkOutTime,
       notes: input.notes ?? null,
     },
     update: {
       status: input.status,
-      checkInTime: input.checkInTime !== undefined
-        ? (input.status === 'ABSENT' && !checkInTime ? null : checkInTime)
-        : undefined,
-      checkOutTime: input.checkOutTime !== undefined
-        ? (input.status === 'ABSENT' && !checkOutTime ? null : checkOutTime)
-        : undefined,
+      ...(nextCheckIn !== undefined ? { checkInTime: nextCheckIn } : {}),
+      ...(nextCheckOut !== undefined ? { checkOutTime: nextCheckOut } : {}),
       notes: input.notes !== undefined ? input.notes : undefined,
     },
     include: { employee: { select: employeeSelect } },
