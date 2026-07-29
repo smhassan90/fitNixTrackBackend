@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { AppError, GoneError, NotFoundError } from '../utils/errors';
 import { verifyGoogleIdToken } from './mobileGoogleAuthService';
@@ -14,21 +15,37 @@ type OAuthConfig = {
   appScheme: string;
 };
 
-function getOAuthConfig(): OAuthConfig {
+type OAuthStartConfig = Pick<OAuthConfig, 'clientId' | 'redirectUri' | 'appScheme'>;
+
+function getOAuthStartConfig(): OAuthStartConfig {
   const clientId = process.env.GOOGLE_WEB_CLIENT_ID?.trim();
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
   const redirectUri = process.env.GOOGLE_OAUTH_REDIRECT_URI?.trim();
   const appScheme = process.env.MOBILE_APP_OAUTH_SCHEME?.trim() || 'fitnixtrackapp';
 
-  if (!clientId || !clientSecret || !redirectUri) {
+  if (!clientId || !redirectUri) {
     throw new AppError(
-      'OAUTH_MISCONFIGURED',
-      'Google OAuth is not configured. Set GOOGLE_WEB_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_OAUTH_REDIRECT_URI.',
+      'OAUTH_BACKEND_MISCONFIGURED',
+      'Google OAuth is not configured. Set GOOGLE_WEB_CLIENT_ID and GOOGLE_OAUTH_REDIRECT_URI.',
       500
     );
   }
 
-  return { clientId, clientSecret, redirectUri, appScheme };
+  return { clientId, redirectUri, appScheme };
+}
+
+function getOAuthCallbackConfig(): OAuthConfig {
+  const start = getOAuthStartConfig();
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+
+  if (!clientSecret) {
+    throw new AppError(
+      'OAUTH_BACKEND_MISCONFIGURED',
+      'Google OAuth is not configured. Set GOOGLE_CLIENT_SECRET.',
+      500
+    );
+  }
+
+  return { ...start, clientSecret };
 }
 
 function base64Url(buffer: Buffer): string {
@@ -47,10 +64,28 @@ function buildDeepLink(scheme: string, params: Record<string, string>): string {
   return `${scheme}://oauth?${new URLSearchParams(params).toString()}`;
 }
 
+function mapSessionStoreError(error: unknown): never {
+  if (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    (error.code === 'P2021' || error.code === 'P2022')
+  ) {
+    throw new AppError(
+      'OAUTH_BACKEND_MISCONFIGURED',
+      'OAuth session storage is not ready. Run database migrations for mobile_oauth_sessions.',
+      500
+    );
+  }
+  throw error;
+}
+
 async function purgeExpiredOAuthSessions(): Promise<void> {
-  await prisma.mobileOAuthSession.deleteMany({
-    where: { expiresAt: { lt: new Date() } },
-  });
+  try {
+    await prisma.mobileOAuthSession.deleteMany({
+      where: { expiresAt: { lt: new Date() } },
+    });
+  } catch (error) {
+    mapSessionStoreError(error);
+  }
 }
 
 async function exchangeCodeForIdToken(
@@ -87,7 +122,7 @@ async function exchangeCodeForIdToken(
 }
 
 export async function startMobileGoogleOAuth(platform?: string) {
-  const config = getOAuthConfig();
+  const config = getOAuthStartConfig();
   await purgeExpiredOAuthSessions();
 
   const sessionId = crypto.randomUUID();
@@ -96,15 +131,19 @@ export async function startMobileGoogleOAuth(platform?: string) {
   const codeChallenge = codeChallengeFromVerifier(codeVerifier);
   const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000);
 
-  await prisma.mobileOAuthSession.create({
-    data: {
-      sessionId,
-      state,
-      codeVerifier,
-      expiresAt,
-      platform: platform?.trim() || null,
-    },
-  });
+  try {
+    await prisma.mobileOAuthSession.create({
+      data: {
+        sessionId,
+        state,
+        codeVerifier,
+        expiresAt,
+        platform: platform?.trim() || null,
+      },
+    });
+  } catch (error) {
+    mapSessionStoreError(error);
+  }
 
   const params = new URLSearchParams({
     client_id: config.clientId,
@@ -131,7 +170,7 @@ export async function handleGoogleOAuthCallback(query: {
 }): Promise<string> {
   let appScheme = 'fitnixtrackapp';
   try {
-    appScheme = getOAuthConfig().appScheme;
+    appScheme = getOAuthStartConfig().appScheme;
   } catch {
     return buildDeepLink(appScheme, { error: 'oauth_failed' });
   }
@@ -145,13 +184,22 @@ export async function handleGoogleOAuthCallback(query: {
     return buildDeepLink(appScheme, { error: 'oauth_failed' });
   }
 
-  const session = await prisma.mobileOAuthSession.findUnique({
-    where: { state: query.state },
-  });
+  let session;
+  try {
+    session = await prisma.mobileOAuthSession.findUnique({
+      where: { state: query.state },
+    });
+  } catch (error) {
+    mapSessionStoreError(error);
+  }
 
   if (!session || session.expiresAt < new Date()) {
     if (session) {
-      await prisma.mobileOAuthSession.delete({ where: { sessionId: session.sessionId } });
+      try {
+        await prisma.mobileOAuthSession.delete({ where: { sessionId: session.sessionId } });
+      } catch (error) {
+        mapSessionStoreError(error);
+      }
     }
     return buildDeepLink(appScheme, { error: 'session_expired' });
   }
@@ -161,17 +209,26 @@ export async function handleGoogleOAuthCallback(query: {
   }
 
   try {
-    const config = getOAuthConfig();
+    const config = getOAuthCallbackConfig();
     const idToken = await exchangeCodeForIdToken(query.code, config, session.codeVerifier);
     await verifyGoogleIdToken(idToken);
 
-    await prisma.mobileOAuthSession.update({
-      where: { sessionId: session.sessionId },
-      data: { idToken },
-    });
+    try {
+      await prisma.mobileOAuthSession.update({
+        where: { sessionId: session.sessionId },
+        data: { idToken },
+      });
+    } catch (error) {
+      mapSessionStoreError(error);
+    }
 
     return buildDeepLink(appScheme, { sessionId: session.sessionId });
-  } catch {
+  } catch (error) {
+    console.error('[mobile-google-oauth] callback exchange failed', {
+      statePresent: Boolean(query.state),
+      codePresent: Boolean(query.code),
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
     return buildDeepLink(appScheme, { error: 'oauth_failed' });
   }
 }
@@ -179,16 +236,25 @@ export async function handleGoogleOAuthCallback(query: {
 export async function completeMobileGoogleOAuth(sessionId: string): Promise<{ idToken: string }> {
   await purgeExpiredOAuthSessions();
 
-  const session = await prisma.mobileOAuthSession.findUnique({
-    where: { sessionId },
-  });
+  let session;
+  try {
+    session = await prisma.mobileOAuthSession.findUnique({
+      where: { sessionId },
+    });
+  } catch (error) {
+    mapSessionStoreError(error);
+  }
 
   if (!session) {
     throw new NotFoundError('OAuth session', sessionId);
   }
 
   if (session.expiresAt < new Date()) {
-    await prisma.mobileOAuthSession.delete({ where: { sessionId } });
+    try {
+      await prisma.mobileOAuthSession.delete({ where: { sessionId } });
+    } catch (error) {
+      mapSessionStoreError(error);
+    }
     throw new GoneError('OAuth session expired');
   }
 
@@ -202,7 +268,11 @@ export async function completeMobileGoogleOAuth(sessionId: string): Promise<{ id
 
   const idToken = session.idToken;
 
-  await prisma.mobileOAuthSession.delete({ where: { sessionId } });
+  try {
+    await prisma.mobileOAuthSession.delete({ where: { sessionId } });
+  } catch (error) {
+    mapSessionStoreError(error);
+  }
 
   return { idToken };
 }
