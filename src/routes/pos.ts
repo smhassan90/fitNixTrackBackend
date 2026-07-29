@@ -22,12 +22,17 @@ import {
   restockProduct,
   updateGymProduct,
 } from '../services/pos/posProductService';
+import { resolveLocalProductImagePath } from '../services/pos/posProductImageService';
 import {
-  compressProductImage,
-  deleteStoredProductImage,
-  resolveLocalProductImagePath,
-  storeProductImage,
-} from '../services/pos/posProductImageService';
+  addProductImages,
+  deleteFeaturedProductImage,
+  deleteProductImage,
+  listProductImages,
+  PRODUCT_GALLERY_MAX_IMAGES,
+  reorderProductImages,
+  replaceFeaturedProductImage,
+  setProductImageFeatured,
+} from '../services/pos/posProductGalleryService';
 import {
   createSale,
   getGymPosSummary,
@@ -52,6 +57,9 @@ import {
   posInventoryRestockSchema,
   posProductCreateSchema,
   posProductIdParamSchema,
+  posProductImageFeatureSchema,
+  posProductImageIdParamSchema,
+  posProductImagesReorderSchema,
   posProductListQuerySchema,
   posProductPatchSchema,
   posSaleCreateSchema,
@@ -65,14 +73,17 @@ import {
   mobilePortalOrderCompleteSchema,
   mobilePortalOrderCancelSchema,
 } from '../validations/mobile';
-import { parseProductImageUpload } from '../middleware/productImageMultipart';
+import {
+  parseProductGalleryUpload,
+  parseProductImageUpload,
+} from '../middleware/productImageMultipart';
 import { NotFoundError, UploadFailedError, ValidationError } from '../utils/errors';
 import { prisma } from '../lib/prisma';
 
 const router = Router();
 
 /**
- * Public product image serve for <img src> (no JWT).
+ * Public product featured image serve for <img src> (no JWT).
  * Redirects to blob URL or streams local file.
  */
 router.get(
@@ -101,6 +112,46 @@ router.get(
       const localPath = resolveLocalProductImagePath(imageUrl);
       if (!localPath) {
         sendError(res, new NotFoundError('Product image', productId));
+        return;
+      }
+
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.type('image/jpeg');
+      res.sendFile(localPath);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+/**
+ * Public serve for a specific gallery image by id (no JWT).
+ */
+router.get(
+  '/products/:id/images/:imageId',
+  validate(posProductImageIdParamSchema),
+  async (req, res: Response) => {
+    try {
+      const productId = Number(req.params.id);
+      const imageId = Number(req.params.imageId);
+      const image = await prisma.posProductImage.findFirst({
+        where: { id: imageId, productId },
+        select: { url: true },
+      });
+
+      if (!image?.url) {
+        sendError(res, new NotFoundError('Product image', imageId));
+        return;
+      }
+
+      if (/^https?:\/\//i.test(image.url)) {
+        res.redirect(302, image.url);
+        return;
+      }
+
+      const localPath = resolveLocalProductImagePath(image.url);
+      if (!localPath) {
+        sendError(res, new NotFoundError('Product image', imageId));
         return;
       }
 
@@ -239,8 +290,8 @@ router.patch(
 );
 
 /**
- * Upload / replace product image.
- * POST multipart field: image | photo | file
+ * Upload / replace featured product image (legacy single-image API).
+ * Other gallery images are preserved. POST multipart field: image | photo | file
  */
 router.post(
   '/products/:id/image',
@@ -258,49 +309,33 @@ router.post(
         return;
       }
 
-      const existing = await prisma.posProduct.findFirst({
-        where: { id: productId, gymId },
-        select: { id: true, imageUrl: true },
-      });
-      if (!existing) {
-        sendError(res, new NotFoundError('Product', productId));
-        return;
-      }
-
-      let compressed;
+      let result;
       try {
-        compressed = await compressProductImage(file.buffer);
-      } catch (err) {
-        sendError(res, err instanceof Error ? err : new ValidationError('Invalid image'));
-        return;
-      }
-
-      let imageUrl: string;
-      try {
-        imageUrl = await storeProductImage(compressed, gymId);
+        result = await replaceFeaturedProductImage(gymId, productId, file);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Upload failed';
-        sendError(res, new UploadFailedError(message));
+        if (err instanceof ValidationError || err instanceof NotFoundError) {
+          sendError(res, err);
+          return;
+        }
+        if (/BLOB_READ_WRITE_TOKEN|Failed to store/i.test(message)) {
+          sendError(res, new UploadFailedError(message));
+          return;
+        }
+        sendError(res, err instanceof Error ? err : new ValidationError('Invalid image'));
         return;
-      }
-
-      const product = await prisma.posProduct.update({
-        where: { id: productId },
-        data: { imageUrl },
-      });
-
-      if (existing.imageUrl && existing.imageUrl !== imageUrl) {
-        await deleteStoredProductImage(existing.imageUrl);
       }
 
       sendSuccess(
         res,
         {
           product: {
-            id: product.id,
-            imageUrl: product.imageUrl,
+            id: productId,
+            imageUrl: result.imageUrl,
+            images: result.images,
           },
-          imageUrl,
+          imageUrl: result.imageUrl,
+          images: result.images,
         },
         'Product image uploaded'
       );
@@ -318,24 +353,157 @@ router.delete(
     try {
       const gymId = req.user!.gymId;
       const productId = Number(req.params.id);
+      const result = await deleteFeaturedProductImage(gymId, productId);
+      sendSuccess(
+        res,
+        {
+          product: {
+            id: productId,
+            imageUrl: result.imageUrl,
+            images: result.images,
+          },
+        },
+        'Product image removed'
+      );
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
 
-      const existing = await prisma.posProduct.findFirst({
-        where: { id: productId, gymId },
-        select: { id: true, imageUrl: true },
+/** List gallery images for a product. */
+router.get(
+  '/products/:id/images',
+  requireGymPermission('gym.pos.catalog.read'),
+  validate(posProductIdParamSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const images = await listProductImages(req.user!.gymId, Number(req.params.id));
+      sendSuccess(res, {
+        images,
+        maxImages: PRODUCT_GALLERY_MAX_IMAGES,
+        imageUrl: images.find((i) => i.isFeatured)?.url ?? null,
       });
-      if (!existing) {
-        sendError(res, new NotFoundError('Product', productId));
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+/**
+ * Add one or more gallery images (max 5 total per product).
+ * Multipart fields: images[] (preferred) | image | photo | file
+ * Optional form field: isFeatured=true — make the first uploaded file the featured image
+ */
+router.post(
+  '/products/:id/images',
+  requireGymPermission('gym.pos.products.manage'),
+  validate(posProductIdParamSchema),
+  parseProductGalleryUpload,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.user!.gymId;
+      const productId = Number(req.params.id);
+      const filesList =
+        (req as AuthRequest & { filesList?: Express.Multer.File[] }).filesList ?? [];
+      const setFeatured =
+        (req as AuthRequest & { setFeatured?: boolean }).setFeatured === true;
+
+      let result;
+      try {
+        result = await addProductImages(gymId, productId, filesList, { setFeatured });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Upload failed';
+        if (/BLOB_READ_WRITE_TOKEN|Failed to store/i.test(message)) {
+          sendError(res, new UploadFailedError(message));
+          return;
+        }
+        sendError(res, err instanceof Error ? err : new ValidationError('Invalid image'));
         return;
       }
 
-      const previousUrl = existing.imageUrl;
-      await prisma.posProduct.update({
-        where: { id: productId },
-        data: { imageUrl: null },
-      });
-      await deleteStoredProductImage(previousUrl);
+      sendSuccess(
+        res,
+        {
+          product: {
+            id: productId,
+            imageUrl: result.imageUrl,
+            images: result.images,
+          },
+          images: result.images,
+          imageUrl: result.imageUrl,
+          added: result.added,
+          maxImages: PRODUCT_GALLERY_MAX_IMAGES,
+        },
+        'Product images uploaded',
+        201
+      );
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
 
-      sendSuccess(res, { product: { id: productId, imageUrl: null } }, 'Product image removed');
+/** Reorder gallery images. Body: { imageIds: number[] } — must list every image exactly once. */
+router.put(
+  '/products/:id/images/reorder',
+  requireGymPermission('gym.pos.products.manage'),
+  validate(posProductImagesReorderSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const productId = Number(req.params.id);
+      const result = await reorderProductImages(
+        req.user!.gymId,
+        productId,
+        req.body.imageIds
+      );
+      sendSuccess(res, {
+        product: { id: productId, imageUrl: result.imageUrl, images: result.images },
+        images: result.images,
+        imageUrl: result.imageUrl,
+      });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+/** Mark one gallery image as the featured / primary image. */
+router.post(
+  '/products/:id/images/:imageId/feature',
+  requireGymPermission('gym.pos.products.manage'),
+  validate(posProductImageFeatureSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const productId = Number(req.params.id);
+      const imageId = Number(req.params.imageId);
+      const result = await setProductImageFeatured(req.user!.gymId, productId, imageId);
+      sendSuccess(res, {
+        product: { id: productId, imageUrl: result.imageUrl, images: result.images },
+        images: result.images,
+        imageUrl: result.imageUrl,
+      }, 'Featured image updated');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+/** Delete one gallery image. If it was featured, the next image becomes featured. */
+router.delete(
+  '/products/:id/images/:imageId',
+  requireGymPermission('gym.pos.products.manage'),
+  validate(posProductImageIdParamSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const productId = Number(req.params.id);
+      const imageId = Number(req.params.imageId);
+      const result = await deleteProductImage(req.user!.gymId, productId, imageId);
+      sendSuccess(res, {
+        product: { id: productId, imageUrl: result.imageUrl, images: result.images },
+        images: result.images,
+        imageUrl: result.imageUrl,
+      }, 'Product image removed');
     } catch (error) {
       sendError(res, error as Error);
     }

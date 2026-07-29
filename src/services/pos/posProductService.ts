@@ -16,6 +16,13 @@ import {
   assertGymSubcategoryEnabled,
   getSubcategoryWithCategory,
 } from './posCatalogService';
+import {
+  featuredImageUrl,
+  productDetailInclude,
+  serializeProductImages,
+  syncFeaturedImageFromUrl,
+  type ProductImageDto,
+} from './posProductGalleryService';
 
 type ProductInput = {
   subcategoryId: number;
@@ -124,12 +131,19 @@ export function serializeProduct(product: {
     name: string;
     category: { id: number; name: string; productType: PosProductType };
   };
+  images?: Array<{ id: number; url: string; isFeatured: boolean; sortOrder: number }>;
 }) {
   const subcategoryName = product.subcategory?.name ?? null;
   const form = resolveDisplayedForm(product.productType, product.form, subcategoryName);
+  const images: ProductImageDto[] = serializeProductImages(product.images);
+  const imageUrl = featuredImageUrl(product.images, product.imageUrl);
+
+  const { images: _ignored, ...rest } = product;
 
   return {
-    ...product,
+    ...rest,
+    imageUrl,
+    images,
     form,
     subcategoryId: product.subcategoryId,
     subcategoryName,
@@ -211,10 +225,12 @@ export async function createGymProduct(gymId: number, userId: number, input: Pro
         lowStockThreshold: input.lowStockThreshold ?? 5,
         isActive: input.isActive ?? true,
       },
-      include: {
-        subcategory: { include: { category: true } },
-      },
+      include: productDetailInclude,
     });
+
+    if (input.imageUrl) {
+      await syncFeaturedImageFromUrl(tx, gymId, product.id, input.imageUrl);
+    }
 
     if (trackInventory && initialStock > 0) {
       await tx.posStockMovement.create({
@@ -230,7 +246,11 @@ export async function createGymProduct(gymId: number, userId: number, input: Pro
       });
     }
 
-    return serializeProduct(product);
+    const withImages = await tx.posProduct.findFirst({
+      where: { id: product.id },
+      include: productDetailInclude,
+    });
+    return serializeProduct(withImages!);
   });
 }
 
@@ -301,39 +321,51 @@ export async function updateGymProduct(
     if (duplicate) throw new ConflictError('SKU already exists for this gym');
   }
 
-  const product = await prisma.posProduct.update({
-    where: { id: productId },
-    data: {
-      subcategoryId: nextSubcategoryId,
-      productType,
-      form,
-      name: merged.name.trim(),
-      sku,
-      description: merged.description ?? null,
-      imageUrl: merged.imageUrl ?? null,
-      brand: merged.brand ?? null,
-      price: merged.price,
-      discountType: merged.discountType,
-      discountValue: merged.discountValue,
-      calories: merged.calories ?? null,
-      proteinG: merged.proteinG ?? null,
-      carbsG: merged.carbsG ?? null,
-      fatG: merged.fatG ?? null,
-      fiberG: merged.fiberG ?? null,
-      sugarG: merged.sugarG ?? null,
-      servingSizeG: merged.servingSizeG ?? null,
-      servingLabel: merged.servingLabel ?? null,
-      material: merged.material ?? null,
-      color: merged.color ?? null,
-      size: merged.size ?? null,
-      trackInventory: merged.trackInventory,
-      lowStockThreshold: merged.lowStockThreshold,
-      ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
-    },
-    include: { subcategory: { include: { category: true } } },
+  const product = await prisma.$transaction(async (tx) => {
+    const updated = await tx.posProduct.update({
+      where: { id: productId },
+      data: {
+        subcategoryId: nextSubcategoryId,
+        productType,
+        form,
+        name: merged.name.trim(),
+        sku,
+        description: merged.description ?? null,
+        imageUrl: merged.imageUrl ?? null,
+        brand: merged.brand ?? null,
+        price: merged.price,
+        discountType: merged.discountType,
+        discountValue: merged.discountValue,
+        calories: merged.calories ?? null,
+        proteinG: merged.proteinG ?? null,
+        carbsG: merged.carbsG ?? null,
+        fatG: merged.fatG ?? null,
+        fiberG: merged.fiberG ?? null,
+        sugarG: merged.sugarG ?? null,
+        servingSizeG: merged.servingSizeG ?? null,
+        servingLabel: merged.servingLabel ?? null,
+        material: merged.material ?? null,
+        color: merged.color ?? null,
+        size: merged.size ?? null,
+        trackInventory: merged.trackInventory,
+        lowStockThreshold: merged.lowStockThreshold,
+        ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
+      },
+      include: productDetailInclude,
+    });
+
+    if (input.imageUrl !== undefined) {
+      await syncFeaturedImageFromUrl(tx, gymId, productId, input.imageUrl ?? null);
+      return tx.posProduct.findFirst({
+        where: { id: productId },
+        include: productDetailInclude,
+      });
+    }
+
+    return updated;
   });
 
-  return serializeProduct(product);
+  return serializeProduct(product!);
 }
 
 export async function deactivateGymProduct(gymId: number, productId: number) {
@@ -345,7 +377,7 @@ export async function deactivateGymProduct(gymId: number, productId: number) {
   const product = await prisma.posProduct.update({
     where: { id: productId },
     data: { isActive: false },
-    include: { subcategory: { include: { category: true } } },
+    include: productDetailInclude,
   });
   return serializeProduct(product);
 }
@@ -412,7 +444,7 @@ export async function listGymProducts(gymId: number, filters: {
       orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
       skip: (filters.page - 1) * filters.limit,
       take: filters.limit,
-      include: { subcategory: { include: { category: true } } },
+      include: productDetailInclude,
     }),
   ]);
 
@@ -425,7 +457,7 @@ export async function listGymProducts(gymId: number, filters: {
 export async function getGymProduct(gymId: number, productId: number) {
   const product = await prisma.posProduct.findFirst({
     where: { id: productId, gymId, deletedAt: null },
-    include: { subcategory: { include: { category: true } } },
+    include: productDetailInclude,
   });
   if (!product) throw new NotFoundError('Product', productId);
   return serializeProduct(product);

@@ -78,6 +78,27 @@ export const posProductIdParamSchema = z.object({
   params: z.object({ id: z.coerce.number().int().positive() }),
 });
 
+export const posProductImageIdParamSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+    imageId: z.coerce.number().int().positive(),
+  }),
+});
+
+export const posProductImagesReorderSchema = z.object({
+  params: z.object({ id: z.coerce.number().int().positive() }),
+  body: z.object({
+    imageIds: z.array(z.coerce.number().int().positive()).min(1).max(5),
+  }),
+});
+
+export const posProductImageFeatureSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+    imageId: z.coerce.number().int().positive(),
+  }),
+});
+
 export const posProductListQuerySchema = z.object({
   query: z
     .object({

@@ -808,6 +808,7 @@ model PosProduct {
   name              String           @db.VarChar(255)
   sku               String?          @db.VarChar(64)
   description       String?          @db.Text
+  /// Denormalized featured image URL (kept in sync with PosProductImage where isFeatured=true).
   imageUrl          String?          @db.VarChar(2048)
   brand             String?          @db.VarChar(128)
   price             Float
@@ -836,11 +837,32 @@ model PosProduct {
   subcategory    PosSubcategory     @relation(fields: [subcategoryId], references: [id], onDelete: Restrict)
   stockMovements PosStockMovement[]
   saleItems      PosSaleItem[]
+  images         PosProductImage[]
 
   @@unique([gymId, sku])
   @@index([gymId, subcategoryId, isActive])
   @@index([gymId, productType])
   @@map("pos_products")
+}
+
+/// Gallery images for a POS product. Max 5 per product enforced in application code.
+/// Exactly one should be featured when any images exist (synced to PosProduct.imageUrl).
+model PosProductImage {
+  id         Int      @id @default(autoincrement())
+  gymId      Int
+  productId  Int
+  url        String   @db.VarChar(2048)
+  isFeatured Boolean  @default(false)
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  product PosProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, sortOrder])
+  @@index([productId, isFeatured])
+  @@index([gymId])
+  @@map("pos_product_images")
 }
 
 model PosStockMovement {
