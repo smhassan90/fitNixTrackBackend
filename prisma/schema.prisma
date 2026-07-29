@@ -39,27 +39,29 @@ model Gym {
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
-  users                  User[]
-  members                Member[]
-  trainers               Trainer[]
-  packages               Package[]
-  payments               Payment[]
-  attendanceRecords      AttendanceRecord[]
-  deviceConfigs          DeviceConfig[]
-  oneTimePayments        OneTimePayment[]
-  feeCollections         FeeCollection[]
-  gymSubscription        GymSubscription?
-  billingPayments        BillingPayment[]
-  pendingAttendanceLogs  PendingAttendanceLog[]
-  gymPosSubcategories    GymPosSubcategory[]
-  posProducts            PosProduct[]
-  posStockMovements      PosStockMovement[]
-  posSales               PosSale[]
-  workoutLogs            WorkoutLog[]
-  mobileOrders           MobileOrder[]
-  mobileOtpSessions      MobileOtpSession[]
-  mobileNotifications    MobileNotification[]
-  mobilePushTokens       MobilePushToken[]
+  users                     User[]
+  members                   Member[]
+  trainers                  Trainer[]
+  employees                 Employee[]
+  packages                  Package[]
+  payments                  Payment[]
+  attendanceRecords         AttendanceRecord[]
+  employeeAttendanceRecords EmployeeAttendanceRecord[]
+  deviceConfigs             DeviceConfig[]
+  oneTimePayments           OneTimePayment[]
+  feeCollections            FeeCollection[]
+  gymSubscription           GymSubscription?
+  billingPayments           BillingPayment[]
+  pendingAttendanceLogs     PendingAttendanceLog[]
+  gymPosSubcategories       GymPosSubcategory[]
+  posProducts               PosProduct[]
+  posStockMovements         PosStockMovement[]
+  posSales                  PosSale[]
+  workoutLogs               WorkoutLog[]
+  mobileOrders              MobileOrder[]
+  mobileOtpSessions         MobileOtpSession[]
+  mobileNotifications       MobileNotification[]
+  mobilePushTokens          MobilePushToken[]
 
   @@map("gyms")
 }
@@ -553,6 +555,63 @@ enum AttendanceStatus {
   PRESENT
   ABSENT
   LATE
+}
+
+/// Gym staff / workers (reception, cleaning, security, etc.) — separate from members and trainers.
+model Employee {
+  id             Int       @id @default(autoincrement())
+  gymId          Int
+  /// Gym-visible employee code (e.g. EMP-001). Unique per gym when set.
+  employeeNumber String?   @db.VarChar(64)
+  name           String
+  phone          String?   @db.VarChar(40)
+  email          String?   @db.VarChar(191)
+  gender         String?
+  dateOfBirth    DateTime? @db.Date
+  /// Job title / designation (e.g. Receptionist, Cleaner, Security)
+  designation    String?   @db.VarChar(128)
+  department     String?   @db.VarChar(128)
+  dateOfJoining  DateTime? @db.Date
+  salary         Float?
+  notes          String?   @db.Text
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  gym               Gym                        @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  attendanceRecords EmployeeAttendanceRecord[]
+
+  @@unique([gymId, employeeNumber])
+  @@unique([gymId, email])
+  @@index([gymId])
+  @@index([gymId, isActive])
+  @@index([gymId, phone])
+  @@map("employees")
+}
+
+/// Daily attendance for gym employees — fully separate from member attendance_records.
+model EmployeeAttendanceRecord {
+  id           Int              @id @default(autoincrement())
+  gymId        Int
+  employeeId   Int
+  date         DateTime         @db.Date
+  status       AttendanceStatus @default(PRESENT)
+  checkInTime  DateTime?
+  checkOutTime DateTime?
+  notes        String?          @db.VarChar(500)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  gym      Gym      @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([gymId, employeeId, date])
+  @@index([gymId])
+  @@index([employeeId])
+  @@index([date])
+  @@index([gymId, date])
+  @@index([checkInTime])
+  @@map("employee_attendance_records")
 }
 
 model MemberTrainer {

@@ -24,6 +24,8 @@ import posRoutes from './routes/pos';
 import mobileRoutes from './routes/mobile';
 import accountDeletionRequestsRoutes from './routes/accountDeletionRequests';
 import meRoutes from './routes/me';
+import employeeRoutes from './routes/employees';
+import employeeAttendanceRoutes from './routes/employeeAttendance';
 
 // Load environment variables
 dotenv.config();
@@ -152,6 +154,8 @@ app.use('/api/trainers', trainerRoutes);
 app.use('/api/packages', packageRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/attendance', attendanceRoutes);
+app.use('/api/employees', employeeRoutes);
+app.use('/api/employee-attendance', employeeAttendanceRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/device', (req, res, next) => getDeviceRoutes()(req, res, next));
