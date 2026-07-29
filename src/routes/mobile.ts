@@ -19,6 +19,10 @@ import {
 } from '../utils/errors';
 import { WORKOUT_BODY_PARTS, BODY_PART_LABELS } from '../constants/bodyParts';
 import {
+  DEFAULT_LENGTH_UNIT,
+  convertNullableFromCm,
+} from '../utils/lengthUnits';
+import {
   requestMobileOtp,
   verifyMobileOtp,
   logoutMobileUser,
@@ -69,7 +73,7 @@ import {
   assertTrainerMemberAccess,
 } from '../services/mobileMemberService';
 import {
-  setMemberHeightCm,
+  setMemberHeight,
   listMemberBodyMeasurements,
   upsertMemberBodyMeasurement,
   getTrainerMemberBody,
@@ -449,6 +453,12 @@ async function handleMobileMe(req: MobileAuthRequest, res: Response) {
         email: u.email ?? null,
         photoUrl: u.photoUrl ?? null,
         heightCm: u.accountType === 'MEMBER' ? (u.heightCm ?? null) : null,
+        /** Display height in default unit (inches). */
+        height:
+          u.accountType === 'MEMBER'
+            ? convertNullableFromCm(u.heightCm, DEFAULT_LENGTH_UNIT)
+            : null,
+        unit: u.accountType === 'MEMBER' ? DEFAULT_LENGTH_UNIT : null,
         linked: u.linked,
       },
     });
@@ -562,8 +572,12 @@ router.get(
   validate(mobileBodyMeasurementsListSchema),
   async (req: MobileAuthRequest, res: Response) => {
     try {
-      const limit = (req.query as { limit?: number }).limit;
-      const result = await listMemberBodyMeasurements(req.mobileUser!.memberId!, limit);
+      const q = req.query as { limit?: number; unit?: string };
+      const result = await listMemberBodyMeasurements(
+        req.mobileUser!.memberId!,
+        q.limit,
+        q.unit
+      );
       sendSuccess(res, result);
     } catch (error) {
       sendError(res, error as Error);
@@ -578,7 +592,7 @@ router.put(
   validate(mobileBodyHeightSchema),
   async (req: MobileAuthRequest, res: Response) => {
     try {
-      const result = await setMemberHeightCm(req.mobileUser!.memberId!, req.body.heightCm);
+      const result = await setMemberHeight(req.mobileUser!.memberId!, req.body);
       req.mobileUser!.heightCm = result.heightCm;
       sendSuccess(res, result);
     } catch (error) {
@@ -917,8 +931,14 @@ router.get(
     try {
       const u = req.mobileUser!;
       const memberId = Number(req.params.memberId);
-      const limit = (req.query as { limit?: number }).limit;
-      const result = await getTrainerMemberBody(u.gymId!, u.trainerId!, memberId, limit);
+      const q = req.query as { limit?: number; unit?: string };
+      const result = await getTrainerMemberBody(
+        u.gymId!,
+        u.trainerId!,
+        memberId,
+        q.limit,
+        q.unit
+      );
       sendSuccess(res, result);
     } catch (error) {
       sendError(res, error as Error);
