@@ -49,6 +49,18 @@ export const mobileGoogleSelectGymSchema = z.object({
   }),
 });
 
+export const mobileGoogleOAuthStartSchema = z.object({
+  body: z.object({
+    platform: z.string().max(32).optional(),
+  }),
+});
+
+export const mobileGoogleOAuthCompleteSchema = z.object({
+  query: z.object({
+    sessionId: z.string().uuid(),
+  }),
+});
+
 /** TEMPORARY: Expo Go testing without native Google Sign-In. */
 export const mobileDevLoginSchema = z.object({
   body: z.object({

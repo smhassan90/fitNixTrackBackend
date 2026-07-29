@@ -58,6 +58,13 @@ export class BadRequestError extends AppError {
   }
 }
 
+export class GoneError extends AppError {
+  constructor(message: string, details?: any) {
+    super('GONE', message, 410, details);
+    this.name = 'GoneError';
+  }
+}
+
 export class PayloadTooLargeError extends AppError {
   constructor(message: string = 'Payload too large', details?: any) {
     super('PAYLOAD_TOO_LARGE', message, 413, details);

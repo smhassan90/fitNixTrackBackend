@@ -32,6 +32,12 @@ import {
   loginWithDevEmail,
   isDevLoginEnabled,
 } from '../services/mobileGoogleAuthService';
+import {
+  startMobileGoogleOAuth,
+  handleGoogleOAuthCallback,
+  completeMobileGoogleOAuth,
+} from '../services/mobileGoogleOAuthService';
+import { mobileGoogleOAuthStartRateLimiter } from '../middleware/mobileGoogleOAuthRateLimit';
 import { upsertWorkout, listWorkouts, getWorkoutByDate, deleteWorkout } from '../services/mobileWorkoutService';
 import {
   upsertGuestWorkout,
@@ -83,6 +89,8 @@ import {
   mobileGoogleAuthSchema,
   mobileGoogleSelectSchema,
   mobileGoogleSelectGymSchema,
+  mobileGoogleOAuthStartSchema,
+  mobileGoogleOAuthCompleteSchema,
   mobileDevLoginSchema,
   mobileWorkoutUpsertSchema,
   mobileWorkoutListSchema,
@@ -336,6 +344,48 @@ router.post('/auth/google/select', validate(mobileGoogleSelectSchema), async (re
     sendError(res, error as Error);
   }
 });
+
+router.post(
+  '/auth/google/mobile/start',
+  mobileGoogleOAuthStartRateLimiter,
+  validate(mobileGoogleOAuthStartSchema),
+  async (req, res: Response) => {
+    try {
+      const result = await startMobileGoogleOAuth(req.body.platform);
+      sendSuccess(res, result);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+router.get('/auth/google/callback', async (req, res: Response) => {
+  try {
+    const redirectUrl = await handleGoogleOAuthCallback({
+      code: typeof req.query.code === 'string' ? req.query.code : undefined,
+      state: typeof req.query.state === 'string' ? req.query.state : undefined,
+      error: typeof req.query.error === 'string' ? req.query.error : undefined,
+    });
+    res.redirect(302, redirectUrl);
+  } catch (error) {
+    const scheme = process.env.MOBILE_APP_OAUTH_SCHEME?.trim() || 'fitnixtrackapp';
+    res.redirect(302, `${scheme}://oauth?error=oauth_failed`);
+  }
+});
+
+router.get(
+  '/auth/google/mobile/complete',
+  validate(mobileGoogleOAuthCompleteSchema),
+  async (req, res: Response) => {
+    try {
+      const { sessionId } = req.query as { sessionId: string };
+      const result = await completeMobileGoogleOAuth(sessionId);
+      sendSuccess(res, result);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
 
 // TEMPORARY: email-only sign-in for Expo Go testing. Requires MOBILE_DEV_LOGIN_ENABLED=true.
 router.post('/auth/dev-login', validate(mobileDevLoginSchema), async (req, res: Response) => {

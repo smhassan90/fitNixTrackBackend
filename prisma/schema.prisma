@@ -1025,6 +1025,21 @@ model MobileGoogleUser {
   @@map("mobile_google_users")
 }
 
+/// Short-lived PKCE sessions for mobile Google OAuth (Play Store–safe browser flow).
+model MobileOAuthSession {
+  sessionId    String   @id @db.VarChar(36)
+  state        String   @unique @db.VarChar(128)
+  codeVerifier String   @db.VarChar(128)
+  idToken      String?  @db.Text
+  expiresAt    DateTime
+  used         Boolean  @default(false)
+  platform     String?  @db.VarChar(32)
+  createdAt    DateTime @default(now())
+
+  @@index([expiresAt])
+  @@map("mobile_oauth_sessions")
+}
+
 /// Personal gym-activity logs for Google guests (no gym association).
 model GuestWorkoutLog {
   id           Int      @id @default(autoincrement())

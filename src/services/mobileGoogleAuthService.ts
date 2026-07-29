@@ -24,7 +24,7 @@ function getGoogleAudiences(): string[] {
   return [...new Set(audiences.map((v) => v.trim()))];
 }
 
-async function verifyGoogleIdToken(idToken: string) {
+export async function verifyGoogleIdToken(idToken: string) {
   const audiences = getGoogleAudiences();
   if (audiences.length === 0) {
     throw new BadRequestError(
