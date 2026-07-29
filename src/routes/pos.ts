@@ -162,6 +162,7 @@ router.get(
     try {
       const query = req.query as {
         productType?: 'NUTRIENT' | 'ACCESSORY';
+        form?: 'PACKAGED' | 'SERVING';
         subcategoryId?: string;
         isActive?: string;
         search?: string;
@@ -170,6 +171,7 @@ router.get(
       };
       const { products, total } = await listGymProducts(req.user!.gymId, {
         productType: query.productType,
+        form: query.form,
         subcategoryId: query.subcategoryId ? Number(query.subcategoryId) : undefined,
         isActive: query.isActive !== undefined ? query.isActive === 'true' : undefined,
         search: query.search,

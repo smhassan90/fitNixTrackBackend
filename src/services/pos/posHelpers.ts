@@ -44,6 +44,46 @@ export function inferAllowedFormsFromName(name: string): PosProductForm[] | null
   return null;
 }
 
+/** Single form derived from Packaged / Serving subcategory names. */
+export function inferFormFromSubcategoryName(name: string): PosProductForm | null {
+  const inferred = inferAllowedFormsFromName(name);
+  return inferred?.[0] ?? null;
+}
+
+/**
+ * Reliable form for API responses.
+ * Prefer subcategory name (Packaged/Serving) over a stale DB form for nutrients.
+ */
+export function resolveDisplayedForm(
+  productType: PosProductType,
+  form: PosProductForm | null | undefined,
+  subcategoryName?: string | null
+): PosProductForm {
+  if (productType === 'ACCESSORY') return 'PACKAGED';
+  if (subcategoryName) {
+    const inferred = inferFormFromSubcategoryName(subcategoryName);
+    if (inferred) return inferred;
+  }
+  return form ?? 'PACKAGED';
+}
+
+/**
+ * Persist form from subcategory when name locks it; otherwise use client/default.
+ */
+export function resolvePersistedForm(
+  productType: PosProductType,
+  subcategoryName: string,
+  allowedForms: unknown,
+  clientForm?: PosProductForm | null
+): PosProductForm {
+  if (productType === 'ACCESSORY') return 'PACKAGED';
+  const inferred = inferFormFromSubcategoryName(subcategoryName);
+  if (inferred) return inferred;
+  const allowed = effectiveAllowedForms(productType, allowedForms);
+  if (clientForm && allowed.includes(clientForm)) return clientForm;
+  return allowed.length === 1 ? allowed[0] : 'PACKAGED';
+}
+
 export function resolveSubcategoryAllowedForms(
   productType: PosProductType,
   name: string,

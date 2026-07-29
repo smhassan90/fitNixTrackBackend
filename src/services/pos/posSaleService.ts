@@ -17,6 +17,7 @@ import {
   assertValidDiscount,
   computeLineAmounts,
   generateReceiptNo,
+  resolveDisplayedForm,
   roundMoney,
 } from './posHelpers';
 
@@ -222,7 +223,11 @@ export async function createSale(
       categoryName: product.subcategory.category.name,
       subcategoryId: product.subcategory.id,
       subcategoryName: product.subcategory.name,
-      form: product.form,
+      form: resolveDisplayedForm(
+        product.productType,
+        product.form,
+        product.subcategory.name
+      ),
       quantity: item.quantity,
       unitPrice: product.price,
       discountType,

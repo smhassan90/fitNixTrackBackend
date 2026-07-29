@@ -5,7 +5,10 @@ import {
   computeLineAmounts,
   effectiveAllowedForms,
   inferAllowedFormsFromName,
+  inferFormFromSubcategoryName,
   parseAllowedForms,
+  resolveDisplayedForm,
+  resolvePersistedForm,
   resolveSubcategoryAllowedForms,
   roundMoney,
 } from './posHelpers';
@@ -64,4 +67,27 @@ test('resolveSubcategoryAllowedForms prefers name inference over client payload'
     resolveSubcategoryAllowedForms('NUTRIENT', 'Serving', ['PACKAGED']),
     ['SERVING']
   );
+});
+
+test('resolveDisplayedForm prefers subcategory name over stale DB form', () => {
+  assert.equal(resolveDisplayedForm('NUTRIENT', 'PACKAGED', 'Serving'), 'SERVING');
+  assert.equal(resolveDisplayedForm('NUTRIENT', 'SERVING', 'Packaged'), 'PACKAGED');
+  assert.equal(resolveDisplayedForm('NUTRIENT', 'PACKAGED', 'Whey'), 'PACKAGED');
+  assert.equal(resolveDisplayedForm('ACCESSORY', 'SERVING', 'Shaker'), 'PACKAGED');
+});
+
+test('resolvePersistedForm locks Packaged/Serving subcategory names', () => {
+  assert.equal(
+    resolvePersistedForm('NUTRIENT', 'Serving', ['PACKAGED'], 'PACKAGED'),
+    'SERVING'
+  );
+  assert.equal(
+    resolvePersistedForm('NUTRIENT', 'Packaged', ['SERVING'], 'SERVING'),
+    'PACKAGED'
+  );
+  assert.equal(inferFormFromSubcategoryName('Servings'), 'SERVING');
+});
+
+test('roundMoney rounds to cents', () => {
+  assert.equal(roundMoney(10.005), 10.01);
 });

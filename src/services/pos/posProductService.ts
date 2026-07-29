@@ -9,7 +9,8 @@ import { prisma } from '../../lib/prisma';
 import { BadRequestError, ConflictError, NotFoundError } from '../../utils/errors';
 import {
   assertFormAllowed,
-  effectiveAllowedForms,
+  resolveDisplayedForm,
+  resolvePersistedForm,
 } from './posHelpers';
 import {
   assertGymSubcategoryEnabled,
@@ -124,8 +125,14 @@ export function serializeProduct(product: {
     category: { id: number; name: string; productType: PosProductType };
   };
 }) {
+  const subcategoryName = product.subcategory?.name ?? null;
+  const form = resolveDisplayedForm(product.productType, product.form, subcategoryName);
+
   return {
     ...product,
+    form,
+    subcategoryId: product.subcategoryId,
+    subcategoryName,
     isLowStock: product.trackInventory && product.stockQuantity <= product.lowStockThreshold,
     subcategory: product.subcategory
       ? {
@@ -144,8 +151,13 @@ export async function createGymProduct(gymId: number, userId: number, input: Pro
     throw new BadRequestError('productType does not match subcategory');
   }
 
-  const allowed = effectiveAllowedForms(sub.category.productType, sub.allowedForms);
-  const form = input.form ?? (allowed.length === 1 ? allowed[0] : 'PACKAGED');
+  // Prefer subcategory name (Packaged/Serving) over client-supplied form.
+  const form = resolvePersistedForm(
+    sub.category.productType,
+    sub.name,
+    sub.allowedForms,
+    input.form
+  );
   assertFormAllowed(sub.category.productType, form, sub.allowedForms);
   validateProductFields(sub.category.productType, form, input);
 
@@ -243,7 +255,12 @@ export async function updateGymProduct(
     throw new BadRequestError('productType does not match subcategory');
   }
 
-  const form = input.form ?? existing.form;
+  const form = resolvePersistedForm(
+    productType,
+    sub.name,
+    sub.allowedForms,
+    input.form ?? existing.form
+  );
   assertFormAllowed(sub.category.productType, form, sub.allowedForms);
 
   const merged: ProductInput = {
@@ -335,24 +352,54 @@ export async function deactivateGymProduct(gymId: number, productId: number) {
 
 export async function listGymProducts(gymId: number, filters: {
   productType?: PosProductType;
+  form?: PosProductForm;
   subcategoryId?: number;
   isActive?: boolean;
   search?: string;
   page: number;
   limit: number;
 }) {
+  if (filters.form && filters.productType === 'ACCESSORY') {
+    throw new BadRequestError('form filter is only valid for NUTRIENT products');
+  }
+
+  // form implies nutrient catalog when productType omitted.
+  const productType =
+    filters.form && !filters.productType ? 'NUTRIENT' : filters.productType;
+
+  const formNameVariants =
+    filters.form === 'PACKAGED'
+      ? ['Packaged', 'packaged', 'Package', 'package']
+      : filters.form === 'SERVING'
+        ? ['Serving', 'serving', 'Servings', 'servings']
+        : null;
+
   const where: Prisma.PosProductWhereInput = {
     gymId,
     deletedAt: null,
-    ...(filters.productType ? { productType: filters.productType } : {}),
+    ...(productType ? { productType } : {}),
     ...(filters.subcategoryId ? { subcategoryId: filters.subcategoryId } : {}),
     ...(filters.isActive !== undefined ? { isActive: filters.isActive } : {}),
-    ...(filters.search
+    ...(filters.form
       ? {
           OR: [
-            { name: { contains: filters.search } },
-            { sku: { contains: filters.search.toUpperCase() } },
-            { brand: { contains: filters.search } },
+            { form: filters.form },
+            ...(formNameVariants
+              ? [{ subcategory: { name: { in: formNameVariants } } }]
+              : []),
+          ],
+        }
+      : {}),
+    ...(filters.search
+      ? {
+          AND: [
+            {
+              OR: [
+                { name: { contains: filters.search } },
+                { sku: { contains: filters.search.toUpperCase() } },
+                { brand: { contains: filters.search } },
+              ],
+            },
           ],
         }
       : {}),

@@ -79,15 +79,26 @@ export const posProductIdParamSchema = z.object({
 });
 
 export const posProductListQuerySchema = z.object({
-  query: z.object({
-    productType: productTypeSchema.optional(),
-    subcategoryId: positiveInt.optional(),
-    isActive: z.enum(['true', 'false']).optional(),
-    search: z.string().trim().max(255).optional(),
-    page: z.coerce.number().int().min(1).default(1),
-  /** POS grids often load the full catalog; allow higher than generic list endpoints. */
-    limit: z.coerce.number().int().min(1).max(500).default(50),
-  }),
+  query: z
+    .object({
+      productType: productTypeSchema.optional(),
+      form: productFormSchema.optional(),
+      subcategoryId: positiveInt.optional(),
+      isActive: z.enum(['true', 'false']).optional(),
+      search: z.string().trim().max(255).optional(),
+      page: z.coerce.number().int().min(1).default(1),
+      /** POS grids often load the full catalog; allow higher than generic list endpoints. */
+      limit: z.coerce.number().int().min(1).max(500).default(50),
+    })
+    .superRefine((data, ctx) => {
+      if (data.form && data.productType === 'ACCESSORY') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'form filter is only valid for NUTRIENT products',
+          path: ['form'],
+        });
+      }
+    }),
 });
 
 export const posInventoryRestockSchema = z.object({
