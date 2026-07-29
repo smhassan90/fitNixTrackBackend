@@ -114,7 +114,19 @@ router.post(
       });
 
       // Invalidate current session immediately (request still pending for full anonymize).
-      if (u.accountType === 'GUEST' && u.googleUserId) {
+      if (u.sessionSubject?.kind === 'google' && u.sessionSubject.googleUserId) {
+        await logoutGoogleGuest(u.sessionSubject.googleUserId);
+      } else if (u.sessionSubject?.kind === 'member' && u.sessionSubject.memberId) {
+        await logoutMobileUser({
+          accountType: 'MEMBER',
+          memberId: u.sessionSubject.memberId,
+        });
+      } else if (u.sessionSubject?.kind === 'trainer' && u.sessionSubject.trainerId) {
+        await logoutMobileUser({
+          accountType: 'TRAINER',
+          trainerId: u.sessionSubject.trainerId,
+        });
+      } else if (u.accountType === 'GUEST' && u.googleUserId) {
         await logoutGoogleGuest(u.googleUserId);
       } else if (u.accountType === 'MEMBER' || u.accountType === 'TRAINER') {
         await logoutMobileUser({

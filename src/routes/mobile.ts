@@ -381,25 +381,7 @@ router.post('/auth/dev-login', validate(mobileDevLoginSchema), async (req, res: 
 
 router.use(authenticateMobileToken);
 
-router.post('/auth/logout', async (req: MobileAuthRequest, res: Response) => {
-  try {
-    const u = req.mobileUser!;
-    if (u.accountType === 'GUEST' && u.googleUserId) {
-      await logoutGoogleGuest(u.googleUserId);
-    } else if (u.accountType === 'MEMBER' || u.accountType === 'TRAINER') {
-      await logoutMobileUser({
-        accountType: u.accountType,
-        memberId: u.memberId,
-        trainerId: u.trainerId,
-      });
-    }
-    sendSuccess(res, { ok: true }, 'Logged out');
-  } catch (error) {
-    sendError(res, error as Error);
-  }
-});
-
-router.get('/me', async (req: MobileAuthRequest, res: Response) => {
+async function handleMobileMe(req: MobileAuthRequest, res: Response) {
   try {
     const u = req.mobileUser!;
     if (u.accountType === 'MEMBER' && u.memberId && u.gymId != null) {
@@ -423,7 +405,40 @@ router.get('/me', async (req: MobileAuthRequest, res: Response) => {
   } catch (error) {
     sendError(res, error as Error);
   }
+}
+
+router.post('/auth/logout', async (req: MobileAuthRequest, res: Response) => {
+  try {
+    const u = req.mobileUser!;
+    if (u.sessionSubject?.kind === 'google' && u.sessionSubject.googleUserId) {
+      await logoutGoogleGuest(u.sessionSubject.googleUserId);
+    } else if (u.sessionSubject?.kind === 'member' && u.sessionSubject.memberId) {
+      await logoutMobileUser({
+        accountType: 'MEMBER',
+        memberId: u.sessionSubject.memberId,
+      });
+    } else if (u.sessionSubject?.kind === 'trainer' && u.sessionSubject.trainerId) {
+      await logoutMobileUser({
+        accountType: 'TRAINER',
+        trainerId: u.sessionSubject.trainerId,
+      });
+    } else if (u.accountType === 'GUEST' && u.googleUserId) {
+      await logoutGoogleGuest(u.googleUserId);
+    } else if (u.accountType === 'MEMBER' || u.accountType === 'TRAINER') {
+      await logoutMobileUser({
+        accountType: u.accountType,
+        memberId: u.memberId,
+        trainerId: u.trainerId,
+      });
+    }
+    sendSuccess(res, { ok: true }, 'Logged out');
+  } catch (error) {
+    sendError(res, error as Error);
+  }
 });
+
+router.get('/auth/me', handleMobileMe);
+router.get('/me', handleMobileMe);
 
 /**
  * Overwrite member portrait (same Member.photoUrl field as portal).
