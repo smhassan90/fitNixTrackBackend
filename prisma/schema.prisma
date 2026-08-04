@@ -256,9 +256,12 @@ enum WorkoutBodyPart {
   TRICEPS
   BACK
   SHOULDERS
+  TRAPS
   LEGS
   ABS
   CARDIO
+  AEROBICS
+  YOGA
   FULL_BODY
 }
 

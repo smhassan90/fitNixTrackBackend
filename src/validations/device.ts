@@ -165,6 +165,12 @@ export const syncAttendanceOfflineSchema = z.object({
     })),
     lastSyncAt: z.string().optional(),
     apiKey: z.string().min(1, 'API key is required').optional(),
+    /**
+     * How punch times are encoded.
+     * - gym_local (default): device wall clock; Z/+00:00 and unix digits are gym-local (fixes +5h UTC bug)
+     * - utc: trust Z/offset/unix as true absolute UTC
+     */
+    punchTimeMode: z.enum(['gym_local', 'utc']).optional().default('gym_local'),
   }),
 });
 

@@ -352,45 +352,102 @@ export function instantFromGymWallClock(
 const DEVICE_NAIVE_DATETIME =
   /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?$/;
 
+/** ISO-like datetime with trailing Z or ±offset (captures wall-clock parts + offset). */
+const DEVICE_OFFSET_DATETIME =
+  /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})$/i;
+
+export type ParseDevicePunchOptions = {
+  /**
+   * Biometric / Python offline sync almost always sends the device wall clock.
+   * Scripts often append `Z` or build unix via timegm(), which makes local 10:00 look like 10:00 UTC
+   * and then display +5h in Asia/Karachi.
+   *
+   * When true (default for device sync):
+   * - Naive strings → gym timezone wall clock
+   * - Strings ending in Z / +00:00 → treat digits as gym wall clock (ignore fake UTC)
+   * - Strings with a real non-zero offset (+05:00, etc.) → absolute instant (trusted)
+   * - Numeric unix → reinterpret UTC Y-M-D H:M:S digits as gym wall clock
+   *
+   * When false: Z/offset and unix are trusted as true absolute UTC (legacy / true epoch).
+   */
+  deviceWallClock?: boolean;
+};
+
+function isUtcOffsetToken(offset: string): boolean {
+  return /^Z$/i.test(offset) || /^[+-]00:?00$/.test(offset);
+}
+
 /**
- * Parse a device punch time into a true UTC Date.
- * - Strings with Z / ±offset: absolute instant (trusted).
- * - Naive strings (device wall clock): interpreted in gym timezone.
- * - Numeric unix seconds/ms: treated as true epoch UTC.
+ * Parse a device punch time into a true UTC Date for storage.
+ *
+ * Device/Python sync should pass `{ deviceWallClock: true }` (the default when omitted from
+ * parseDevicePunchInstant's 3-arg form used by sync paths).
  */
 export function parseDevicePunchInstant(
   input: string | number | Date | null | undefined,
-  timeZone: string = getGymTimezone()
+  timeZone: string = getGymTimezone(),
+  options: ParseDevicePunchOptions = { deviceWallClock: true }
 ): Date | null {
   if (input == null) return null;
 
+  const deviceWallClock = options.deviceWallClock !== false;
+
   if (input instanceof Date) {
-    return Number.isNaN(input.getTime()) ? null : input;
+    if (Number.isNaN(input.getTime())) return null;
+    if (!deviceWallClock) return input;
+    // Date objects from JSON are already absolute; keep as-is.
+    return input;
   }
 
   if (typeof input === 'number') {
     const ts = input > 1e12 ? input : input * 1000;
     const d = new Date(ts);
-    return Number.isNaN(d.getTime()) ? null : d;
+    if (Number.isNaN(d.getTime())) return null;
+    if (!deviceWallClock) return d;
+    // Python/ZK scripts often encode local wall clock via timegm / UTC components.
+    return instantFromGymWallClock(
+      d.getUTCFullYear(),
+      d.getUTCMonth() + 1,
+      d.getUTCDate(),
+      d.getUTCHours(),
+      d.getUTCMinutes(),
+      d.getUTCSeconds(),
+      timeZone
+    );
   }
 
   const raw = String(input).trim();
   if (!raw) return null;
 
-  if (/(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)) {
-    const d = new Date(raw);
-    return Number.isNaN(d.getTime()) ? null : d;
+  const withOffset = DEVICE_OFFSET_DATETIME.exec(raw);
+  if (withOffset) {
+    const offset = withOffset[7];
+    const wall = {
+      y: Number(withOffset[1]),
+      mo: Number(withOffset[2]),
+      d: Number(withOffset[3]),
+      h: Number(withOffset[4]),
+      mi: Number(withOffset[5]),
+      s: withOffset[6] != null ? Number(withOffset[6]) : 0,
+    };
+
+    if (deviceWallClock && isUtcOffsetToken(offset)) {
+      return instantFromGymWallClock(wall.y, wall.mo, wall.d, wall.h, wall.mi, wall.s, timeZone);
+    }
+
+    const absolute = new Date(raw);
+    return Number.isNaN(absolute.getTime()) ? null : absolute;
   }
 
-  const m = DEVICE_NAIVE_DATETIME.exec(raw);
-  if (m) {
+  const naive = DEVICE_NAIVE_DATETIME.exec(raw);
+  if (naive) {
     return instantFromGymWallClock(
-      Number(m[1]),
-      Number(m[2]),
-      Number(m[3]),
-      Number(m[4]),
-      Number(m[5]),
-      m[6] != null ? Number(m[6]) : 0,
+      Number(naive[1]),
+      Number(naive[2]),
+      Number(naive[3]),
+      Number(naive[4]),
+      Number(naive[5]),
+      naive[6] != null ? Number(naive[6]) : 0,
       timeZone
     );
   }

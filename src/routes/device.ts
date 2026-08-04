@@ -237,7 +237,11 @@ router.post(
     try {
       const deviceId = req.deviceId!;
       const gymId = req.gymId!;
-      const { logs } = req.body;
+      const { logs, punchTimeMode = 'gym_local' } = req.body as {
+        logs: any[];
+        punchTimeMode?: 'gym_local' | 'utc';
+      };
+      const punchOpts = { deviceWallClock: punchTimeMode !== 'utc' };
 
       const device = await prisma.deviceConfig.findFirst({
         where: { id: deviceId, gymId },
@@ -289,7 +293,8 @@ router.post(
 
           const logDate = parseDevicePunchInstant(
             log.recordTime ?? log.timestamp,
-            getGymTimezone()
+            getGymTimezone(),
+            punchOpts
           );
           if (!logDate) {
             skippedNoTimestamp++;

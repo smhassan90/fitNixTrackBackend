@@ -4,9 +4,12 @@ export const WORKOUT_BODY_PARTS = [
   'TRICEPS',
   'BACK',
   'SHOULDERS',
+  'TRAPS',
   'LEGS',
   'ABS',
   'CARDIO',
+  'AEROBICS',
+  'YOGA',
   'FULL_BODY',
 ] as const;
 
@@ -18,9 +21,12 @@ export const BODY_PART_LABELS: Record<WorkoutBodyPart, string> = {
   TRICEPS: 'Triceps',
   BACK: 'Back',
   SHOULDERS: 'Shoulders',
+  TRAPS: 'Traps',
   LEGS: 'Legs',
   ABS: 'Abs',
   CARDIO: 'Cardio',
+  AEROBICS: 'Aerobics',
+  YOGA: 'Yoga',
   FULL_BODY: 'Full Body',
 };
 
