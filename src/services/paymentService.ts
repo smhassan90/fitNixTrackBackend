@@ -485,6 +485,90 @@ export async function markSignupOneTimePaidAtDate(
   return { memberId: oneTimePayment.memberId, paidDate };
 }
 
+/**
+ * Fully reverse a paid signup / one-time payment:
+ * - one-time → PENDING, clear paidDate, member.oneTimePaymentPaid = false
+ * - delete matching fee_collection (dashboard income / recent payments)
+ * - if month-1 was seeded PAID by signup, mark it unpaid (LIFO rules) and drop fee row
+ */
+export async function markSignupOneTimeUnpaid(oneTimePaymentId: number, gymId: number) {
+  const oneTimePayment = await prisma.oneTimePayment.findFirst({
+    where: { id: oneTimePaymentId, gymId },
+    include: {
+      member: {
+        select: {
+          id: true,
+          name: true,
+          membershipStart: true,
+          oneTimePaymentPaid: true,
+        },
+      },
+    },
+  });
+
+  if (!oneTimePayment) {
+    throw new NotFoundError('One-time payment', oneTimePaymentId);
+  }
+  if (oneTimePayment.status !== 'PAID') {
+    throw new ValidationError('Only paid signup payments can be marked unpaid');
+  }
+
+  const memberId = oneTimePayment.memberId;
+  const month1Key = oneTimePayment.member.membershipStart
+    ? formatMonth(oneTimePayment.member.membershipStart)
+    : null;
+
+  // If signup seeded month-1 as PAID, reverse that installment first (also clears its fee row).
+  if (month1Key) {
+    const month1 = await prisma.payment.findFirst({
+      where: { memberId, gymId, month: month1Key, status: 'PAID' },
+      orderBy: { id: 'asc' },
+    });
+    if (month1) {
+      const lastPaid = await prisma.payment.findFirst({
+        where: { memberId, gymId, status: 'PAID' },
+        orderBy: [{ dueDate: 'desc' }, { id: 'desc' }],
+      });
+      if (lastPaid && lastPaid.id === month1.id) {
+        await markLastPaidInstallmentUnpaid(month1.id, gymId);
+      } else if (lastPaid && lastPaid.id !== month1.id) {
+        throw new ValidationError(
+          'Unmark later monthly installments first, then undo the signup payment.'
+        );
+      }
+    }
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.oneTimePayment.update({
+      where: { id: oneTimePaymentId },
+      data: { status: 'PENDING', paidDate: null },
+    });
+    await tx.member.update({
+      where: { id: memberId },
+      data: { oneTimePaymentPaid: false },
+    });
+    await removeFeeCollectionBySource(tx, 'ONE_TIME_PAYMENT', oneTimePaymentId, gymId);
+  });
+
+  await markOverduePayments(gymId);
+
+  return prisma.oneTimePayment.findFirst({
+    where: { id: oneTimePaymentId, gymId },
+    include: {
+      member: {
+        select: {
+          id: true,
+          legacyMemberId: true,
+          name: true,
+          email: true,
+          phone: true,
+        },
+      },
+    },
+  });
+}
+
 /** After signup one-time is paid, record month 1 as paid and open the next billable month. */
 export async function seedMonthlyBillingAfterOneTimePaid(
   memberId: number,
@@ -1531,6 +1615,27 @@ async function assertInstallmentsPayableInOrder(
   throw new ValidationError(
     `Pay installments in order starting from ${earliest?.month ?? 'the oldest due date'}.`
   );
+}
+
+/**
+ * Delete a monthly payment row and reverse its cash collection so dashboard
+ * income / recent payments no longer include it.
+ */
+export async function deleteMonthlyPaymentAndReverseCollection(
+  paymentId: number,
+  gymId: number
+): Promise<void> {
+  const payment = await prisma.payment.findFirst({
+    where: { id: paymentId, gymId },
+  });
+  if (!payment) {
+    throw new NotFoundError('Payment', paymentId);
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await removeFeeCollectionBySource(tx, 'MONTHLY_PAYMENT', paymentId, gymId);
+    await tx.payment.delete({ where: { id: paymentId } });
+  });
 }
 
 /**

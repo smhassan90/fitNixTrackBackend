@@ -200,6 +200,72 @@ export async function removeFeeCollectionBySource(
   });
 }
 
+/**
+ * Remove fee_collections whose source payment is missing or no longer PAID.
+ * Heals dashboard income / recent payments after incomplete undo/delete.
+ */
+const purgeCache = new Map<number, number>();
+const PURGE_CACHE_TTL_MS = 15_000;
+
+export async function purgeStaleFeeCollections(gymId: number): Promise<number> {
+  const now = Date.now();
+  const last = purgeCache.get(gymId);
+  if (last != null && now - last < PURGE_CACHE_TTL_MS) {
+    return 0;
+  }
+  purgeCache.set(gymId, now);
+
+  const rows = await prisma.feeCollection.findMany({
+    where: { gymId },
+    select: { id: true, sourceType: true, sourceId: true },
+  });
+  if (rows.length === 0) return 0;
+
+  const monthlyIds = [
+    ...new Set(
+      rows.filter((r) => r.sourceType === 'MONTHLY_PAYMENT').map((r) => r.sourceId)
+    ),
+  ];
+  const oneTimeIds = [
+    ...new Set(
+      rows.filter((r) => r.sourceType === 'ONE_TIME_PAYMENT').map((r) => r.sourceId)
+    ),
+  ];
+
+  const [paidMonthly, paidOneTime] = await Promise.all([
+    monthlyIds.length
+      ? prisma.payment.findMany({
+          where: { gymId, id: { in: monthlyIds }, status: 'PAID' },
+          select: { id: true },
+        })
+      : Promise.resolve([] as { id: number }[]),
+    oneTimeIds.length
+      ? prisma.oneTimePayment.findMany({
+          where: { gymId, id: { in: oneTimeIds }, status: 'PAID' },
+          select: { id: true },
+        })
+      : Promise.resolve([] as { id: number }[]),
+  ]);
+
+  const validMonthly = new Set(paidMonthly.map((p) => p.id));
+  const validOneTime = new Set(paidOneTime.map((p) => p.id));
+
+  const staleIds = rows
+    .filter((r) =>
+      r.sourceType === 'MONTHLY_PAYMENT'
+        ? !validMonthly.has(r.sourceId)
+        : !validOneTime.has(r.sourceId)
+    )
+    .map((r) => r.id);
+
+  if (staleIds.length === 0) return 0;
+
+  await prisma.feeCollection.deleteMany({
+    where: { gymId, id: { in: staleIds } },
+  });
+  return staleIds.length;
+}
+
 export type CollectedSummaryInRange = {
   totalAmount: number;
   transactionCount: number;
@@ -213,6 +279,8 @@ export async function getCollectedSummaryInDateRange(
   rangeStart: Date,
   rangeEndExclusive: Date
 ): Promise<CollectedSummaryInRange> {
+  await purgeStaleFeeCollections(gymId);
+
   const rows = await prisma.feeCollection.findMany({
     where: {
       gymId,
@@ -284,6 +352,8 @@ export async function getCollectedAmountInDateRange(
   rangeStart: Date,
   rangeEndExclusive: Date
 ): Promise<number> {
+  await purgeStaleFeeCollections(gymId);
+
   const agg = await prisma.feeCollection.aggregate({
     where: {
       gymId,
@@ -320,6 +390,8 @@ export async function getRecentFeeCollections(
   gymId: number,
   limit = 10
 ): Promise<FeeCollectionRow[]> {
+  await purgeStaleFeeCollections(gymId);
+
   const rows = await prisma.feeCollection.findMany({
     where: { gymId },
     include: {

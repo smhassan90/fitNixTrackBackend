@@ -68,6 +68,12 @@ export const markOneTimePaidSchema = z.object({
     .default({}),
 });
 
+export const markOneTimeUnpaidSchema = z.object({
+  params: z.object({
+    id: z.string().regex(/^\d+$/, 'Payment ID must be a number').transform((val) => parseInt(val, 10)),
+  }),
+});
+
 export const deletePaymentSchema = z.object({
   params: z.object({
     id: z.string().regex(/^\d+$/, 'Payment ID must be a number').transform((val) => parseInt(val, 10)),

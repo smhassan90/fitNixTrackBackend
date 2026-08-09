@@ -14,6 +14,7 @@ import {
   getPaymentSchema,
   markPaidSchema,
   markOneTimePaidSchema,
+  markOneTimeUnpaidSchema,
   deletePaymentSchema,
   getMemberPaymentSummariesSchema,
   bulkMarkPaidSchema,
@@ -33,6 +34,8 @@ import {
   markMonthlyInstallmentByYearMonth,
   markLastPaidInstallmentUnpaid,
   markSignupOneTimePaidAtDate,
+  markSignupOneTimeUnpaid,
+  deleteMonthlyPaymentAndReverseCollection,
 } from '../services/paymentService';
 import {
   buildMonthlyPaymentReceipt,
@@ -449,6 +452,23 @@ router.patch(
   }
 );
 
+// PATCH /api/payments/one-time/:id/mark-unpaid — reverse signup collection completely
+router.patch(
+  '/one-time/:id/mark-unpaid',
+  requireGymPermission('gym.payments.delete'),
+  validate(markOneTimeUnpaidSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const id = parseInt(req.params.id, 10);
+      const updated = await markSignupOneTimeUnpaid(id, gymId);
+      sendSuccess(res, mapRowMemberNumber(updated), 'Signup payment reversed');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
 // GET /api/payments/one-time/:id/receipt - Receipt for signup/admission payment
 router.get(
   '/one-time/:id/receipt',
@@ -638,6 +658,17 @@ router.put(
         return;
       }
 
+      // Unpaying via generic update must use mark-unpaid (fee collection + LIFO rules)
+      if (
+        status !== undefined &&
+        existingPayment.status === 'PAID' &&
+        status !== 'PAID'
+      ) {
+        const updated = await markLastPaidInstallmentUnpaid(id, gymId);
+        sendSuccess(res, mapRowMemberNumber(updated), 'Payment marked as unpaid');
+        return;
+      }
+
       // Update payment
       const updateData: any = {};
       if (month !== undefined) updateData.month = month;
@@ -815,18 +846,7 @@ router.delete(
       const gymId = req.gymId!;
       const id = parseInt(req.params.id, 10);
 
-      const payment = await prisma.payment.findFirst({
-        where: { id: id as any, gymId: gymId as any },
-      });
-
-      if (!payment) {
-        sendError(res, new NotFoundError('Payment', id));
-        return;
-      }
-
-      await prisma.payment.delete({
-        where: { id: id as any },
-      });
+      await deleteMonthlyPaymentAndReverseCollection(id, gymId);
 
       sendSuccess(res, { message: 'Payment deleted successfully' });
     } catch (error) {
