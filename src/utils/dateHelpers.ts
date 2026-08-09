@@ -457,6 +457,40 @@ export function parseDevicePunchInstant(
 }
 
 /**
+ * Resolve punch time from offline sync / termux_sync.py payload.
+ *
+ * termux_sync sends:
+ * - `timestamp`: real unix epoch from timezone-aware datetime (correct)
+ * - `recordTime`: wall-clock digits with a fake `Z` suffix (looks like UTC, is not)
+ *
+ * Prefer `timestamp` when present so we do not treat local 10:30 as 10:30 UTC (+5h in PKT).
+ * Fall back to `recordTime` / string fields with gym wall-clock interpretation.
+ */
+export function resolveOfflineDevicePunchInstant(
+  log: {
+    recordTime?: string | null;
+    timestamp?: number | string | null;
+  },
+  timeZone: string = getGymTimezone(),
+  punchTimeMode: 'gym_local' | 'utc' = 'gym_local'
+): Date | null {
+  const forceUtc = punchTimeMode === 'utc';
+
+  if (typeof log.timestamp === 'number' && Number.isFinite(log.timestamp)) {
+    // True epoch from Python aware.timestamp() / device libraries
+    return parseDevicePunchInstant(log.timestamp, timeZone, { deviceWallClock: false });
+  }
+
+  if (typeof log.timestamp === 'string' && /^\d+(\.\d+)?$/.test(log.timestamp.trim())) {
+    return parseDevicePunchInstant(Number(log.timestamp), timeZone, { deviceWallClock: false });
+  }
+
+  return parseDevicePunchInstant(log.recordTime ?? log.timestamp, timeZone, {
+    deviceWallClock: !forceUtc,
+  });
+}
+
+/**
  * UTC instant of the first millisecond that falls on `dateStr` (YYYY-MM-DD) in the gym wall calendar.
  * Used for inclusive date-range filters on `createdAt` / `paidDate`.
  */

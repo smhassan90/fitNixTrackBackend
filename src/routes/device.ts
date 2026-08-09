@@ -31,7 +31,7 @@ import { NotFoundError, BadRequestError } from '../utils/errors';
 import { ZKTService, syncAttendanceFromDevice, syncUsersFromDevice, autoCheckoutIncompleteRecords } from '../services/zktService';
 import { ensureGymSyncApiKey } from '../services/gymSyncApiKeyService';
 import { generateSyncApiKey } from '../utils/syncApiKey';
-import { parseDate, parseDevicePunchInstant, getGymTimezone } from '../utils/dateHelpers';
+import { parseDate, parseDevicePunchInstant, resolveOfflineDevicePunchInstant, getGymTimezone } from '../utils/dateHelpers';
 import { formatDeviceForPortal, formatSyncResultDto } from '../utils/deviceDto';
 import {
   applyAttendancePolicies,
@@ -241,7 +241,6 @@ router.post(
         logs: any[];
         punchTimeMode?: 'gym_local' | 'utc';
       };
-      const punchOpts = { deviceWallClock: punchTimeMode !== 'utc' };
 
       const device = await prisma.deviceConfig.findFirst({
         where: { id: deviceId, gymId },
@@ -270,6 +269,7 @@ router.post(
       let skippedNoTimestamp = 0;
       const pendingDeviceUserIds = new Set<string>();
       const deviceUserIdMap = await buildDeviceUserIdentifierMap(deviceId);
+      const gymTz = getGymTimezone();
 
       for (const log of logs) {
         try {
@@ -291,11 +291,8 @@ router.post(
 
           deviceUserId = resolveCanonicalDeviceUserId(deviceUserIdMap, deviceUserId);
 
-          const logDate = parseDevicePunchInstant(
-            log.recordTime ?? log.timestamp,
-            getGymTimezone(),
-            punchOpts
-          );
+          // Prefer numeric timestamp (true epoch from termux_sync) over fake-Z recordTime.
+          const logDate = resolveOfflineDevicePunchInstant(log, gymTz, punchTimeMode);
           if (!logDate) {
             skippedNoTimestamp++;
             continue;
