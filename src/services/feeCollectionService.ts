@@ -207,6 +207,40 @@ export async function removeFeeCollectionBySource(
 const purgeCache = new Map<number, number>();
 const PURGE_CACHE_TTL_MS = 15_000;
 
+/** Drop cached purge result so the next dashboard read re-checks the ledger. */
+export function invalidatePurgeCache(gymId: number): void {
+  purgeCache.delete(gymId);
+}
+
+/**
+ * Remove every ledger row tied to a signup / one-time payment, including orphan
+ * SIGNUP_FEE / ADMISSION_ONLY rows keyed only by member + collected date.
+ */
+export async function removeSignupFeeCollectionsForOneTimePayment(
+  db: Tx | typeof prisma,
+  params: {
+    gymId: number;
+    memberId: number;
+    oneTimePaymentId: number;
+    paidDate?: Date | null;
+  }
+): Promise<void> {
+  const { gymId, memberId, oneTimePaymentId, paidDate } = params;
+
+  await removeFeeCollectionBySource(db, 'ONE_TIME_PAYMENT', oneTimePaymentId, gymId);
+
+  const orphanWhere: Prisma.FeeCollectionWhereInput = {
+    gymId,
+    memberId,
+    category: { in: ['SIGNUP_FEE', 'ADMISSION_ONLY'] },
+  };
+  if (paidDate) {
+    orphanWhere.collectedAt = { gte: normalizeCollectedAt(paidDate) };
+  }
+
+  await db.feeCollection.deleteMany({ where: orphanWhere });
+}
+
 export async function purgeStaleFeeCollections(gymId: number): Promise<number> {
   const now = Date.now();
   const last = purgeCache.get(gymId);
@@ -369,6 +403,8 @@ export async function getRevenueByBillingMonth(
   startMonth: string,
   endMonth: string
 ): Promise<Record<string, number>> {
+  await purgeStaleFeeCollections(gymId);
+
   const rows = await prisma.feeCollection.findMany({
     where: {
       gymId,

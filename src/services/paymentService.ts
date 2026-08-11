@@ -16,9 +16,11 @@ import {
 } from '../utils/dateHelpers';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import {
+  invalidatePurgeCache,
   recordMonthlyFeeCollection,
   recordOneTimeFeeCollection,
   removeFeeCollectionBySource,
+  removeSignupFeeCollectionsForOneTimePayment,
 } from './feeCollectionService';
 
 type Tx = Prisma.TransactionClient;
@@ -485,6 +487,121 @@ export async function markSignupOneTimePaidAtDate(
   return { memberId: oneTimePayment.memberId, paidDate };
 }
 
+type SignupCoverage = {
+  oneTimePaymentId: number;
+  paidDate: Date | null;
+};
+
+/** Paid signup one-time that covers month-1 (admission + first month), if any. */
+async function getSignupCoverageForBillingMonth(
+  db: Tx | typeof prisma,
+  gymId: number,
+  memberId: number,
+  billingMonth: string
+): Promise<SignupCoverage | null> {
+  const member = await db.member.findFirst({
+    where: { id: memberId, gymId },
+    select: { membershipStart: true, oneTimePaymentPaid: true },
+  });
+  if (!member?.oneTimePaymentPaid || !member.membershipStart) {
+    return null;
+  }
+  if (formatMonth(member.membershipStart) !== billingMonth) {
+    return null;
+  }
+
+  const signup = await db.oneTimePayment.findFirst({
+    where: { memberId, gymId, status: 'PAID' },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, totalAmount: true, admissionFee: true, paidDate: true },
+  });
+  if (!signup || signup.totalAmount <= signup.admissionFee + 0.01) {
+    return null;
+  }
+
+  return { oneTimePaymentId: signup.id, paidDate: signup.paidDate };
+}
+
+async function reverseSignupOneTimeInTx(
+  tx: Tx,
+  gymId: number,
+  memberId: number,
+  oneTimePaymentId: number,
+  paidDate: Date | null
+): Promise<void> {
+  await tx.oneTimePayment.update({
+    where: { id: oneTimePaymentId },
+    data: { status: 'PENDING', paidDate: null },
+  });
+  await tx.member.update({
+    where: { id: memberId },
+    data: { oneTimePaymentPaid: false },
+  });
+  await removeSignupFeeCollectionsForOneTimePayment(tx, {
+    gymId,
+    memberId,
+    oneTimePaymentId,
+    paidDate,
+  });
+}
+
+async function revertMonthlyInstallmentInTx(
+  tx: Tx,
+  payment: { id: number; memberId: number; dueDate: Date },
+  gymId: number,
+  options: { cascadeSignup?: boolean } = {}
+): Promise<void> {
+  const tz = getGymTimezone();
+  const newStatus = initialOpenInstallmentStatus(payment.dueDate, tz);
+
+  await tx.payment.deleteMany({
+    where: {
+      memberId: payment.memberId,
+      gymId,
+      status: { in: ['PENDING', 'OVERDUE'] },
+      dueDate: { gt: payment.dueDate },
+    },
+  });
+
+  await tx.payment.update({
+    where: { id: payment.id },
+    data: {
+      status: newStatus,
+      paidDate: null,
+    },
+  });
+
+  await removeFeeCollectionBySource(tx, 'MONTHLY_PAYMENT', payment.id, gymId);
+
+  if (options.cascadeSignup === false) {
+    return;
+  }
+
+  const paymentRow = await tx.payment.findUnique({
+    where: { id: payment.id },
+    select: { month: true },
+  });
+  if (!paymentRow?.month) {
+    return;
+  }
+
+  const signup = await getSignupCoverageForBillingMonth(
+    tx,
+    gymId,
+    payment.memberId,
+    paymentRow.month
+  );
+  if (signup) {
+    await reverseSignupOneTimeInTx(
+      tx,
+      gymId,
+      payment.memberId,
+      signup.oneTimePaymentId,
+      signup.paidDate
+    );
+  }
+}
+
 /**
  * Fully reverse a paid signup / one-time payment:
  * - one-time → PENDING, clear paidDate, member.oneTimePaymentPaid = false
@@ -518,7 +635,8 @@ export async function markSignupOneTimeUnpaid(oneTimePaymentId: number, gymId: n
     ? formatMonth(oneTimePayment.member.membershipStart)
     : null;
 
-  // If signup seeded month-1 as PAID, reverse that installment first (also clears its fee row).
+  let month1ToRevert: { id: number; memberId: number; dueDate: Date } | null = null;
+
   if (month1Key) {
     const month1 = await prisma.payment.findFirst({
       where: { memberId, gymId, month: month1Key, status: 'PAID' },
@@ -530,7 +648,7 @@ export async function markSignupOneTimeUnpaid(oneTimePaymentId: number, gymId: n
         orderBy: [{ dueDate: 'desc' }, { id: 'desc' }],
       });
       if (lastPaid && lastPaid.id === month1.id) {
-        await markLastPaidInstallmentUnpaid(month1.id, gymId);
+        month1ToRevert = month1;
       } else if (lastPaid && lastPaid.id !== month1.id) {
         throw new ValidationError(
           'Unmark later monthly installments first, then undo the signup payment.'
@@ -540,17 +658,21 @@ export async function markSignupOneTimeUnpaid(oneTimePaymentId: number, gymId: n
   }
 
   await prisma.$transaction(async (tx) => {
-    await tx.oneTimePayment.update({
-      where: { id: oneTimePaymentId },
-      data: { status: 'PENDING', paidDate: null },
-    });
-    await tx.member.update({
-      where: { id: memberId },
-      data: { oneTimePaymentPaid: false },
-    });
-    await removeFeeCollectionBySource(tx, 'ONE_TIME_PAYMENT', oneTimePaymentId, gymId);
+    if (month1ToRevert) {
+      await revertMonthlyInstallmentInTx(tx, month1ToRevert, gymId, { cascadeSignup: false });
+    }
+
+    await reverseSignupOneTimeInTx(
+      tx,
+      gymId,
+      memberId,
+      oneTimePaymentId,
+      oneTimePayment.paidDate
+    );
   });
 
+  invalidatePurgeCache(gymId);
+  await syncMissingNextMonthlyInstallment(memberId, gymId);
   await markOverduePayments(gymId);
 
   return prisma.oneTimePayment.findFirst({
@@ -1636,6 +1758,8 @@ export async function deleteMonthlyPaymentAndReverseCollection(
     await removeFeeCollectionBySource(tx, 'MONTHLY_PAYMENT', paymentId, gymId);
     await tx.payment.delete({ where: { id: paymentId } });
   });
+
+  invalidatePurgeCache(gymId);
 }
 
 /**
@@ -1733,30 +1857,11 @@ export async function markLastPaidInstallmentUnpaid(paymentId: number, gymId: nu
     );
   }
 
-  const tz = getGymTimezone();
-  const newStatus = initialOpenInstallmentStatus(payment.dueDate, tz);
-
   await prisma.$transaction(async (tx) => {
-    await tx.payment.deleteMany({
-      where: {
-        memberId: payment.memberId,
-        gymId,
-        status: { in: ['PENDING', 'OVERDUE'] },
-        dueDate: { gt: payment.dueDate },
-      },
-    });
-
-    await tx.payment.update({
-      where: { id: paymentId },
-      data: {
-        status: newStatus,
-        paidDate: null,
-      },
-    });
-
-    await removeFeeCollectionBySource(tx, 'MONTHLY_PAYMENT', paymentId, gymId);
+    await revertMonthlyInstallmentInTx(tx, payment, gymId, { cascadeSignup: true });
   });
 
+  invalidatePurgeCache(gymId);
   await syncMissingNextMonthlyInstallment(payment.memberId, gymId);
   await markOverduePayments(gymId);
 

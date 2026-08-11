@@ -20,6 +20,7 @@ import {
 import {
   getCollectedAmountInDateRange,
   getRecentFeeCollections,
+  purgeStaleFeeCollections,
 } from '../services/feeCollectionService';
 import {
   getCurrentlyInGymMembers,
@@ -159,10 +160,12 @@ router.get(
         startOfNextGymCalendarDayUtc(todayStr, tz)
       ),
       getRecentFeeCollections(gymId, 10),
-      prisma.feeCollection.findMany({
-        where: { gymId, billingMonth: { not: null } },
-        select: { billingMonth: true, amount: true },
-      }),
+      purgeStaleFeeCollections(gymId).then(() =>
+        prisma.feeCollection.findMany({
+          where: { gymId, billingMonth: { not: null } },
+          select: { billingMonth: true, amount: true },
+        })
+      ),
     ]);
 
     // Get basic counts

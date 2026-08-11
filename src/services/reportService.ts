@@ -15,6 +15,7 @@ import {
   getCollectedSummaryInDateRange,
   getRevenueByBillingMonth,
   listFeeCollections,
+  purgeStaleFeeCollections,
   FeeCollectionRow,
 } from './feeCollectionService';
 
@@ -253,6 +254,8 @@ export async function getPaymentsReceivedDaily(
 
   const rangeStart = startOfGymCalendarDayUtc(startDate, tz);
   const rangeEndExclusive = startOfNextGymCalendarDayUtc(endDate, tz);
+
+  await purgeStaleFeeCollections(gymId);
 
   const collections = await prisma.feeCollection.findMany({
     where: {
