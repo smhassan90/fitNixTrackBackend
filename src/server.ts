@@ -66,7 +66,10 @@ const limiter = rateLimit({
   legacyHeaders: false,
   // Tablet/biometric offline sync endpoints are API-key authenticated and polled
   // frequently — don't count them against the per-IP browser limit.
-  skip: (req) => /^\/api\/device\/\d+\/(sync-attendance-offline|sync-users-offline|test-backend-offline)$/.test(req.path),
+  skip: (req) =>
+    /^\/api\/device\/\d+\/(sync-attendance-offline|sync-users-offline|test-backend-offline|access-control-offline)$/.test(
+      req.path
+    ),
   // Return JSON in the app's standard error shape (not a plain-text body),
   // so clients parsing { success, error } don't choke on a 429.
   handler: (_req, res) => {

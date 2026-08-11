@@ -56,7 +56,8 @@ MAX_CONSECUTIVE_DEVICE_ERRORS = 10
 DEVICE_ERROR_BACKOFF_BASE_SEC = 3.0
 DEVICE_ERROR_BACKOFF_MAX_SEC = 60.0
 EPOCH_SYNC_AT = "1970-01-01T00:00:00.000Z"
-SCRIPT_VERSION = "1.7.2"  # Asia/Karachi IANA + Termux fallback
+SCRIPT_VERSION = "1.8.0"  # Overdue access control via Access Groups
+ACCESS_CONTROL_MIN_INTERVAL_SEC = 5 * 60
 
 # =============================================================================
 # USER SETTINGS — edit these values on the tablet (only place to change config)
@@ -74,6 +75,14 @@ PREFER_UDP = False               # False = TCP (stable on tablet)
 
 # IANA timezone for punch times (Pakistan). Fallback to UTC+5 if tzdata missing on Termux.
 DEVICE_TIMEZONE = "Asia/Karachi"
+
+# Overdue / inactive members → move to blocked Access Group (templates stay on device).
+# Device setup (once): Access Control → create Group 2 with NO valid time periods;
+# keep Group 1 as full-day access for paid members. Then enable below.
+ACCESS_CONTROL_ENABLED = True
+ACTIVE_ACCESS_GROUP = "1"
+BLOCKED_ACCESS_GROUP = "2"
+ACCESS_CONTROL_INTERVAL_SEC = 300.0  # how often to reconcile groups (5 min)
 # =============================================================================
 
 LOG = logging.getLogger("fitnix-termux")
@@ -91,6 +100,10 @@ class Config:
     prefer_udp: bool = True
     device_timezone: str = ""
     device_tz: timezone | ZoneInfo = field(default_factory=lambda: timezone.utc)
+    access_control_enabled: bool = True
+    active_access_group: str = "1"
+    blocked_access_group: str = "2"
+    access_control_interval_sec: float = 300.0
 
 
 @dataclass
@@ -108,6 +121,9 @@ class SyncState:
   session_errors: int = 0
   consecutive_device_errors: int = 0
   device_error_backoff_until: float = 0.0
+  last_access_sync_at: float = 0.0
+  access_signature: str | None = None
+  access_blocked_uids: list[str] = field(default_factory=list)
 
   def save(self, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -125,6 +141,9 @@ class SyncState:
       "session_errors": self.session_errors,
       "consecutive_device_errors": self.consecutive_device_errors,
       "device_error_backoff_until": self.device_error_backoff_until,
+      "last_access_sync_at": self.last_access_sync_at,
+      "access_signature": self.access_signature,
+      "access_blocked_uids": self.access_blocked_uids,
     }
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -149,6 +168,9 @@ class SyncState:
       session_errors=int(data.get("session_errors", 0)),
       consecutive_device_errors=int(data.get("consecutive_device_errors", 0)),
       device_error_backoff_until=float(data.get("device_error_backoff_until", 0)),
+      last_access_sync_at=float(data.get("last_access_sync_at", 0)),
+      access_signature=data.get("access_signature"),
+      access_blocked_uids=list(data.get("access_blocked_uids", [])),
     )
 
 
@@ -177,6 +199,13 @@ def load_config() -> Config:
     prefer_udp=bool(PREFER_UDP),
     device_timezone=tz_label,
     device_tz=device_tz,
+    access_control_enabled=bool(ACCESS_CONTROL_ENABLED),
+    active_access_group=str(ACTIVE_ACCESS_GROUP).strip() or "1",
+    blocked_access_group=str(BLOCKED_ACCESS_GROUP).strip() or "2",
+    access_control_interval_sec=max(
+      float(ACCESS_CONTROL_MIN_INTERVAL_SEC),
+      float(ACCESS_CONTROL_INTERVAL_SEC),
+    ),
   )
 
 
@@ -540,6 +569,83 @@ class DeviceSession:
 
     return self.last_users, attendance
 
+  def set_user_access_group(self, user, group_id: str, *, lock_device: bool = True) -> bool:
+    """Update Access Group only — keeps face/finger templates on the device."""
+    if not self.conn and not self.connect(load_users=False):
+      return False
+    assert self.conn is not None
+    target = str(group_id).strip()
+    current = str(getattr(user, "group_id", "") or "").strip()
+    if current == target:
+      return False
+    try:
+      was_enabled = bool(getattr(self.conn, "is_enabled", True))
+      if lock_device and was_enabled:
+        self.conn.disable_device()
+      self.conn.set_user(
+        uid=user.uid,
+        name=user.name or "",
+        privilege=int(getattr(user, "privilege", 0) or 0),
+        password=getattr(user, "password", "") or "",
+        group_id=target,
+        user_id=str(user.user_id),
+        card=int(getattr(user, "card", 0) or 0),
+      )
+      if lock_device:
+        if hasattr(self.conn, "refresh_data"):
+          try:
+            self.conn.refresh_data()
+          except Exception:
+            pass
+        if was_enabled:
+          self.conn.enable_device()
+      user.group_id = target
+      LOG.info(
+        "Access group uid=%s userId=%s %s -> %s (%s)",
+        user.uid,
+        user.user_id,
+        current or "(empty)",
+        target,
+        user.name or "",
+      )
+      return True
+    except Exception as e:
+      LOG.error("Failed to set access group for uid=%s: %s", user.uid, e)
+      if lock_device:
+        try:
+          self.conn.enable_device()
+        except Exception:
+          pass
+      return False
+
+  def apply_access_group_updates(self, updates: list[tuple[Any, str]]) -> int:
+    """Apply many group changes under one disable/enable cycle."""
+    if not updates:
+      return 0
+    if not self.conn and not self.connect(load_users=False):
+      return 0
+    assert self.conn is not None
+    changed = 0
+    was_enabled = bool(getattr(self.conn, "is_enabled", True))
+    try:
+      if was_enabled:
+        self.conn.disable_device()
+      for user, group_id in updates:
+        if self.set_user_access_group(user, group_id, lock_device=False):
+          changed += 1
+      if hasattr(self.conn, "refresh_data"):
+        try:
+          self.conn.refresh_data()
+        except Exception:
+          pass
+    finally:
+      if was_enabled:
+        try:
+          self.conn.enable_device()
+        except Exception:
+          pass
+    return changed
+
   def _try_tcp_fallback(self, force: bool = False) -> list:
     if not self.use_udp:
       if not force and time.time() - self._last_tcp_attempt < TCP_RECONNECT_COOLDOWN_SEC:
@@ -676,6 +782,179 @@ def sync_users(cfg: Config, state: SyncState, users: list, device_reported: int 
   else:
     msg = body.get("error", {}).get("message", f"HTTP {code}")
     LOG.error("User sync failed: %s", msg)
+
+
+def _unwrap_api_data(body: dict) -> dict:
+  data = body.get("data")
+  return data if isinstance(data, dict) else body
+
+
+def access_control_signature(blocked: list[dict], allowed: list[dict]) -> str:
+  blocked_part = ",".join(
+    sorted(f"{b.get('deviceUserId')}:{b.get('reason')}" for b in blocked)
+  )
+  allowed_part = ",".join(sorted(str(a.get("deviceUserId")) for a in allowed))
+  raw = f"b={blocked_part}|a={allowed_part}"
+  return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def plan_access_group_updates(
+  device_users: list,
+  blocked: list[dict],
+  allowed: list[dict],
+  active_group: str,
+  blocked_group: str,
+) -> tuple[list[tuple[Any, str, str, str]], list[str]]:
+  """
+  Pure planner: returns (updates, missing_blocked_uids).
+  Each update is (user, target_group, current_group, action) where action is
+  'block' or 'restore'.
+  """
+  active = str(active_group).strip() or "1"
+  blocked_g = str(blocked_group).strip() or "2"
+  by_uid = {str(u.uid): u for u in device_users}
+  updates: list[tuple[Any, str, str, str]] = []
+  missing: list[str] = []
+
+  for entry in blocked:
+    uid = str(entry.get("deviceUserId") or "").strip()
+    user = by_uid.get(uid)
+    if not user:
+      missing.append(uid)
+      continue
+    current = str(getattr(user, "group_id", "") or "").strip()
+    if current != blocked_g:
+      updates.append((user, blocked_g, current, "block"))
+
+  for entry in allowed:
+    uid = str(entry.get("deviceUserId") or "").strip()
+    user = by_uid.get(uid)
+    if not user:
+      continue
+    current = str(getattr(user, "group_id", "") or "").strip()
+    if current == blocked_g:
+      updates.append((user, active, current, "restore"))
+
+  return updates, missing
+
+
+def fetch_access_control(cfg: Config) -> dict | None:
+  code, body = http_post(
+    cfg,
+    f"/api/device/{cfg.device_id}/access-control-offline",
+    {
+      "apiKey": cfg.api_key,
+      "activeGroup": cfg.active_access_group,
+      "blockedGroup": cfg.blocked_access_group,
+    },
+  )
+  if not (200 <= code < 300 and body.get("success")):
+    msg = body.get("error", {}).get("message", f"HTTP {code}")
+    LOG.error("Access control fetch failed: %s", msg)
+    if body.get("error"):
+      LOG.error("Access control error details: %s", body.get("error"))
+    return None
+  return _unwrap_api_data(body)
+
+
+def sync_access_control(
+  cfg: Config,
+  state: SyncState,
+  device: DeviceSession,
+  users: list | None = None,
+  force: bool = False,
+  dry_run: bool = False,
+) -> int:
+  """Move overdue/inactive mapped users to blocked Access Group; restore after payment."""
+  if not cfg.access_control_enabled:
+    LOG.info("Access control disabled in settings — skip")
+    return 0
+
+  now = time.time()
+  if (
+    not force
+    and not dry_run
+    and state.last_access_sync_at > 0
+    and now - state.last_access_sync_at < cfg.access_control_interval_sec
+  ):
+    return 0
+
+  payload = fetch_access_control(cfg)
+  if payload is None:
+    return 0
+
+  blocked = list(payload.get("blocked") or [])
+  allowed = list(payload.get("allowed") or [])
+  groups = payload.get("groups") or {}
+  active_group = str(groups.get("active") or cfg.active_access_group).strip() or "1"
+  blocked_group = str(groups.get("blocked") or cfg.blocked_access_group).strip() or "2"
+
+  sig = access_control_signature(blocked, allowed)
+  device_users = users if users is not None else device.last_users
+  if not device_users and not dry_run:
+    device_users = device._refresh_user_cache(force=True)
+  device_users = device_users or []
+
+  planned, missing = plan_access_group_updates(
+    device_users, blocked, allowed, active_group, blocked_group
+  )
+
+  for uid in missing:
+    reason = next(
+      (b.get("memberName") or b.get("reason") for b in blocked if str(b.get("deviceUserId")) == uid),
+      "?",
+    )
+    LOG.warning("Blocked member uid=%s (%s) not found on device — skip", uid, reason)
+
+  if dry_run:
+    LOG.info(
+      "DRY-RUN access control: backend blocked=%s allowed=%s; device users=%s; would change=%s; missing=%s",
+      len(blocked),
+      len(allowed),
+      len(device_users),
+      len(planned),
+      len(missing),
+    )
+    for entry in blocked[:20]:
+      LOG.info(
+        "DRY-RUN backend BLOCK uid=%s member=%s reason=%s",
+        entry.get("deviceUserId"),
+        entry.get("memberName"),
+        entry.get("reason"),
+      )
+    if len(blocked) > 20:
+      LOG.info("DRY-RUN ... +%s more blocked", len(blocked) - 20)
+    for user, target, current, action in planned:
+      LOG.info(
+        "DRY-RUN would %s uid=%s userId=%s name=%r group %s -> %s",
+        action,
+        user.uid,
+        user.user_id,
+        user.name or "",
+        current or "(empty)",
+        target,
+      )
+    if not planned:
+      LOG.info("DRY-RUN: no group changes needed (or device users unavailable)")
+    return len(planned)
+
+  apply_pairs = [(user, target) for user, target, _current, _action in planned]
+  changed = device.apply_access_group_updates(apply_pairs)
+
+  state.last_access_sync_at = now
+  state.access_signature = sig
+  state.access_blocked_uids = [
+    str(b.get("deviceUserId")) for b in blocked if b.get("deviceUserId") is not None
+  ]
+  LOG.info(
+    "Access control: %s blocked, %s allowed, %s group change(s) (active=%s blocked=%s)",
+    len(blocked),
+    len(allowed),
+    changed,
+    active_group,
+    blocked_group,
+  )
+  return changed
 
 
 def prepare_upload_batch(
@@ -819,6 +1098,7 @@ def run_cycle(cfg: Config, state: SyncState, device: DeviceSession) -> tuple[int
     LOG.debug("Users unchanged (%s), skipping backend sync", len(users))
 
   delivered = sync_attendance(cfg, state, attendance, users)
+  access_changed = sync_access_control(cfg, state, device, users)
 
   had_new = False
   if attendance:
@@ -838,12 +1118,27 @@ def run_cycle(cfg: Config, state: SyncState, device: DeviceSession) -> tuple[int
         punch_to_iso(latest.timestamp, cfg.device_tz),
       )
 
-  return len(attendance), had_new or delivered > 0
+  return len(attendance), had_new or delivered > 0 or access_changed > 0
 
 
 def main() -> None:
   parser = argparse.ArgumentParser(description="FitNix Termux sync daemon")
   parser.add_argument("--once", action="store_true", help="Run one cycle and exit")
+  parser.add_argument(
+    "--access-once",
+    action="store_true",
+    help="Only reconcile Access Groups for overdue/inactive members, then exit",
+  )
+  parser.add_argument(
+    "--dry-run",
+    action="store_true",
+    help="With --access-once: fetch backend plan and log changes without writing to device",
+  )
+  parser.add_argument(
+    "--with-device",
+    action="store_true",
+    help="With --dry-run: also connect to device to compute per-user group deltas",
+  )
   parser.add_argument("--reset", action="store_true", help="Clear local cache and full resync")
   parser.add_argument("--state", type=Path, help="State file path (default: ./termux_sync_state.json)")
   parser.add_argument("--version", action="version", version=f"%(prog)s {SCRIPT_VERSION}")
@@ -874,7 +1169,7 @@ def main() -> None:
   device = DeviceSession(cfg, state)
   transport = "UDP" if cfg.prefer_udp and state.preferred_udp is not False else "TCP"
   LOG.info(
-    "FitNix Termux sync v%s — %s %s:%s -> %s (interval %.1fs, timeout %ss, tz=%s)",
+    "FitNix Termux sync v%s — %s %s:%s -> %s (interval %.1fs, timeout %ss, tz=%s, access=%s groups %s/%s)",
     SCRIPT_VERSION,
     transport,
     cfg.device_ip,
@@ -883,7 +1178,43 @@ def main() -> None:
     cfg.sync_interval_sec,
     cfg.connection_timeout_sec,
     cfg.device_timezone,
+    "on" if cfg.access_control_enabled else "off",
+    cfg.active_access_group,
+    cfg.blocked_access_group,
   )
+
+  if args.access_once:
+    try:
+      if args.dry_run:
+        LOG.info("Access-once DRY-RUN — will not write to device")
+        users: list = []
+        # Optional live snapshot; skip long timeouts unless --with-device is set.
+        if getattr(args, "with_device", False):
+          if device.connect(load_users=True):
+            users = list(device.last_users)
+            LOG.info("Connected for dry-run user snapshot: %s users", len(users))
+          else:
+            LOG.warning(
+              "Device unreachable — dry-run will only show backend blocked/allowed counts"
+            )
+        else:
+          LOG.info("Dry-run without device connect (pass --with-device to include group deltas)")
+        changed = sync_access_control(
+          cfg, state, device, users, force=True, dry_run=True
+        )
+        LOG.info("Access-once dry-run done (would change %s)", changed)
+      else:
+        if not device.connect(load_users=True):
+          LOG.error("Could not connect to device for access-control sync")
+          sys.exit(1)
+        changed = sync_access_control(cfg, state, device, device.last_users, force=True)
+        state.save(state_path)
+        LOG.info("Access-once done (%s change(s))", changed)
+    finally:
+      device.disconnect()
+      if not args.dry_run:
+        state.save(state_path)
+    return
 
   try:
     while True:

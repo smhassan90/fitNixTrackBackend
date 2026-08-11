@@ -183,3 +183,15 @@ export const testBackendOfflineSchema = z.object({
   }),
 });
 
+/** Tablet pulls overdue/inactive mapped users to move Access Groups on the device. */
+export const accessControlOfflineSchema = z.object({
+  params: z.object({
+    id: z.string().regex(/^\d+$/, 'Device ID must be a number').transform((val) => parseInt(val, 10)),
+  }),
+  body: z.object({
+    apiKey: z.string().min(1, 'API key is required').optional(),
+    activeGroup: z.string().min(1).max(8).optional(),
+    blockedGroup: z.string().min(1).max(8).optional(),
+  }),
+});
+

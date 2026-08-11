@@ -25,7 +25,9 @@ import {
   syncAttendanceOfflineSchema,
   confirmUserMappingsSchema,
   testBackendOfflineSchema,
+  accessControlOfflineSchema,
 } from '../validations/device';
+import { getDeviceAccessControlTargets } from '../services/deviceAccessControlService';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, BadRequestError } from '../utils/errors';
 import { ZKTService, syncAttendanceFromDevice, syncUsersFromDevice, autoCheckoutIncompleteRecords } from '../services/zktService';
@@ -426,6 +428,45 @@ router.post(
         ],
       });
       sendError(res, new BadRequestError(diagnostic.message, diagnosticDetails(diagnostic)));
+    }
+  }
+);
+
+// POST /api/device/:id/access-control-offline — overdue/inactive mapped users for device Access Groups
+router.post(
+  '/:id/access-control-offline',
+  validate(accessControlOfflineSchema),
+  authenticateApiKey,
+  async (req: ApiKeyAuthRequest, res: Response) => {
+    try {
+      const deviceId = req.deviceId!;
+      const gymId = req.gymId!;
+      const { activeGroup, blockedGroup } = req.body as {
+        activeGroup?: string;
+        blockedGroup?: string;
+      };
+
+      const device = await prisma.deviceConfig.findFirst({
+        where: { id: deviceId, gymId },
+        select: { id: true },
+      });
+
+      if (!device) {
+        sendError(res, new NotFoundError('Device configuration', deviceId));
+        return;
+      }
+
+      const payload = await getDeviceAccessControlTargets(gymId, deviceId, {
+        activeGroup,
+        blockedGroup,
+      });
+
+      sendSuccess(res, {
+        ...payload,
+        message: `Access control: ${payload.blocked.length} blocked, ${payload.allowed.length} allowed`,
+      });
+    } catch (error) {
+      sendError(res, error as Error);
     }
   }
 );
