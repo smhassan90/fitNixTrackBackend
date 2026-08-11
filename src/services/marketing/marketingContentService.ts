@@ -49,6 +49,9 @@ export type ContentDto = {
   suggestedPlatforms: string[] | null;
   platformVariants: Record<string, string> | null;
   approvedImageVersionId: number | null;
+  scheduledAt: Date | null;
+  publishedAt: Date | null;
+  selectedSocialAccountIds: number[] | null;
   createdAt: Date;
   updatedAt: Date;
   opportunity?: {
@@ -85,6 +88,12 @@ function asVariants(
   return Object.keys(out).length ? out : null;
 }
 
+function asAccountIds(value: Prisma.JsonValue | null | undefined): number[] | null {
+  if (!Array.isArray(value)) return null;
+  const ids = value.map((v) => Number(v)).filter((n) => Number.isFinite(n) && n > 0);
+  return ids;
+}
+
 function toContentDto(
   row: MarketingContent & {
     opportunity?: { id: number; title: string; status: string } | null;
@@ -118,6 +127,9 @@ function toContentDto(
     suggestedPlatforms: asPlatforms(row.suggestedPlatforms),
     platformVariants: asVariants(row.platformVariants),
     approvedImageVersionId: row.approvedImageVersionId ?? null,
+    scheduledAt: row.scheduledAt ?? null,
+    publishedAt: row.publishedAt ?? null,
+    selectedSocialAccountIds: asAccountIds(row.selectedSocialAccountIds),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     opportunity: row.opportunity

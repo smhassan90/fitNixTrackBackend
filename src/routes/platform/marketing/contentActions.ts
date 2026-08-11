@@ -11,6 +11,9 @@ import {
   marketingRegenerateImageSchema,
   marketingImageVersionParamSchema,
   marketingRejectImageSchema,
+  marketingPublishContentSchema,
+  marketingScheduleContentSchema,
+  marketingRescheduleContentSchema,
 } from '../../../validations/marketing';
 import {
   getContentById,
@@ -28,6 +31,14 @@ import {
   approveImageVersion,
   rejectImageVersion,
 } from '../../../services/marketing/marketingImageService';
+import {
+  publishContentNow,
+  scheduleContent,
+  rescheduleContent,
+  cancelSchedule,
+  duplicateContent,
+  listPublishAttempts,
+} from '../../../services/marketing/marketingPublishService';
 
 const router = Router();
 
@@ -250,6 +261,122 @@ router.post(
         actorRole: user.role,
       });
       sendSuccess(res, data, 'Image version rejected');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+router.post(
+  '/:id/publish',
+  validate(marketingPublishContentSchema),
+  async (req: PlatformRequest, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      const user = req.platformUser!;
+      const body = req.body as { socialAccountIds: number[] };
+      const data = await publishContentNow({
+        contentId: id,
+        socialAccountIds: body.socialAccountIds,
+        actorUserId: user.id,
+        actorRole: user.role,
+      });
+      sendSuccess(res, data, data.allSucceeded ? 'Published' : 'Publish completed with errors');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+router.post(
+  '/:id/schedule',
+  validate(marketingScheduleContentSchema),
+  async (req: PlatformRequest, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      const user = req.platformUser!;
+      const body = req.body as { socialAccountIds: number[]; scheduledAt: string };
+      const data = await scheduleContent({
+        contentId: id,
+        socialAccountIds: body.socialAccountIds,
+        scheduledAt: body.scheduledAt,
+        actorUserId: user.id,
+        actorRole: user.role,
+      });
+      sendSuccess(res, data, 'Content scheduled');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+router.post(
+  '/:id/reschedule',
+  validate(marketingRescheduleContentSchema),
+  async (req: PlatformRequest, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      const user = req.platformUser!;
+      const body = req.body as { scheduledAt: string };
+      const data = await rescheduleContent({
+        contentId: id,
+        scheduledAt: body.scheduledAt,
+        actorUserId: user.id,
+        actorRole: user.role,
+      });
+      sendSuccess(res, data, 'Content rescheduled');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+router.post(
+  '/:id/cancel-schedule',
+  validate(marketingContentIdParamSchema),
+  async (req: PlatformRequest, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      const user = req.platformUser!;
+      const data = await cancelSchedule({
+        contentId: id,
+        actorUserId: user.id,
+        actorRole: user.role,
+      });
+      sendSuccess(res, data, 'Schedule cancelled');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+router.post(
+  '/:id/duplicate',
+  validate(marketingContentIdParamSchema),
+  async (req: PlatformRequest, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      const user = req.platformUser!;
+      const data = await duplicateContent({
+        contentId: id,
+        actorUserId: user.id,
+        actorRole: user.role,
+      });
+      sendSuccess(res, data, 'Content duplicated');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+router.get(
+  '/:id/publish-attempts',
+  validate(marketingContentIdParamSchema),
+  async (req: PlatformRequest, res: Response) => {
+    try {
+      const id = Number(req.params.id);
+      const data = await listPublishAttempts(id);
+      sendSuccess(res, data);
     } catch (error) {
       sendError(res, error as Error);
     }

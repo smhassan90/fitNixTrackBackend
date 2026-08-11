@@ -16,6 +16,7 @@ import posRoutes from './pos';
 import accountDeletionRequestRoutes from './accountDeletionRequests';
 import marketingRoutes from './marketing';
 import marketingOAuthCallbackRoutes from './marketing/oauthCallback';
+import marketingWebsiteBlogsRoutes from './marketing/websiteBlogs';
 
 const router = Router();
 
@@ -31,6 +32,8 @@ router.use('/timezones', authenticatePlatformToken, timezoneRoutes);
 router.use('/account-deletion-requests', accountDeletionRequestRoutes);
 // OAuth provider callbacks must be public (no platform JWT on browser redirect).
 router.use('/marketing/oauth', marketingOAuthCallbackRoutes);
+// Public website blog feed (published posts only; no tokens).
+router.use('/marketing/website-blogs', marketingWebsiteBlogsRoutes);
 router.use('/marketing', authenticatePlatformToken, marketingRoutes);
 router.use('/', authenticatePlatformToken, locationRoutes);
 router.use('/', authenticatePlatformToken, adminBillingPlanRoutes);

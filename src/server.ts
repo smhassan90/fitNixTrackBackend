@@ -188,6 +188,21 @@ if (process.env.VERCEL !== '1') {
     console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`🌐 CORS enabled for: ${process.env.CORS_ORIGIN || 'http://localhost:3000'}`);
   });
+
+  // V1 marketing schedule worker: poll due SCHEDULED posts every 60s.
+  // On Vercel, call POST /api/platform/marketing/jobs/process-due-schedules from cron instead.
+  setInterval(() => {
+    void import('./services/marketing/marketingPublishService')
+      .then((m) => m.processDueScheduledContent())
+      .then((r) => {
+        if (r.processed > 0) {
+          console.log(`[marketing] processed ${r.processed} due schedule(s)`);
+        }
+      })
+      .catch((err) => {
+        console.warn('[marketing] schedule poll failed:', err instanceof Error ? err.message : err);
+      });
+  }, 60_000).unref?.();
 }
 
 export default app;

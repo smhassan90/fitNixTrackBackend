@@ -68,6 +68,7 @@ model Gym {
   marketingContents         MarketingContent[]
   marketingAiUsage          MarketingAiUsage[]
   marketingPublishAttempts  MarketingPublishAttempt[]
+  marketingBlogs            MarketingBlog[]
 
   @@map("gyms")
 }
@@ -1293,25 +1294,28 @@ model MarketingContentOpportunity {
 
 /// Draft / approved marketing content items.
 model MarketingContent {
-  id                 Int                    @id @default(autoincrement())
-  gymId              Int
-  opportunityId      Int?
-  contentKind        String                 @default("SOCIAL_POST") @db.VarChar(64)
-  title              String                 @db.VarChar(255)
-  status             MarketingContentStatus @default(DRAFT)
-  topic              String?                @db.Text
-  headline           String?                @db.VarChar(500)
-  caption            String?                @db.Text
-  captionShort       String?                @db.Text
-  cta                String?                @db.VarChar(500)
-  hashtags           String?                @db.Text
-  imageConcept       String?                @db.Text
-  imagePrompt        String?                @db.Text
-  suggestedPlatforms Json?
-  platformVariants   Json?
-  approvedImageVersionId Int?
-  createdAt          DateTime               @default(now())
-  updatedAt          DateTime               @updatedAt
+  id                       Int                    @id @default(autoincrement())
+  gymId                    Int
+  opportunityId            Int?
+  contentKind              String                 @default("SOCIAL_POST") @db.VarChar(64)
+  title                    String                 @db.VarChar(255)
+  status                   MarketingContentStatus @default(DRAFT)
+  topic                    String?                @db.Text
+  headline                 String?                @db.VarChar(500)
+  caption                  String?                @db.Text
+  captionShort             String?                @db.Text
+  cta                      String?                @db.VarChar(500)
+  hashtags                 String?                @db.Text
+  imageConcept             String?                @db.Text
+  imagePrompt              String?                @db.Text
+  suggestedPlatforms       Json?
+  platformVariants         Json?
+  approvedImageVersionId   Int?
+  scheduledAt              DateTime?
+  publishedAt              DateTime?
+  selectedSocialAccountIds Json?
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
 
   gym             Gym                          @relation(fields: [gymId], references: [id], onDelete: Cascade)
   opportunity     MarketingContentOpportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
@@ -1323,6 +1327,7 @@ model MarketingContent {
   @@index([gymId, contentKind])
   @@index([opportunityId])
   @@index([approvedImageVersionId])
+  @@index([gymId, scheduledAt])
   @@map("marketing_contents")
 }
 
@@ -1345,21 +1350,24 @@ model MarketingImageVersion {
 
 /// Publish attempt stub for later scheduling / social publishing phases.
 model MarketingPublishAttempt {
-  id           Int                          @id @default(autoincrement())
-  gymId        Int
-  contentId    Int?
-  platform     String?                      @db.VarChar(64)
-  status       MarketingPublishAttemptStatus @default(PENDING)
-  externalId   String?                      @db.VarChar(255)
-  errorMessage String?                      @db.Text
-  attemptedAt  DateTime                     @default(now())
-  createdAt    DateTime                     @default(now())
+  id              Int                           @id @default(autoincrement())
+  gymId           Int
+  contentId       Int?
+  socialAccountId Int?
+  platform        String?                       @db.VarChar(64)
+  status          MarketingPublishAttemptStatus @default(PENDING)
+  externalId      String?                       @db.VarChar(255)
+  errorMessage    String?                       @db.Text
+  attemptedAt     DateTime                      @default(now())
+  createdAt       DateTime                      @default(now())
 
   gym     Gym               @relation(fields: [gymId], references: [id], onDelete: Cascade)
   content MarketingContent? @relation(fields: [contentId], references: [id], onDelete: SetNull)
 
   @@index([gymId])
   @@index([contentId])
+  @@index([gymId, status])
+  @@index([socialAccountId])
   @@map("marketing_publish_attempts")
 }
 
@@ -1384,20 +1392,68 @@ model MarketingAiUsage {
 
 /// Singleton platform-wide marketing AI + OAuth app settings (id = 1).
 model MarketingPlatformSettings {
-  id                  Int      @id @default(1)
-  portalReturnBaseUrl String?  @db.VarChar(500)
-  aiEnabled           Boolean  @default(false)
-  aiProvider          String   @default("openai") @db.VarChar(64)
-  aiTextModel         String?  @db.VarChar(128)
-  aiImageModel        String?  @db.VarChar(128)
-  aiBaseUrl           String?  @db.VarChar(500)
-  aiApiKeyEnc         String?  @db.Text
+  id                     Int      @id @default(1)
+  portalReturnBaseUrl    String?  @db.VarChar(500)
+  websiteBlogExportPath  String?  @db.VarChar(1000)
+  aiEnabled              Boolean  @default(false)
+  aiProvider             String   @default("openai") @db.VarChar(64)
+  aiTextModel            String?  @db.VarChar(128)
+  aiImageModel           String?  @db.VarChar(128)
+  aiBaseUrl              String?  @db.VarChar(500)
+  aiApiKeyEnc            String?  @db.Text
   /// [{ platform, clientId, clientSecretEnc, redirectUri, enabled, notes }]
-  oauthApps           Json?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  oauthApps              Json?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
   @@map("marketing_platform_settings")
+}
+
+enum MarketingBlogStatus {
+  DRAFT
+  AWAITING_REVIEW
+  APPROVED
+  PUBLISHED
+  REJECTED
+}
+
+/// SEO / AEO blog drafts generated for gyms (and FitNix website export).
+model MarketingBlog {
+  id                 Int                 @id @default(autoincrement())
+  gymId              Int?
+  title              String              @db.VarChar(500)
+  slug               String              @unique @db.VarChar(191)
+  excerpt            String?             @db.Text
+  introduction       String?             @db.Text
+  bodyHtml           String?             @db.LongText
+  sections           Json?
+  conclusion         String?             @db.Text
+  cta                String?             @db.Text
+  seoTitle           String?             @db.VarChar(255)
+  metaDescription    String?             @db.Text
+  targetKeyword      String?             @db.VarChar(255)
+  secondaryKeywords  String?             @db.Text
+  internalLinks      String?             @db.Text
+  externalReferences String?             @db.Text
+  featuredImageUrl   String?             @db.VarChar(2048)
+  imageAlt           String?             @db.VarChar(500)
+  author             String?             @db.VarChar(191)
+  category           String?             @db.VarChar(120)
+  faqJson            Json?
+  status             MarketingBlogStatus @default(DRAFT)
+  publishedAt        DateTime?
+  websitePublished   Boolean             @default(false)
+  readingTimeMinutes Int?
+  opportunityId      Int?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  gym Gym? @relation(fields: [gymId], references: [id], onDelete: SetNull)
+
+  @@index([gymId])
+  @@index([gymId, status])
+  @@index([status, websitePublished])
+  @@map("marketing_blogs")
 }
 
 /// Google Play–compliant account & data deletion requests (public web form + in-app).

@@ -7,7 +7,8 @@ export type MarketingAiOperationType =
   | 'SOCIAL_POST_GENERATION'
   | 'IMAGE_PROMPT_GENERATION'
   | 'IMAGE_GENERATION'
-  | 'REGENERATION';
+  | 'REGENERATION'
+  | 'BLOG_GENERATION';
 
 export type AiChatResult = {
   content: string;

@@ -24,6 +24,7 @@ export type OAuthAppStored = {
 export type MarketingSettingsRow = {
   id: number;
   portalReturnBaseUrl: string | null;
+  websiteBlogExportPath: string | null;
   aiEnabled: boolean;
   aiProvider: string;
   aiTextModel: string | null;
@@ -41,6 +42,7 @@ export type SecretStatus = {
 
 export type MarketingSettingsPublicDto = {
   portalReturnBaseUrl: string | null;
+  websiteBlogExportPath: string | null;
   ai: {
     provider: string;
     textModel: string | null;
@@ -62,6 +64,7 @@ export type MarketingSettingsPublicDto = {
 
 export type MarketingSettingsUpdateInput = {
   portalReturnBaseUrl?: string | null;
+  websiteBlogExportPath?: string | null;
   ai?: {
     provider?: string;
     textModel?: string | null;
@@ -124,6 +127,7 @@ function parseOAuthApps(raw: Prisma.JsonValue | null | undefined): OAuthAppStore
 function mapRow(row: {
   id: number;
   portalReturnBaseUrl: string | null;
+  websiteBlogExportPath: string | null;
   aiEnabled: boolean;
   aiProvider: string;
   aiTextModel: string | null;
@@ -136,6 +140,7 @@ function mapRow(row: {
   return {
     id: row.id,
     portalReturnBaseUrl: row.portalReturnBaseUrl,
+    websiteBlogExportPath: row.websiteBlogExportPath,
     aiEnabled: row.aiEnabled,
     aiProvider: row.aiProvider,
     aiTextModel: row.aiTextModel,
@@ -189,6 +194,7 @@ function hintFromEnc(enc: string | null | undefined): SecretStatus {
 export function toPublicSettingsDto(row: MarketingSettingsRow): MarketingSettingsPublicDto {
   return {
     portalReturnBaseUrl: row.portalReturnBaseUrl,
+    websiteBlogExportPath: row.websiteBlogExportPath,
     ai: {
       provider: row.aiProvider,
       textModel: row.aiTextModel,
@@ -229,6 +235,16 @@ export async function updateMarketingSettings(params: {
       next === undefined ? existing.portalReturnBaseUrl : next?.trim() || null;
     if (portalReturnBaseUrl !== existing.portalReturnBaseUrl) {
       changedKeys.push('portalReturnBaseUrl');
+    }
+  }
+
+  let websiteBlogExportPath = existing.websiteBlogExportPath;
+  if ('websiteBlogExportPath' in (params.patch || {})) {
+    const next = params.patch.websiteBlogExportPath;
+    websiteBlogExportPath =
+      next === undefined ? existing.websiteBlogExportPath : next?.trim() || null;
+    if (websiteBlogExportPath !== existing.websiteBlogExportPath) {
+      changedKeys.push('websiteBlogExportPath');
     }
   }
 
@@ -324,6 +340,7 @@ export async function updateMarketingSettings(params: {
     where: { id: 1 },
     data: {
       portalReturnBaseUrl,
+      websiteBlogExportPath,
       aiEnabled,
       aiProvider,
       aiTextModel,

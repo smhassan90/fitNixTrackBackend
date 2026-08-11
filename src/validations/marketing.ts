@@ -321,6 +321,10 @@ export const marketingSettingsUpdateSchema = z.object({
         .union([z.string().url().max(500), z.literal(''), z.null()])
         .optional()
         .transform((v) => (v === undefined ? undefined : v === '' || v === null ? null : v)),
+      websiteBlogExportPath: z
+        .union([z.string().max(1000), z.literal(''), z.null()])
+        .optional()
+        .transform((v) => (v === undefined ? undefined : v === '' || v === null ? null : v.trim())),
       ai: z
         .object({
           provider: z.string().max(64).optional(),
@@ -357,4 +361,158 @@ export const marketingSettingsUpdateSchema = z.object({
         .optional(),
     })
     .strict(),
+});
+
+const socialAccountIdsBody = z
+  .array(z.coerce.number().int().positive())
+  .min(1)
+  .max(20);
+
+export const marketingPublishContentSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+  body: z
+    .object({
+      socialAccountIds: socialAccountIdsBody,
+    })
+    .strict(),
+});
+
+export const marketingScheduleContentSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+  body: z
+    .object({
+      socialAccountIds: socialAccountIdsBody,
+      scheduledAt: z.string().datetime({ offset: true }).or(z.string().min(1).max(64)),
+    })
+    .strict(),
+});
+
+export const marketingRescheduleContentSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+  body: z
+    .object({
+      scheduledAt: z.string().datetime({ offset: true }).or(z.string().min(1).max(64)),
+    })
+    .strict(),
+});
+
+export const marketingPublishAttemptIdParamSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+});
+
+export const marketingCalendarQuerySchema = z.object({
+  query: z.object({
+    gymId: z.coerce.number().int().positive(),
+    view: z.enum(['month', 'week', 'day', 'list']).optional(),
+    from: z.string().min(1).max(64),
+    to: z.string().min(1).max(64),
+  }),
+});
+
+export const marketingBlogListQuerySchema = z.object({
+  params: z.object({
+    gymId: z.coerce.number().int().positive(),
+  }),
+  query: z.object({
+    status: z
+      .enum(['DRAFT', 'AWAITING_REVIEW', 'APPROVED', 'PUBLISHED', 'REJECTED'])
+      .optional(),
+    page: z.coerce.number().int().min(1).optional().default(1),
+    limit: z.coerce.number().int().min(1).max(100).optional().default(20),
+  }),
+});
+
+export const marketingGenerateBlogSchema = z.object({
+  params: z.object({
+    gymId: z.coerce.number().int().positive(),
+  }),
+  body: z
+    .object({
+      topic: z.string().max(500).optional(),
+      targetKeyword: z.string().max(255).optional(),
+      opportunityId: z.coerce.number().int().positive().optional(),
+    })
+    .strict(),
+});
+
+export const marketingBlogIdParamSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+});
+
+export const marketingBlogUpdateSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+  body: z
+    .object({
+      title: z.string().min(1).max(500).optional(),
+      excerpt: optionalNullableText(10000),
+      introduction: optionalNullableText(50000),
+      bodyHtml: optionalNullableText(200000),
+      conclusion: optionalNullableText(20000),
+      cta: optionalNullableText(5000),
+      seoTitle: optionalNullableText(255),
+      metaDescription: optionalNullableText(5000),
+      targetKeyword: optionalNullableText(255),
+      secondaryKeywords: optionalNullableText(5000),
+      internalLinks: optionalNullableText(10000),
+      externalReferences: optionalNullableText(10000),
+      featuredImageUrl: optionalNullableText(2048),
+      imageAlt: optionalNullableText(500),
+      author: optionalNullableText(191),
+      category: optionalNullableText(120),
+      sections: z.unknown().optional(),
+      faqJson: z.unknown().optional(),
+      readingTimeMinutes: z.coerce.number().int().min(1).max(120).nullable().optional(),
+    })
+    .strict(),
+});
+
+export const MARKETING_BLOG_EDITABLE_FIELDS = [
+  'title',
+  'excerpt',
+  'introduction',
+  'bodyHtml',
+  'conclusion',
+  'cta',
+  'seoTitle',
+  'metaDescription',
+  'targetKeyword',
+  'secondaryKeywords',
+  'internalLinks',
+  'externalReferences',
+  'featuredImageUrl',
+  'imageAlt',
+  'author',
+  'category',
+  'sections',
+  'faqJson',
+  'readingTimeMinutes',
+] as const;
+
+export const marketingUsageQuerySchema = z.object({
+  query: z.object({
+    gymId: z.coerce.number().int().positive(),
+    from: z.string().min(1).max(64),
+    to: z.string().min(1).max(64),
+  }),
+});
+
+export const marketingAuditLogQuerySchema = z.object({
+  query: z.object({
+    gymId: z.coerce.number().int().positive(),
+    page: z.coerce.number().int().min(1).optional().default(1),
+    limit: z.coerce.number().int().min(1).max(100).optional().default(20),
+    actionType: z.string().max(64).optional(),
+  }),
 });

@@ -159,6 +159,7 @@ export async function getMarketingOverview(gymId: number): Promise<MarketingOver
     postsAwaitingApproval,
     aiRows,
     socialPostsThisMonth,
+    blogsThisMonth,
     scheduledThisMonth,
     publishedThisMonth,
     failedThisMonth,
@@ -183,6 +184,7 @@ export async function getMarketingOverview(gymId: number): Promise<MarketingOver
             'IMAGE_PROMPT_GENERATION',
             'IMAGE_GENERATION',
             'REGENERATION',
+            'BLOG_GENERATION',
           ],
         },
       },
@@ -195,18 +197,20 @@ export async function getMarketingOverview(gymId: number): Promise<MarketingOver
         createdAt: { gte: monthStart },
       },
     }),
+    prisma.marketingBlog.count({
+      where: { gymId, createdAt: { gte: monthStart } },
+    }),
     prisma.marketingContent.count({
       where: {
         gymId,
         status: 'SCHEDULED',
-        updatedAt: { gte: monthStart },
       },
     }),
     prisma.marketingContent.count({
       where: {
         gymId,
         status: 'PUBLISHED',
-        updatedAt: { gte: monthStart },
+        publishedAt: { gte: monthStart },
       },
     }),
     prisma.marketingContent.count({
@@ -226,11 +230,7 @@ export async function getMarketingOverview(gymId: number): Promise<MarketingOver
     const op = row.operationType;
     if (op === 'IMAGE_GENERATION' || op === 'REGENERATION') {
       imageGenerations += 1;
-    } else if (
-      op === 'OPPORTUNITY_GENERATION' ||
-      op === 'SOCIAL_POST_GENERATION' ||
-      op === 'IMAGE_PROMPT_GENERATION'
-    ) {
+    } else {
       textGenerations += 1;
     }
     if (row.costUsd != null) {
@@ -283,6 +283,15 @@ export async function getMarketingOverview(gymId: number): Promise<MarketingOver
     recommendations.push('Connect Facebook, Instagram, LinkedIn, or Google Business accounts.');
   }
 
+  if (failedThisMonth > 0) {
+    attention.push({
+      type: 'PUBLISH_FAILURES',
+      message: `${failedThisMonth} post${failedThisMonth === 1 ? '' : 's'} failed to publish this month.`,
+      href: `/platform/marketing/${gymId}/contents`,
+      severity: 'warning',
+    });
+  }
+
   return {
     gym: {
       id: gym.id,
@@ -295,7 +304,7 @@ export async function getMarketingOverview(gymId: number): Promise<MarketingOver
     profileUpdatedAt: profile?.updatedAt?.toISOString() ?? null,
     contentThisMonth: {
       socialPosts: socialPostsThisMonth,
-      blogs: 0,
+      blogs: blogsThisMonth,
       googleBusinessPosts: 0,
       scheduledPosts: scheduledThisMonth,
       publishedPosts: publishedThisMonth,
