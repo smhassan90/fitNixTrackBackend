@@ -462,6 +462,10 @@ router.patch(
       const gymId = req.gymId!;
       const id = parseInt(req.params.id, 10);
       const updated = await markSignupOneTimeUnpaid(id, gymId);
+      if (!updated) {
+        sendError(res, new NotFoundError('One-time payment', id));
+        return;
+      }
       sendSuccess(res, mapRowMemberNumber(updated), 'Signup payment reversed');
     } catch (error) {
       sendError(res, error as Error);
@@ -665,6 +669,10 @@ router.put(
         status !== 'PAID'
       ) {
         const updated = await markLastPaidInstallmentUnpaid(id, gymId);
+        if (!updated) {
+          sendError(res, new NotFoundError('Payment', id));
+          return;
+        }
         sendSuccess(res, mapRowMemberNumber(updated), 'Payment marked as unpaid');
         return;
       }
