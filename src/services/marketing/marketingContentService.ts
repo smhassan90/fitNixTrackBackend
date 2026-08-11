@@ -48,6 +48,7 @@ export type ContentDto = {
   imagePrompt: string | null;
   suggestedPlatforms: string[] | null;
   platformVariants: Record<string, string> | null;
+  approvedImageVersionId: number | null;
   createdAt: Date;
   updatedAt: Date;
   opportunity?: {
@@ -55,6 +56,16 @@ export type ContentDto = {
     title: string;
     status: string;
   } | null;
+  imageVersions?: Array<{
+    id: number;
+    contentId: number;
+    prompt: string | null;
+    modifiedPrompt: string | null;
+    imageUrl: string | null;
+    status: string;
+    provider: string | null;
+    createdAt: Date;
+  }>;
 };
 
 function asPlatforms(value: Prisma.JsonValue | null | undefined): string[] | null {
@@ -77,6 +88,16 @@ function asVariants(
 function toContentDto(
   row: MarketingContent & {
     opportunity?: { id: number; title: string; status: string } | null;
+    imageVersions?: Array<{
+      id: number;
+      contentId: number;
+      prompt: string | null;
+      modifiedPrompt: string | null;
+      imageUrl: string | null;
+      status: string;
+      provider: string | null;
+      createdAt: Date;
+    }>;
   }
 ): ContentDto {
   return {
@@ -96,6 +117,7 @@ function toContentDto(
     imagePrompt: row.imagePrompt,
     suggestedPlatforms: asPlatforms(row.suggestedPlatforms),
     platformVariants: asVariants(row.platformVariants),
+    approvedImageVersionId: row.approvedImageVersionId ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     opportunity: row.opportunity
@@ -107,6 +129,7 @@ function toContentDto(
       : row.opportunity === null
         ? null
         : undefined,
+    imageVersions: row.imageVersions,
   };
 }
 
@@ -136,6 +159,10 @@ export async function listContents(params: {
       take: params.limit,
       include: {
         opportunity: { select: { id: true, title: true, status: true } },
+        imageVersions: {
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: 5,
+        },
       },
     }),
   ]);
@@ -156,6 +183,9 @@ export async function getContentById(id: number): Promise<ContentDto> {
     where: { id },
     include: {
       opportunity: { select: { id: true, title: true, status: true } },
+      imageVersions: {
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      },
     },
   });
   if (!row) throw new NotFoundError('Content', id);

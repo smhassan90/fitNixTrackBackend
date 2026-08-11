@@ -1199,6 +1199,8 @@ enum MarketingImageStatus {
   PENDING
   READY
   FAILED
+  APPROVED
+  REJECTED
 }
 
 enum MarketingPublishAttemptStatus {
@@ -1303,6 +1305,7 @@ model MarketingContent {
   imagePrompt        String?                @db.Text
   suggestedPlatforms Json?
   platformVariants   Json?
+  approvedImageVersionId Int?
   createdAt          DateTime               @default(now())
   updatedAt          DateTime               @updatedAt
 
@@ -1315,6 +1318,7 @@ model MarketingContent {
   @@index([gymId, status])
   @@index([gymId, contentKind])
   @@index([opportunityId])
+  @@index([approvedImageVersionId])
   @@map("marketing_contents")
 }
 

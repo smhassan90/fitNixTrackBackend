@@ -208,3 +208,60 @@ export const marketingRejectContentSchema = z.object({
     .optional()
     .default({}),
 });
+
+export const marketingGenerateImagePromptSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+  body: z
+    .object({
+      notes: z.string().max(2000).optional(),
+    })
+    .optional()
+    .default({}),
+});
+
+export const marketingGenerateImageSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+  body: z
+    .object({
+      prompt: z.string().max(4000).optional(),
+    })
+    .optional()
+    .default({}),
+});
+
+export const marketingRegenerateImageSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+  body: z
+    .object({
+      mode: z.enum(['quick', 'custom']),
+      instructions: z.string().max(2000).optional(),
+      prompt: z.string().max(4000).optional(),
+    })
+    .strict(),
+});
+
+export const marketingImageVersionParamSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+    imageVersionId: z.coerce.number().int().positive(),
+  }),
+});
+
+export const marketingRejectImageSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+    imageVersionId: z.coerce.number().int().positive(),
+  }),
+  body: z
+    .object({
+      reason: z.string().max(2000).optional(),
+    })
+    .optional()
+    .default({}),
+});

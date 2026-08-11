@@ -177,7 +177,13 @@ export async function getMarketingOverview(gymId: number): Promise<MarketingOver
         gymId,
         createdAt: { gte: monthStart },
         operationType: {
-          in: ['OPPORTUNITY_GENERATION', 'SOCIAL_POST_GENERATION'],
+          in: [
+            'OPPORTUNITY_GENERATION',
+            'SOCIAL_POST_GENERATION',
+            'IMAGE_PROMPT_GENERATION',
+            'IMAGE_GENERATION',
+            'REGENERATION',
+          ],
         },
       },
       select: { operationType: true, costUsd: true },
@@ -213,10 +219,20 @@ export async function getMarketingOverview(gymId: number): Promise<MarketingOver
   ]);
 
   let textGenerations = 0;
+  let imageGenerations = 0;
   let costSum = 0;
   let hasCost = false;
   for (const row of aiRows) {
-    textGenerations += 1;
+    const op = row.operationType;
+    if (op === 'IMAGE_GENERATION' || op === 'REGENERATION') {
+      imageGenerations += 1;
+    } else if (
+      op === 'OPPORTUNITY_GENERATION' ||
+      op === 'SOCIAL_POST_GENERATION' ||
+      op === 'IMAGE_PROMPT_GENERATION'
+    ) {
+      textGenerations += 1;
+    }
     if (row.costUsd != null) {
       costSum += row.costUsd;
       hasCost = true;
@@ -287,7 +303,7 @@ export async function getMarketingOverview(gymId: number): Promise<MarketingOver
     },
     aiActivity: {
       textGenerations,
-      imageGenerations: 0,
+      imageGenerations,
       estimatedCostUsd: hasCost ? costSum : null,
     },
     attention,

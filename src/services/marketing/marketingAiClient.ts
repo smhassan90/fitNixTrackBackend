@@ -3,7 +3,10 @@ import { AppError, ValidationError } from '../../utils/errors';
 
 export type MarketingAiOperationType =
   | 'OPPORTUNITY_GENERATION'
-  | 'SOCIAL_POST_GENERATION';
+  | 'SOCIAL_POST_GENERATION'
+  | 'IMAGE_PROMPT_GENERATION'
+  | 'IMAGE_GENERATION'
+  | 'REGENERATION';
 
 export type AiChatResult = {
   content: string;
@@ -12,6 +15,14 @@ export type AiChatResult = {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  costUsd: number | null;
+};
+
+export type AiImageResult = {
+  provider: string;
+  model: string;
+  imageBuffer: Buffer;
+  mimeType: string;
   costUsd: number | null;
 };
 
@@ -40,7 +51,15 @@ export function estimateOpenAiChatCostUsd(
   return Math.round(cost * 1_000_000) / 1_000_000;
 }
 
-function getMarketingAiConfig(): { provider: string; model: string; apiKey: string } {
+export function estimateOpenAiImageCostUsd(model: string): number | null {
+  const m = model.toLowerCase();
+  if (m.includes('dall-e-3')) return 0.04;
+  if (m.includes('dall-e-2')) return 0.02;
+  if (m.includes('gpt-image')) return 0.04;
+  return 0.04;
+}
+
+function getMarketingTextAiConfig(): { provider: string; model: string; apiKey: string } {
   const provider = (process.env.MARKETING_AI_PROVIDER || 'openai').trim().toLowerCase();
   const model = (process.env.MARKETING_AI_MODEL || 'gpt-4o-mini').trim();
   const apiKey = (process.env.OPENAI_API_KEY || '').trim();
@@ -58,12 +77,30 @@ function getMarketingAiConfig(): { provider: string; model: string; apiKey: stri
   return { provider, model, apiKey };
 }
 
+function getMarketingImageAiConfig(): { provider: string; model: string; apiKey: string } {
+  const provider = (process.env.MARKETING_IMAGE_PROVIDER || 'openai').trim().toLowerCase();
+  const model = (process.env.MARKETING_IMAGE_MODEL || 'dall-e-3').trim();
+  const apiKey = (process.env.OPENAI_API_KEY || '').trim();
+
+  if (provider !== 'openai') {
+    throw new ValidationError(`Unsupported MARKETING_IMAGE_PROVIDER: ${provider}`);
+  }
+  if (!apiKey) {
+    throw new AppError(
+      'AI_NOT_CONFIGURED',
+      'OPENAI_API_KEY is not configured for marketing image generation',
+      503
+    );
+  }
+  return { provider, model, apiKey };
+}
+
 export async function callMarketingChatJson(params: {
   system: string;
   user: string;
   temperature?: number;
 }): Promise<AiChatResult> {
-  const { provider, model, apiKey } = getMarketingAiConfig();
+  const { provider, model, apiKey } = getMarketingTextAiConfig();
 
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -113,6 +150,75 @@ export async function callMarketingChatJson(params: {
     completionTokens,
     totalTokens,
     costUsd: estimateOpenAiChatCostUsd(model, promptTokens, completionTokens),
+  };
+}
+
+export async function callMarketingImageGeneration(params: {
+  prompt: string;
+}): Promise<AiImageResult> {
+  const { provider, model, apiKey } = getMarketingImageAiConfig();
+
+  const body: Record<string, unknown> = {
+    model,
+    prompt: params.prompt.slice(0, 3900),
+    n: 1,
+    size: '1024x1024',
+    response_format: 'b64_json',
+  };
+  // dall-e-3 supports quality; gpt-image models may ignore unknown fields.
+  if (model.toLowerCase().includes('dall-e-3')) {
+    body.quality = 'standard';
+  }
+
+  const res = await fetch('https://api.openai.com/v1/images/generations', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  const raw = (await res.json()) as {
+    error?: { message?: string };
+    data?: Array<{ b64_json?: string; url?: string }>;
+  };
+
+  if (!res.ok) {
+    throw new AppError(
+      'AI_PROVIDER_ERROR',
+      raw.error?.message || `Marketing image generation failed (${res.status})`,
+      502
+    );
+  }
+
+  const first = raw.data?.[0];
+  let imageBuffer: Buffer | null = null;
+  let mimeType = 'image/png';
+
+  if (first?.b64_json) {
+    imageBuffer = Buffer.from(first.b64_json, 'base64');
+  } else if (first?.url) {
+    const imgRes = await fetch(first.url);
+    if (!imgRes.ok) {
+      throw new AppError('AI_PROVIDER_ERROR', 'Failed to download generated image', 502);
+    }
+    const arr = await imgRes.arrayBuffer();
+    imageBuffer = Buffer.from(arr);
+    const ct = imgRes.headers.get('content-type');
+    if (ct) mimeType = ct.split(';')[0].trim() || mimeType;
+  }
+
+  if (!imageBuffer || imageBuffer.length === 0) {
+    throw new AppError('AI_PROVIDER_ERROR', 'Marketing image provider returned no image data', 502);
+  }
+
+  return {
+    provider,
+    model,
+    imageBuffer,
+    mimeType,
+    costUsd: estimateOpenAiImageCostUsd(model),
   };
 }
 
