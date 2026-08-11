@@ -265,3 +265,96 @@ export const marketingRejectImageSchema = z.object({
     .optional()
     .default({}),
 });
+
+export const marketingSocialPlatformZ = z.enum([
+  'facebook',
+  'instagram',
+  'linkedin',
+  'google_business',
+]);
+
+export const marketingSocialAccountsQuerySchema = z.object({
+  params: z.object({
+    gymId: z.coerce.number().int().positive(),
+  }),
+});
+
+export const marketingSocialConnectSchema = z.object({
+  params: z.object({
+    gymId: z.coerce.number().int().positive(),
+  }),
+  body: z
+    .object({
+      platform: marketingSocialPlatformZ,
+    })
+    .strict(),
+});
+
+export const marketingSocialDisconnectSchema = z.object({
+  params: z.object({
+    gymId: z.coerce.number().int().positive(),
+    accountId: z.coerce.number().int().positive(),
+  }),
+});
+
+export const marketingOAuthCallbackQuerySchema = z.object({
+  params: z.object({
+    platform: marketingSocialPlatformZ,
+  }),
+  query: z.object({
+    code: z.string().max(4000).optional(),
+    state: z.string().max(4000).optional(),
+    error: z.string().max(500).optional(),
+    error_description: z.string().max(1000).optional(),
+  }),
+});
+
+const secretOptionalKeep = z
+  .union([z.string().max(4000), z.null()])
+  .optional()
+  .transform((v) => (v === undefined ? undefined : v === null ? null : v));
+
+export const marketingSettingsUpdateSchema = z.object({
+  body: z
+    .object({
+      portalReturnBaseUrl: z
+        .union([z.string().url().max(500), z.literal(''), z.null()])
+        .optional()
+        .transform((v) => (v === undefined ? undefined : v === '' || v === null ? null : v)),
+      ai: z
+        .object({
+          provider: z.string().max(64).optional(),
+          textModel: z.union([z.string().max(128), z.null()]).optional(),
+          imageModel: z.union([z.string().max(128), z.null()]).optional(),
+          baseUrl: z
+            .union([z.string().url().max(500), z.literal(''), z.null()])
+            .optional()
+            .transform((v) => (v === undefined ? undefined : v === '' || v === null ? null : v)),
+          enabled: z.boolean().optional(),
+          apiKey: secretOptionalKeep,
+        })
+        .strict()
+        .optional(),
+      oauthApps: z
+        .array(
+          z
+            .object({
+              platform: marketingSocialPlatformZ,
+              clientId: z.union([z.string().max(255), z.null()]).optional(),
+              redirectUri: z
+                .union([z.string().url().max(500), z.literal(''), z.null()])
+                .optional()
+                .transform((v) =>
+                  v === undefined ? undefined : v === '' || v === null ? null : v
+                ),
+              enabled: z.boolean().optional(),
+              notes: z.union([z.string().max(2000), z.null()]).optional(),
+              clientSecret: secretOptionalKeep,
+            })
+            .strict()
+        )
+        .max(20)
+        .optional(),
+    })
+    .strict(),
+});

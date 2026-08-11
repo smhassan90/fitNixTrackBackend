@@ -168,7 +168,7 @@ async function createImageVersionFromPrompt(params: {
       prompt: params.basePrompt,
       modifiedPrompt: params.effectivePrompt,
       status: 'PENDING',
-      provider: process.env.MARKETING_IMAGE_PROVIDER || 'openai',
+      provider: null,
     },
   });
 

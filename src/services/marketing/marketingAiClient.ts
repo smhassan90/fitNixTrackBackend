@@ -1,5 +1,6 @@
 import { prisma } from '../../lib/prisma';
-import { AppError, ValidationError } from '../../utils/errors';
+import { AppError } from '../../utils/errors';
+import { requireRuntimeAiConfig } from './marketingSettingsService';
 
 export type MarketingAiOperationType =
   | 'OPPORTUNITY_GENERATION'
@@ -33,7 +34,6 @@ export function estimateOpenAiChatCostUsd(
   completionTokens: number
 ): number | null {
   const m = model.toLowerCase();
-  // Approximate per-1M token rates
   let inputPerM = 0.15;
   let outputPerM = 0.6;
   if (m.includes('gpt-4.1-mini') || m.includes('gpt-4o-mini')) {
@@ -59,40 +59,14 @@ export function estimateOpenAiImageCostUsd(model: string): number | null {
   return 0.04;
 }
 
-function getMarketingTextAiConfig(): { provider: string; model: string; apiKey: string } {
-  const provider = (process.env.MARKETING_AI_PROVIDER || 'openai').trim().toLowerCase();
-  const model = (process.env.MARKETING_AI_MODEL || 'gpt-4o-mini').trim();
-  const apiKey = (process.env.OPENAI_API_KEY || '').trim();
-
-  if (provider !== 'openai') {
-    throw new ValidationError(`Unsupported MARKETING_AI_PROVIDER: ${provider}`);
-  }
-  if (!apiKey) {
-    throw new AppError(
-      'AI_NOT_CONFIGURED',
-      'OPENAI_API_KEY is not configured for marketing AI',
-      503
-    );
-  }
-  return { provider, model, apiKey };
+function chatCompletionsUrl(baseUrl: string | null): string {
+  const base = (baseUrl || 'https://api.openai.com/v1').replace(/\/$/, '');
+  return `${base}/chat/completions`;
 }
 
-function getMarketingImageAiConfig(): { provider: string; model: string; apiKey: string } {
-  const provider = (process.env.MARKETING_IMAGE_PROVIDER || 'openai').trim().toLowerCase();
-  const model = (process.env.MARKETING_IMAGE_MODEL || 'dall-e-3').trim();
-  const apiKey = (process.env.OPENAI_API_KEY || '').trim();
-
-  if (provider !== 'openai') {
-    throw new ValidationError(`Unsupported MARKETING_IMAGE_PROVIDER: ${provider}`);
-  }
-  if (!apiKey) {
-    throw new AppError(
-      'AI_NOT_CONFIGURED',
-      'OPENAI_API_KEY is not configured for marketing image generation',
-      503
-    );
-  }
-  return { provider, model, apiKey };
+function imagesUrl(baseUrl: string | null): string {
+  const base = (baseUrl || 'https://api.openai.com/v1').replace(/\/$/, '');
+  return `${base}/images/generations`;
 }
 
 export async function callMarketingChatJson(params: {
@@ -100,12 +74,13 @@ export async function callMarketingChatJson(params: {
   user: string;
   temperature?: number;
 }): Promise<AiChatResult> {
-  const { provider, model, apiKey } = getMarketingTextAiConfig();
+  const cfg = await requireRuntimeAiConfig('text');
+  const model = cfg.textModel;
 
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+  const res = await fetch(chatCompletionsUrl(cfg.baseUrl), {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${cfg.apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
@@ -144,7 +119,7 @@ export async function callMarketingChatJson(params: {
 
   return {
     content,
-    provider,
+    provider: cfg.provider,
     model,
     promptTokens,
     completionTokens,
@@ -156,7 +131,8 @@ export async function callMarketingChatJson(params: {
 export async function callMarketingImageGeneration(params: {
   prompt: string;
 }): Promise<AiImageResult> {
-  const { provider, model, apiKey } = getMarketingImageAiConfig();
+  const cfg = await requireRuntimeAiConfig('image');
+  const model = cfg.imageModel;
 
   const body: Record<string, unknown> = {
     model,
@@ -165,15 +141,14 @@ export async function callMarketingImageGeneration(params: {
     size: '1024x1024',
     response_format: 'b64_json',
   };
-  // dall-e-3 supports quality; gpt-image models may ignore unknown fields.
   if (model.toLowerCase().includes('dall-e-3')) {
     body.quality = 'standard';
   }
 
-  const res = await fetch('https://api.openai.com/v1/images/generations', {
+  const res = await fetch(imagesUrl(cfg.baseUrl), {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${cfg.apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
@@ -214,7 +189,7 @@ export async function callMarketingImageGeneration(params: {
   }
 
   return {
-    provider,
+    provider: cfg.provider,
     model,
     imageBuffer,
     mimeType,

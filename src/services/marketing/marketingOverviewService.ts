@@ -280,7 +280,7 @@ export async function getMarketingOverview(gymId: number): Promise<MarketingOver
   }
 
   if (connectedAccountsCount === 0) {
-    recommendations.push('Connect social accounts when publishing is available.');
+    recommendations.push('Connect Facebook, Instagram, LinkedIn, or Google Business accounts.');
   }
 
   return {

@@ -1241,25 +1241,29 @@ model MarketingProfile {
   @@map("marketing_profiles")
 }
 
-/// Connected social / Google Business accounts (Phase 1: schema only).
+/// Connected social / Google Business accounts.
 model MarketingSocialAccount {
-  id              Int                          @id @default(autoincrement())
-  gymId           Int
-  platform        String                       @db.VarChar(64)
-  accountName     String?                      @db.VarChar(255)
-  status          MarketingSocialAccountStatus @default(DISCONNECTED)
-  accessTokenEnc  String?                      @db.Text
-  refreshTokenEnc String?                      @db.Text
-  tokenExpiresAt  DateTime?
-  connectedAt     DateTime?
-  lastPublishAt   DateTime?
-  createdAt       DateTime                     @default(now())
-  updatedAt       DateTime                     @updatedAt
+  id                Int                          @id @default(autoincrement())
+  gymId             Int
+  platform          String                       @db.VarChar(64)
+  accountName       String?                      @db.VarChar(255)
+  externalAccountId String?                      @db.VarChar(191)
+  metadata          Json?
+  status            MarketingSocialAccountStatus @default(DISCONNECTED)
+  accessTokenEnc    String?                      @db.Text
+  refreshTokenEnc   String?                      @db.Text
+  tokenExpiresAt    DateTime?
+  connectedAt       DateTime?
+  lastPublishAt     DateTime?
+  createdAt         DateTime                     @default(now())
+  updatedAt         DateTime                     @updatedAt
 
   gym Gym @relation(fields: [gymId], references: [id], onDelete: Cascade)
 
+  @@unique([gymId, platform, externalAccountId], map: "marketing_social_gym_platform_ext_uniq")
   @@index([gymId])
   @@index([gymId, platform])
+  @@index([gymId, status])
   @@map("marketing_social_accounts")
 }
 
@@ -1376,6 +1380,24 @@ model MarketingAiUsage {
   @@index([gymId, createdAt])
   @@index([platformUserId])
   @@map("marketing_ai_usage")
+}
+
+/// Singleton platform-wide marketing AI + OAuth app settings (id = 1).
+model MarketingPlatformSettings {
+  id                  Int      @id @default(1)
+  portalReturnBaseUrl String?  @db.VarChar(500)
+  aiEnabled           Boolean  @default(false)
+  aiProvider          String   @default("openai") @db.VarChar(64)
+  aiTextModel         String?  @db.VarChar(128)
+  aiImageModel        String?  @db.VarChar(128)
+  aiBaseUrl           String?  @db.VarChar(500)
+  aiApiKeyEnc         String?  @db.Text
+  /// [{ platform, clientId, clientSecretEnc, redirectUri, enabled, notes }]
+  oauthApps           Json?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@map("marketing_platform_settings")
 }
 
 /// Google Play–compliant account & data deletion requests (public web form + in-app).

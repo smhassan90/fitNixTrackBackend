@@ -15,6 +15,7 @@ import uploadRoutes from './upload';
 import posRoutes from './pos';
 import accountDeletionRequestRoutes from './accountDeletionRequests';
 import marketingRoutes from './marketing';
+import marketingOAuthCallbackRoutes from './marketing/oauthCallback';
 
 const router = Router();
 
@@ -28,6 +29,8 @@ router.use('/users', authenticatePlatformToken, userRoutes);
 router.use('/permissions', authenticatePlatformToken, permissionRoutes);
 router.use('/timezones', authenticatePlatformToken, timezoneRoutes);
 router.use('/account-deletion-requests', accountDeletionRequestRoutes);
+// OAuth provider callbacks must be public (no platform JWT on browser redirect).
+router.use('/marketing/oauth', marketingOAuthCallbackRoutes);
 router.use('/marketing', authenticatePlatformToken, marketingRoutes);
 router.use('/', authenticatePlatformToken, locationRoutes);
 router.use('/', authenticatePlatformToken, adminBillingPlanRoutes);

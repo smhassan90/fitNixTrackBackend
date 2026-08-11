@@ -8,17 +8,21 @@ import opportunitiesRoutes from './opportunities';
 import opportunityActionsRoutes from './opportunityActions';
 import contentsRoutes from './contents';
 import contentActionsRoutes from './contentActions';
+import socialAccountsRoutes from './socialAccounts';
+import settingsRoutes from './settings';
 
 const router = Router();
 
-// Phase 1–2: Super Admin only (no PLATFORM_SUPPORT reads).
+// Phase 1–4: Super Admin only (no PLATFORM_SUPPORT reads).
 router.use(requirePlatformRole(PlatformRole.SUPER_ADMIN));
 
+router.use('/settings', settingsRoutes);
 router.use('/gyms', gymsRoutes);
 router.use('/gyms/:gymId/overview', overviewRoutes);
 router.use('/gyms/:gymId/profile', profileRoutes);
 router.use('/gyms/:gymId/opportunities', opportunitiesRoutes);
 router.use('/gyms/:gymId/contents', contentsRoutes);
+router.use('/gyms/:gymId/social-accounts', socialAccountsRoutes);
 router.use('/opportunities', opportunityActionsRoutes);
 router.use('/contents', contentActionsRoutes);
 
