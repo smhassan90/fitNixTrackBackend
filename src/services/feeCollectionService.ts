@@ -284,14 +284,82 @@ export async function purgeStaleFeeCollections(gymId: number): Promise<number> {
   const validMonthly = new Set(paidMonthly.map((p) => p.id));
   const validOneTime = new Set(paidOneTime.map((p) => p.id));
 
-  const staleIds = rows
-    .filter((r) =>
-      r.sourceType === 'MONTHLY_PAYMENT'
-        ? !validMonthly.has(r.sourceId)
-        : !validOneTime.has(r.sourceId)
-    )
-    .map((r) => r.id);
+  const staleIdSet = new Set(
+    rows
+      .filter((r) =>
+        r.sourceType === 'MONTHLY_PAYMENT'
+          ? !validMonthly.has(r.sourceId)
+          : !validOneTime.has(r.sourceId)
+      )
+      .map((r) => r.id)
+  );
 
+  // Signup ledger left behind when month-1 was undone without cascading signup (pre-fix data).
+  const paidSignupRows = rows.filter(
+    (r) => r.sourceType === 'ONE_TIME_PAYMENT' && validOneTime.has(r.sourceId)
+  );
+  if (paidSignupRows.length > 0) {
+    const signupPayments = await prisma.oneTimePayment.findMany({
+      where: {
+        gymId,
+        id: { in: paidSignupRows.map((r) => r.sourceId) },
+        status: 'PAID',
+      },
+      select: {
+        id: true,
+        memberId: true,
+        totalAmount: true,
+        admissionFee: true,
+      },
+    });
+
+    if (signupPayments.length > 0) {
+      const memberIds = [...new Set(signupPayments.map((s) => s.memberId))];
+      const members = await prisma.member.findMany({
+        where: { gymId, id: { in: memberIds } },
+        select: { id: true, membershipStart: true },
+      });
+      const memberById = new Map(members.map((m) => [m.id, m]));
+
+      const month1Keys = members
+        .filter((m) => m.membershipStart)
+        .map((m) => formatMonth(m.membershipStart!));
+      const month1Payments =
+        month1Keys.length > 0
+          ? await prisma.payment.findMany({
+              where: {
+                gymId,
+                memberId: { in: memberIds },
+                month: { in: month1Keys },
+              },
+              select: { memberId: true, month: true, status: true },
+            })
+          : [];
+      const month1StatusByMemberMonth = new Map(
+        month1Payments.map((p) => [`${p.memberId}:${p.month}`, p.status] as const)
+      );
+
+      for (const signup of signupPayments) {
+        if (signup.totalAmount <= signup.admissionFee + 0.01) {
+          continue;
+        }
+        const member = memberById.get(signup.memberId);
+        if (!member?.membershipStart) {
+          continue;
+        }
+        const month1Key = formatMonth(member.membershipStart);
+        const month1Status = month1StatusByMemberMonth.get(`${signup.memberId}:${month1Key}`);
+        if (month1Status && month1Status !== 'PAID') {
+          const row = paidSignupRows.find((r) => r.sourceId === signup.id);
+          if (row) {
+            staleIdSet.add(row.id);
+          }
+        }
+      }
+    }
+  }
+
+  const staleIds = [...staleIdSet];
   if (staleIds.length === 0) return 0;
 
   await prisma.feeCollection.deleteMany({
