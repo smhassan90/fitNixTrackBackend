@@ -62,6 +62,12 @@ model Gym {
   mobileOtpSessions         MobileOtpSession[]
   mobileNotifications       MobileNotification[]
   mobilePushTokens          MobilePushToken[]
+  marketingProfile          MarketingProfile?
+  marketingSocialAccounts   MarketingSocialAccount[]
+  marketingOpportunities    MarketingContentOpportunity[]
+  marketingContents         MarketingContent[]
+  marketingAiUsage          MarketingAiUsage[]
+  marketingPublishAttempts  MarketingPublishAttempt[]
 
   @@map("gyms")
 }
@@ -1158,6 +1164,204 @@ enum AccountDeletionAccountType {
 enum AccountDeletionSource {
   web
   app
+}
+
+// ---------------------------------------------------------------------------
+// Marketing module (Phase 1 foundation)
+// ---------------------------------------------------------------------------
+
+enum MarketingSocialAccountStatus {
+  DISCONNECTED
+  CONNECTED
+  ERROR
+  PENDING
+}
+
+enum MarketingOpportunityStatus {
+  DRAFT
+  AWAITING_REVIEW
+  APPROVED
+  REJECTED
+  CONVERTED
+}
+
+enum MarketingContentStatus {
+  DRAFT
+  AWAITING_APPROVAL
+  APPROVED
+  SCHEDULED
+  PUBLISHED
+  FAILED
+  REJECTED
+}
+
+enum MarketingImageStatus {
+  PENDING
+  READY
+  FAILED
+}
+
+enum MarketingPublishAttemptStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+/// 1:1 marketing profile per gym (seeded from Gym on first read).
+model MarketingProfile {
+  id                     Int      @id @default(autoincrement())
+  gymId                  Int      @unique
+  description            String?  @db.Text
+  location               String?  @db.VarChar(255)
+  city                   String?  @db.VarChar(120)
+  country                String?  @db.VarChar(120)
+  address                String?  @db.Text
+  phone                  String?  @db.VarChar(40)
+  website                String?  @db.VarChar(500)
+  services               String?  @db.Text
+  membershipPackages     String?  @db.Text
+  targetAudience         String?  @db.Text
+  uniqueSellingPoints    String?  @db.Text
+  facilities             String?  @db.Text
+  trainers               String?  @db.Text
+  promotions             String?  @db.Text
+  brandTone              String?  @db.VarChar(255)
+  preferredLanguage      String?  @db.VarChar(64)
+  keywords               String?  @db.Text
+  seoTopics              String?  @db.Text
+  doNotClaim             String?  @db.Text
+  additionalInstructions String?  @db.Text
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  gym Gym @relation(fields: [gymId], references: [id], onDelete: Cascade)
+
+  @@map("marketing_profiles")
+}
+
+/// Connected social / Google Business accounts (Phase 1: schema only).
+model MarketingSocialAccount {
+  id              Int                          @id @default(autoincrement())
+  gymId           Int
+  platform        String                       @db.VarChar(64)
+  accountName     String?                      @db.VarChar(255)
+  status          MarketingSocialAccountStatus @default(DISCONNECTED)
+  accessTokenEnc  String?                      @db.Text
+  refreshTokenEnc String?                      @db.Text
+  tokenExpiresAt  DateTime?
+  connectedAt     DateTime?
+  lastPublishAt   DateTime?
+  createdAt       DateTime                     @default(now())
+  updatedAt       DateTime                     @updatedAt
+
+  gym Gym @relation(fields: [gymId], references: [id], onDelete: Cascade)
+
+  @@index([gymId])
+  @@index([gymId, platform])
+  @@map("marketing_social_accounts")
+}
+
+/// Content opportunity ideas awaiting review / conversion.
+model MarketingContentOpportunity {
+  id                Int                        @id @default(autoincrement())
+  gymId             Int
+  title             String                     @db.VarChar(255)
+  reason            String?                    @db.Text
+  audience          String?                    @db.Text
+  contentType       String?                    @db.VarChar(64)
+  suggestedPlatform String?                    @db.VarChar(64)
+  seoIntent         String?                    @db.Text
+  priority          Int                        @default(0)
+  keywords          String?                    @db.Text
+  status            MarketingOpportunityStatus @default(DRAFT)
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+
+  gym      Gym                @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  contents MarketingContent[]
+
+  @@index([gymId])
+  @@index([gymId, status])
+  @@map("marketing_content_opportunities")
+}
+
+/// Draft / approved marketing content items.
+model MarketingContent {
+  id            Int                    @id @default(autoincrement())
+  gymId         Int
+  opportunityId Int?
+  title         String                 @db.VarChar(255)
+  status        MarketingContentStatus @default(DRAFT)
+  caption       String?                @db.Text
+  captionShort  String?                @db.Text
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+
+  gym           Gym                        @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  opportunity   MarketingContentOpportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  imageVersions MarketingImageVersion[]
+  publishAttempts MarketingPublishAttempt[]
+
+  @@index([gymId])
+  @@index([gymId, status])
+  @@index([opportunityId])
+  @@map("marketing_contents")
+}
+
+/// Image variants generated / attached to a content item.
+model MarketingImageVersion {
+  id             Int                  @id @default(autoincrement())
+  contentId      Int
+  prompt         String?              @db.Text
+  modifiedPrompt String?              @db.Text
+  imageUrl       String?              @db.VarChar(2048)
+  status         MarketingImageStatus @default(PENDING)
+  provider       String?              @db.VarChar(64)
+  createdAt      DateTime             @default(now())
+
+  content MarketingContent @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@index([contentId])
+  @@map("marketing_image_versions")
+}
+
+/// Publish attempt stub for later scheduling / social publishing phases.
+model MarketingPublishAttempt {
+  id           Int                          @id @default(autoincrement())
+  gymId        Int
+  contentId    Int?
+  platform     String?                      @db.VarChar(64)
+  status       MarketingPublishAttemptStatus @default(PENDING)
+  externalId   String?                      @db.VarChar(255)
+  errorMessage String?                      @db.Text
+  attemptedAt  DateTime                     @default(now())
+  createdAt    DateTime                     @default(now())
+
+  gym     Gym               @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  content MarketingContent? @relation(fields: [contentId], references: [id], onDelete: SetNull)
+
+  @@index([gymId])
+  @@index([contentId])
+  @@map("marketing_publish_attempts")
+}
+
+/// AI usage metering (Phase 1: overview returns zeros until used).
+model MarketingAiUsage {
+  id             Int      @id @default(autoincrement())
+  gymId          Int
+  platformUserId Int?
+  operationType  String   @db.VarChar(64)
+  provider       String?  @db.VarChar(64)
+  model          String?  @db.VarChar(128)
+  tokens         Int?
+  costUsd        Float?
+  createdAt      DateTime @default(now())
+
+  gym Gym @relation(fields: [gymId], references: [id], onDelete: Cascade)
+
+  @@index([gymId, createdAt])
+  @@index([platformUserId])
+  @@map("marketing_ai_usage")
 }
 
 /// Google Play–compliant account & data deletion requests (public web form + in-app).

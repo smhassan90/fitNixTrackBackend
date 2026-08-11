@@ -14,6 +14,7 @@ import adminPackageFeatureRoutes from './adminPackageFeatures';
 import uploadRoutes from './upload';
 import posRoutes from './pos';
 import accountDeletionRequestRoutes from './accountDeletionRequests';
+import marketingRoutes from './marketing';
 
 const router = Router();
 
@@ -27,6 +28,7 @@ router.use('/users', authenticatePlatformToken, userRoutes);
 router.use('/permissions', authenticatePlatformToken, permissionRoutes);
 router.use('/timezones', authenticatePlatformToken, timezoneRoutes);
 router.use('/account-deletion-requests', accountDeletionRequestRoutes);
+router.use('/marketing', authenticatePlatformToken, marketingRoutes);
 router.use('/', authenticatePlatformToken, locationRoutes);
 router.use('/', authenticatePlatformToken, adminBillingPlanRoutes);
 router.use('/', authenticatePlatformToken, adminPackageFeatureRoutes);
