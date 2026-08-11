@@ -158,6 +158,10 @@ export async function getMarketingOverview(gymId: number): Promise<MarketingOver
     opportunitiesAwaitingReview,
     postsAwaitingApproval,
     aiRows,
+    socialPostsThisMonth,
+    scheduledThisMonth,
+    publishedThisMonth,
+    failedThisMonth,
   ] = await Promise.all([
     prisma.marketingSocialAccount.count({
       where: { gymId, status: 'CONNECTED' },
@@ -169,19 +173,50 @@ export async function getMarketingOverview(gymId: number): Promise<MarketingOver
       where: { gymId, status: 'AWAITING_APPROVAL' },
     }),
     prisma.marketingAiUsage.findMany({
-      where: { gymId, createdAt: { gte: monthStart } },
+      where: {
+        gymId,
+        createdAt: { gte: monthStart },
+        operationType: {
+          in: ['OPPORTUNITY_GENERATION', 'SOCIAL_POST_GENERATION'],
+        },
+      },
       select: { operationType: true, costUsd: true },
+    }),
+    prisma.marketingContent.count({
+      where: {
+        gymId,
+        contentKind: 'SOCIAL_POST',
+        createdAt: { gte: monthStart },
+      },
+    }),
+    prisma.marketingContent.count({
+      where: {
+        gymId,
+        status: 'SCHEDULED',
+        updatedAt: { gte: monthStart },
+      },
+    }),
+    prisma.marketingContent.count({
+      where: {
+        gymId,
+        status: 'PUBLISHED',
+        updatedAt: { gte: monthStart },
+      },
+    }),
+    prisma.marketingContent.count({
+      where: {
+        gymId,
+        status: 'FAILED',
+        updatedAt: { gte: monthStart },
+      },
     }),
   ]);
 
   let textGenerations = 0;
-  let imageGenerations = 0;
   let costSum = 0;
   let hasCost = false;
   for (const row of aiRows) {
-    const op = row.operationType.toUpperCase();
-    if (op.includes('IMAGE')) imageGenerations += 1;
-    else textGenerations += 1;
+    textGenerations += 1;
     if (row.costUsd != null) {
       costSum += row.costUsd;
       hasCost = true;
@@ -204,6 +239,30 @@ export async function getMarketingOverview(gymId: number): Promise<MarketingOver
     recommendations.push('Complete the marketing profile for this gym.');
   }
 
+  if (opportunitiesAwaitingReview > 0) {
+    attention.push({
+      type: 'OPPORTUNITIES_AWAITING_REVIEW',
+      message: `${opportunitiesAwaitingReview} content opportunit${
+        opportunitiesAwaitingReview === 1 ? 'y' : 'ies'
+      } awaiting review.`,
+      href: `/platform/marketing/${gymId}/opportunities`,
+      severity: 'info',
+    });
+    recommendations.push('Review and approve pending content opportunities.');
+  }
+
+  if (postsAwaitingApproval > 0) {
+    attention.push({
+      type: 'POSTS_AWAITING_APPROVAL',
+      message: `${postsAwaitingApproval} social post${
+        postsAwaitingApproval === 1 ? '' : 's'
+      } awaiting approval.`,
+      href: `/platform/marketing/${gymId}/contents`,
+      severity: 'info',
+    });
+    recommendations.push('Approve or reject draft social posts.');
+  }
+
   if (connectedAccountsCount === 0) {
     recommendations.push('Connect social accounts when publishing is available.');
   }
@@ -219,16 +278,16 @@ export async function getMarketingOverview(gymId: number): Promise<MarketingOver
     profileComplete,
     profileUpdatedAt: profile?.updatedAt?.toISOString() ?? null,
     contentThisMonth: {
-      socialPosts: 0,
+      socialPosts: socialPostsThisMonth,
       blogs: 0,
       googleBusinessPosts: 0,
-      scheduledPosts: 0,
-      publishedPosts: 0,
-      failedPosts: 0,
+      scheduledPosts: scheduledThisMonth,
+      publishedPosts: publishedThisMonth,
+      failedPosts: failedThisMonth,
     },
     aiActivity: {
       textGenerations,
-      imageGenerations,
+      imageGenerations: 0,
       estimatedCostUsd: hasCost ? costSum : null,
     },
     attention,

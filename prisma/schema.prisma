@@ -1287,23 +1287,33 @@ model MarketingContentOpportunity {
 
 /// Draft / approved marketing content items.
 model MarketingContent {
-  id            Int                    @id @default(autoincrement())
-  gymId         Int
-  opportunityId Int?
-  title         String                 @db.VarChar(255)
-  status        MarketingContentStatus @default(DRAFT)
-  caption       String?                @db.Text
-  captionShort  String?                @db.Text
-  createdAt     DateTime               @default(now())
-  updatedAt     DateTime               @updatedAt
+  id                 Int                    @id @default(autoincrement())
+  gymId              Int
+  opportunityId      Int?
+  contentKind        String                 @default("SOCIAL_POST") @db.VarChar(64)
+  title              String                 @db.VarChar(255)
+  status             MarketingContentStatus @default(DRAFT)
+  topic              String?                @db.Text
+  headline           String?                @db.VarChar(500)
+  caption            String?                @db.Text
+  captionShort       String?                @db.Text
+  cta                String?                @db.VarChar(500)
+  hashtags           String?                @db.Text
+  imageConcept       String?                @db.Text
+  imagePrompt        String?                @db.Text
+  suggestedPlatforms Json?
+  platformVariants   Json?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
 
-  gym           Gym                        @relation(fields: [gymId], references: [id], onDelete: Cascade)
-  opportunity   MarketingContentOpportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
-  imageVersions MarketingImageVersion[]
+  gym             Gym                          @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  opportunity     MarketingContentOpportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  imageVersions   MarketingImageVersion[]
   publishAttempts MarketingPublishAttempt[]
 
   @@index([gymId])
   @@index([gymId, status])
+  @@index([gymId, contentKind])
   @@index([opportunityId])
   @@map("marketing_contents")
 }
