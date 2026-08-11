@@ -107,14 +107,13 @@ function slugify(input: string): string {
 }
 
 async function uniqueSlug(base: string): Promise<string> {
-  let slug = slugify(base) || `blog-${Date.now()}`;
-  let i = 0;
-  while (true) {
+  const slug = slugify(base) || `blog-${Date.now()}`;
+  for (let i = 0; i < 10_000; i += 1) {
     const candidate = i === 0 ? slug : `${slug}-${i}`;
     const exists = await prisma.marketingBlog.findUnique({ where: { slug: candidate } });
     if (!exists) return candidate;
-    i += 1;
   }
+  return `${slug}-${Date.now()}`;
 }
 
 export async function listBlogs(params: {
