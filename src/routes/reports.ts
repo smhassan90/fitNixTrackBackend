@@ -14,6 +14,7 @@ import {
   getFeeCollectionsSchema,
   getRevenueReportSchema,
 } from '../validations/reports';
+import { getPnlSummarySchema } from '../validations/expenses';
 import { sendSuccess, sendError } from '../utils/response';
 import { parseDate, getStartOfDay, getEndOfDay } from '../utils/dateHelpers';
 import {
@@ -22,6 +23,7 @@ import {
   getRevenueReport,
   listFeeCollections,
 } from '../services/reportService';
+import { getPnlSummary } from '../services/pnlSummaryService';
 
 const router = Router();
 
@@ -225,6 +227,23 @@ router.get(
       const gymId = req.gymId!;
       const { startMonth, endMonth } = req.query as { startMonth: string; endMonth: string };
       const data = await getRevenueReport(gymId, startMonth, endMonth);
+      sendSuccess(res, data);
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// GET /api/reports/pnl-summary?month=YYYY-MM
+router.get(
+  '/pnl-summary',
+  requireGymPermission('gym.financialReports.read'),
+  validate(getPnlSummarySchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { month } = req.query as { month?: string };
+      const data = await getPnlSummary(gymId, month);
       sendSuccess(res, data);
     } catch (error) {
       sendError(res, error as Error);

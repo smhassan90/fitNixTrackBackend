@@ -55,6 +55,12 @@ test('login/me expanded permissions include implied keys', () => {
   assert.equal(expanded.includes('gym.settings.read'), true);
 });
 
+test('expense permissions imply the required read/manage chain', () => {
+  const expanded = expandGymPermissionKeys(['gym.expenses.delete']);
+  assert.equal(expanded.has('gym.expenses.manage'), true);
+  assert.equal(expanded.has('gym.expenses.read'), true);
+});
+
 test('gym administrators always have the complete permission catalog', () => {
   const permissions = effectiveGymPermissionKeys('GYM_ADMIN', []);
   assert.equal(permissions.length, KNOWN_GYM_PERMISSION_KEYS.size);

@@ -11,12 +11,14 @@ import { sendSuccess, sendError } from '../utils/response';
 import { ValidationError } from '../utils/errors';
 import { getGymTimezone, unpaidInstallmentDisplayBucket, calendarDateStringInGymTZ, startOfGymCalendarDayUtc, startOfNextGymCalendarDayUtc } from '../utils/dateHelpers';
 import { getFinancialSummarySchema, getPaymentsReceivedDailySchema, getFeeCollectionsSchema } from '../validations/reports';
+import { getPnlSummarySchema } from '../validations/expenses';
 import {
   getFinancialSummary,
   getPaymentsReceivedDaily,
   getRevenueReport,
   listFeeCollections,
 } from '../services/reportService';
+import { getPnlSummary } from '../services/pnlSummaryService';
 import {
   getCollectedAmountInDateRange,
   getRecentFeeCollections,
@@ -108,6 +110,23 @@ router.get(
           totalPages: Math.ceil(total / limitNum),
         },
       });
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// GET /api/dashboard/pnl-summary?month=YYYY-MM
+router.get(
+  '/pnl-summary',
+  requireGymPermission('gym.financialReports.read'),
+  validate(getPnlSummarySchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const { month } = req.query as { month?: string };
+      const data = await getPnlSummary(gymId, month);
+      sendSuccess(res, data);
     } catch (error) {
       sendError(res, error as Error);
     }

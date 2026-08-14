@@ -69,6 +69,8 @@ model Gym {
   marketingAiUsage          MarketingAiUsage[]
   marketingPublishAttempts  MarketingPublishAttempt[]
   marketingBlogs            MarketingBlog[]
+  expenseCategories         ExpenseCategory[]
+  expenseEntries            ExpenseEntry[]
 
   @@map("gyms")
 }
@@ -123,6 +125,9 @@ model User {
   updatedAt    DateTime  @updatedAt
 
   gym Gym @relation(fields: [gymId], references: [id], onDelete: Cascade)
+
+  expenseEntriesCreated ExpenseEntry[] @relation("ExpenseEntryCreatedBy")
+  expenseEntriesUpdated ExpenseEntry[] @relation("ExpenseEntryUpdatedBy")
 
   @@unique([gymId, email])
   @@index([gymId])
@@ -534,6 +539,63 @@ model FeeCollection {
   @@index([gymId, collectedAt])
   @@index([gymId, billingMonth])
   @@map("fee_collections")
+}
+
+enum ExpenseKind {
+  FIXED
+  PETTY
+  OTHER
+}
+
+enum ExpensePaymentMethod {
+  CASH
+  ONLINE
+  OTHER
+}
+
+/// Gym-defined expense heads (Rent, Ice, etc.). Soft-deactivated so history stays.
+model ExpenseCategory {
+  id            Int         @id @default(autoincrement())
+  gymId         Int
+  name          String      @db.VarChar(128)
+  kind          ExpenseKind @default(PETTY)
+  isRecurring   Boolean     @default(false)
+  defaultAmount Float?
+  isActive      Boolean     @default(true)
+  sortOrder     Int         @default(0)
+  deletedAt     DateTime?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  gym     Gym            @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  entries ExpenseEntry[]
+
+  @@index([gymId, isActive, sortOrder])
+  @@index([gymId, name])
+  @@map("expense_categories")
+}
+
+model ExpenseEntry {
+  id            Int                    @id @default(autoincrement())
+  gymId         Int
+  categoryId    Int
+  amount        Float
+  spentAt       DateTime
+  paymentMethod ExpensePaymentMethod?
+  notes         String?                @db.VarChar(500)
+  createdById   Int
+  updatedById   Int?
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+
+  gym       Gym              @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  category  ExpenseCategory  @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  createdBy User             @relation("ExpenseEntryCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy User?            @relation("ExpenseEntryUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([gymId, spentAt])
+  @@index([gymId, categoryId])
+  @@map("expense_entries")
 }
 
 model AttendanceRecord {
