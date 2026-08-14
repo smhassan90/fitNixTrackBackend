@@ -138,3 +138,161 @@ test('GYM_ADMIN can create an expense head', async () => {
   assert.equal(res.body.success, true);
   assert.equal(res.body.data.name, 'Ice');
 });
+
+function expenseRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 9,
+    gymId: 10,
+    categoryId: 1,
+    amount: 25000,
+    spentAt: new Date('2026-07-02T00:00:00.000Z'),
+    paymentMethod: 'CASH',
+    notes: 'July rent',
+    createdById: 1,
+    updatedById: null,
+    createdAt: new Date('2026-07-02T00:00:00.000Z'),
+    updatedAt: new Date('2026-07-02T00:00:00.000Z'),
+    category: { id: 1, name: 'Rent', kind: 'FIXED', isActive: true },
+    createdBy: { id: 1, name: 'Gym Admin' },
+    updatedBy: null,
+    ...overrides,
+  };
+}
+
+test('POST /api/expenses creates a dated expense against an active head', async () => {
+  setupGymAuth('GYM_STAFF', ['gym.expenses.manage']);
+  mockMethod(prisma.expenseCategory as any, 'findFirst', (async () => ({
+    id: 1,
+    gymId: 10,
+    name: 'Rent',
+    kind: 'FIXED',
+    isActive: true,
+    deletedAt: null,
+  })) as any);
+  let createData: any;
+  mockMethod(prisma.expenseEntry as any, 'create', (async (args: any) => {
+    createData = args.data;
+    return expenseRow({
+      amount: args.data.amount,
+      spentAt: args.data.spentAt,
+      paymentMethod: args.data.paymentMethod,
+      notes: args.data.notes,
+    });
+  }) as any);
+
+  const res = await request(buildApp())
+    .post('/api/expenses')
+    .set('Authorization', `Bearer ${gymToken('GYM_STAFF')}`)
+    .send({
+      categoryId: 1,
+      amount: 25000,
+      spentAt: '2026-07-02',
+      paymentMethod: 'CASH',
+      notes: ' July rent ',
+    });
+
+  assert.equal(res.status, 200);
+  assert.equal(createData.gymId, 10);
+  assert.equal(createData.createdById, 1);
+  assert.equal(createData.spentAt.toISOString(), '2026-07-01T19:00:00.000Z');
+  assert.equal(createData.notes, 'July rent');
+  assert.equal(res.body.data.spentAt, '2026-07-02');
+});
+
+test('POST /api/expenses rejects inactive expense head', async () => {
+  setupGymAuth('GYM_STAFF', ['gym.expenses.manage']);
+  mockMethod(prisma.expenseCategory as any, 'findFirst', (async () => ({
+    id: 1,
+    gymId: 10,
+    name: 'Old Head',
+    kind: 'PETTY',
+    isActive: false,
+    deletedAt: new Date(),
+  })) as any);
+
+  const res = await request(buildApp())
+    .post('/api/expenses')
+    .set('Authorization', `Bearer ${gymToken('GYM_STAFF')}`)
+    .send({ categoryId: 1, amount: 100, spentAt: '2026-07-02' });
+
+  assert.equal(res.status, 400);
+  assert.match(res.body.error.message, /inactive head/i);
+});
+
+test('PATCH /api/expenses/:id updates amount and audit user', async () => {
+  setupGymAuth('GYM_STAFF', ['gym.expenses.manage']);
+  mockMethod(prisma.expenseEntry as any, 'findFirst', (async () => expenseRow()) as any);
+  let updateData: any;
+  mockMethod(prisma.expenseEntry as any, 'update', (async (args: any) => {
+    updateData = args.data;
+    return expenseRow({
+      amount: args.data.amount,
+      updatedById: args.data.updatedById,
+      updatedBy: { id: 1, name: 'Gym Admin' },
+    });
+  }) as any);
+
+  const res = await request(buildApp())
+    .patch('/api/expenses/9')
+    .set('Authorization', `Bearer ${gymToken('GYM_STAFF')}`)
+    .send({ amount: 26000 });
+
+  assert.equal(res.status, 200);
+  assert.equal(updateData.amount, 26000);
+  assert.equal(updateData.updatedById, 1);
+  assert.equal(res.body.data.amount, 26000);
+});
+
+test('DELETE /api/expenses/:id removes entry with delete permission', async () => {
+  setupGymAuth('GYM_STAFF', ['gym.expenses.delete']);
+  mockMethod(prisma.expenseEntry as any, 'findFirst', (async () => expenseRow()) as any);
+  let deletedId: number | undefined;
+  mockMethod(prisma.expenseEntry as any, 'delete', (async (args: any) => {
+    deletedId = args.where.id;
+    return { id: deletedId };
+  }) as any);
+
+  const res = await request(buildApp())
+    .delete('/api/expenses/9')
+    .set('Authorization', `Bearer ${gymToken('GYM_STAFF')}`);
+
+  assert.equal(res.status, 200);
+  assert.equal(deletedId, 9);
+});
+
+test('DELETE /api/expenses/categories/:id soft-deactivates head', async () => {
+  setupGymAuth('GYM_STAFF', ['gym.expenses.delete']);
+  mockMethod(prisma.expenseCategory as any, 'findFirst', (async () => ({
+    id: 1,
+    gymId: 10,
+    name: 'Rent',
+    isActive: true,
+    deletedAt: null,
+  })) as any);
+  let updateData: any;
+  mockMethod(prisma.expenseCategory as any, 'update', (async (args: any) => {
+    updateData = args.data;
+    return {
+      id: 1,
+      gymId: 10,
+      name: 'Rent',
+      kind: 'FIXED',
+      isRecurring: true,
+      defaultAmount: 25000,
+      isActive: false,
+      sortOrder: 10,
+      deletedAt: args.data.deletedAt,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+  }) as any);
+
+  const res = await request(buildApp())
+    .delete('/api/expenses/categories/1')
+    .set('Authorization', `Bearer ${gymToken('GYM_STAFF')}`);
+
+  assert.equal(res.status, 200);
+  assert.equal(updateData.isActive, false);
+  assert.ok(updateData.deletedAt instanceof Date);
+  assert.equal(res.body.data.isActive, false);
+});

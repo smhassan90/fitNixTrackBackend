@@ -47,3 +47,16 @@ test('post-reactivation months use reactive day, earlier months use joining day'
   assert.equal(after?.startDate, '2026-06-20');
   assert.equal(after?.expiryDate, '2026-07-20');
 });
+
+test('due calendar date is overdue only before gym-local today', async () => {
+  const { isDueCalendarDateBeforeTodayInGymTZ } = await import('./dateHelpers');
+  const yesterday = new Date();
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  yesterday.setUTCHours(0, 0, 0, 0);
+  const tomorrow = new Date();
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  tomorrow.setUTCHours(0, 0, 0, 0);
+
+  assert.equal(isDueCalendarDateBeforeTodayInGymTZ(yesterday, 'Asia/Karachi'), true);
+  assert.equal(isDueCalendarDateBeforeTodayInGymTZ(tomorrow, 'Asia/Karachi'), false);
+});
