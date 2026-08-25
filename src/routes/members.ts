@@ -43,6 +43,7 @@ import {
   formatMemberStatusFields,
   resolveMemberStatusEffectiveDate,
 } from '../utils/memberStatus';
+import { reactivateMemberOnReturn } from '../services/memberReactivationService';
 import {
   generatePaymentsForMember,
   computeSignupOneTimeFees,
@@ -1113,40 +1114,14 @@ router.patch(
         return;
       }
 
-      await assertGymCanAddActiveMember(gymId);
-
-      const inactiveFrom = member.inactiveFrom;
-      if (!inactiveFrom) {
-        sendError(res, new ValidationError('Inactive start date is missing for this member'));
+      const reactivation = await reactivateMemberOnReturn(gymId, memberId, effectiveDate);
+      if (!reactivation.reactivated) {
+        sendError(
+          res,
+          new ValidationError(reactivation.skippedReason ?? 'Member could not be reactivated')
+        );
         return;
       }
-      if (effectiveDate.getTime() < inactiveFrom.getTime()) {
-        sendError(res, new ValidationError('effectiveDate cannot be before inactiveFrom'));
-        return;
-      }
-
-      const dayMs = 24 * 60 * 60 * 1000;
-      const pausedDays = Math.floor((effectiveDate.getTime() - inactiveFrom.getTime()) / dayMs);
-      const newMembershipEnd = member.membershipEnd
-        ? new Date(member.membershipEnd.getTime() + pausedDays * dayMs)
-        : null;
-
-      await prisma.member.update({
-        where: { id: memberId },
-        data: {
-          isActive: true,
-          inactiveFrom: null,
-          billingResumeFrom: effectiveDate,
-          ...(newMembershipEnd ? { membershipEnd: newMembershipEnd } : {}),
-        } as any,
-      });
-
-      const monthKey = `${effectiveDate.getUTCFullYear()}-${String(
-        effectiveDate.getUTCMonth() + 1
-      ).padStart(2, '0')}`;
-      await ensureMonthlyInstallmentsThroughMonthKey(memberId, gymId, monthKey);
-      await syncMissingNextMonthlyInstallment(memberId, gymId);
-      await markOverduePayments(gymId);
 
       const updated: any = await prisma.member.findFirst({
         where: { id: memberId, gymId },

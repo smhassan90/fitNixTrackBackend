@@ -50,12 +50,14 @@ test('absence policy skips never-checked-in members and clears future unpaid due
     { memberId: 21, _max: { checkInTime: new Date('2026-01-01T00:00:00.000Z') } },
   ]) as any);
   let deactivatedId: number | undefined;
+  let inactiveFromSet: Date | undefined;
   let deletedWhere: any;
   mockMethod(prisma as any, '$transaction', (async (callback: any) => {
     const tx = {
       member: {
         update: async (args: any) => {
           deactivatedId = args.where.id;
+          inactiveFromSet = args.data.inactiveFrom;
           return { id: deactivatedId, isActive: false };
         },
       },
@@ -76,6 +78,7 @@ test('absence policy skips never-checked-in members and clears future unpaid due
 
   assert.equal(marked, 1);
   assert.equal(deactivatedId, 21);
+  assert.equal(inactiveFromSet?.toISOString(), '2026-01-01T00:00:00.000Z');
   assert.equal(deletedWhere.memberId, 21);
   assert.deepEqual(deletedWhere.status.in, ['PENDING', 'OVERDUE']);
   assert.ok(deletedWhere.dueDate.gte instanceof Date);

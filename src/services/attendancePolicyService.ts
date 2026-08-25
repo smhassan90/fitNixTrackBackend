@@ -92,7 +92,8 @@ export async function applyAutoCheckoutForOpenSessions(
 
 /**
  * Mark active members inactive when their last check-in is older than absenceInactiveDays.
- * Uses the same inactiveFrom + payment cleanup pattern as manual deactivation.
+ * inactiveFrom = calendar day of last check-in (last appearance in gym).
+ * Removes unpaid installments due on/after that date (same as manual deactivate).
  *
  * Members who have never checked in are left active — "no attendance yet" is not
  * the same as "stopped coming" (important after CSV import / before device sync).
@@ -109,7 +110,6 @@ export async function markMembersInactiveAfterAbsence(
   const todayStr = calendarDateStringInGymTZ(new Date(), tz);
   const cutoffStr = shiftCalendarDateString(todayStr, -absenceInactiveDays);
   const cutoffStart = getStartOfDay(parseDate(cutoffStr));
-  const effectiveDate = getStartOfDay(parseDate(todayStr));
 
   const activeMembers = await prisma.member.findMany({
     where: { gymId, isActive: true },
@@ -151,12 +151,16 @@ export async function markMembersInactiveAfterAbsence(
       continue;
     }
 
+    const lastAppearanceStr = calendarDateStringInGymTZ(lastCheckIn, tz);
+    const inactiveFrom = getStartOfDay(parseDate(lastAppearanceStr));
+
     await prisma.$transaction(async (tx) => {
       await tx.member.update({
         where: { id: member.id },
         data: {
           isActive: false,
-          inactiveFrom: effectiveDate,
+          inactiveFrom,
+          billingResumeFrom: null,
         },
       });
 
@@ -165,7 +169,7 @@ export async function markMembersInactiveAfterAbsence(
           gymId,
           memberId: member.id,
           status: { in: ['PENDING', 'OVERDUE'] },
-          dueDate: { gte: effectiveDate },
+          dueDate: { gte: inactiveFrom },
         },
       });
     });

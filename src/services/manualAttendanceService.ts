@@ -7,6 +7,7 @@ import {
 } from '../utils/dateHelpers';
 import { resolveMemberInternalId } from '../utils/memberLookup';
 import { getOverduePaymentDetailsByMemberIds } from './attendancePolicyService';
+import { reactivateMemberOnReturn } from './memberReactivationService';
 
 function formatCheckInTime(checkInTime: Date): string {
   return formatTimeInGymTZ(checkInTime);
@@ -36,7 +37,10 @@ export type ManualCheckInPortalResponse = {
   }>;
 };
 
-async function resolveActiveMemberId(gymId: number, rawMemberId: number | string): Promise<number> {
+async function resolveMemberForManualAttendance(
+  gymId: number,
+  rawMemberId: number | string
+): Promise<{ id: number; name: string; wasInactive: boolean }> {
   const memberId = await resolveMemberInternalId(gymId, rawMemberId);
   if (!memberId) {
     throw new NotFoundError('Member', rawMemberId);
@@ -48,10 +52,7 @@ async function resolveActiveMemberId(gymId: number, rawMemberId: number | string
   if (!member) {
     throw new NotFoundError('Member', rawMemberId);
   }
-  if (!member.isActive) {
-    throw new BadRequestError('Cannot record attendance for an inactive member');
-  }
-  return member.id;
+  return { id: member.id, name: member.name, wasInactive: !member.isActive };
 }
 
 export async function manualCheckIn(
@@ -59,7 +60,19 @@ export async function manualCheckIn(
   rawMemberId: number | string,
   checkInTime: Date
 ): Promise<ManualCheckInPortalResponse> {
-  const memberId = await resolveActiveMemberId(gymId, rawMemberId);
+  const resolved = await resolveMemberForManualAttendance(gymId, rawMemberId);
+  const memberId = resolved.id;
+
+  if (resolved.wasInactive) {
+    const reactivation = await reactivateMemberOnReturn(gymId, memberId, checkInTime);
+    if (!reactivation.reactivated) {
+      throw new BadRequestError(
+        reactivation.skippedReason ??
+          'Cannot check in — member could not be reactivated. Use Members → Reactivate or upgrade your plan.'
+      );
+    }
+  }
+
   const dateOnly = attendanceDateForInstant(checkInTime);
 
   const existing = await prisma.attendanceRecord.findUnique({
@@ -139,7 +152,11 @@ export async function manualCheckOut(
   rawMemberId: number | string,
   checkOutTime: Date
 ) {
-  const memberId = await resolveActiveMemberId(gymId, rawMemberId);
+  const resolved = await resolveMemberForManualAttendance(gymId, rawMemberId);
+  if (resolved.wasInactive) {
+    throw new BadRequestError('Member must check in before checking out');
+  }
+  const memberId = resolved.id;
   const dateOnly = attendanceDateForInstant(checkOutTime);
 
   const existing = await prisma.attendanceRecord.findUnique({

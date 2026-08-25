@@ -67,11 +67,65 @@ test('manualCheckIn creates attendance and returns overdue alert', async () => {
   assert.equal(result.overdueAlerts[0].memberNumber, 'M-21');
 });
 
-test('manualCheckIn blocks inactive members', async () => {
+test('manualCheckIn reactivates inactive member on return', async () => {
   mockResolvedMember(false);
+  mockMethod(prisma.attendanceRecord as any, 'findUnique', (async () => null) as any);
+  const checkInTime = new Date('2026-08-14T05:00:00.000Z');
+  let memberUpdates = 0;
+  mockMethod(prisma.member as any, 'update', (async () => {
+    memberUpdates += 1;
+    return { id: 21, isActive: true };
+  }) as any);
+  mockMethod(prisma.member as any, 'findFirst', (async () => ({
+    id: 21,
+    gymId: 10,
+    name: 'Ali',
+    isActive: false,
+    inactiveFrom: new Date('2026-07-01T00:00:00.000Z'),
+    membershipEnd: null,
+  })) as any);
+  mockMethod(prisma.gymSubscription as any, 'findUnique', (async () => null) as any);
+  mockMethod(prisma.payment as any, 'findMany', (async () => []) as any);
+  mockMethod(prisma.attendanceRecord as any, 'create', (async (args: any) => ({
+    id: 50,
+    memberId: 21,
+    checkInTime,
+    member: {
+      id: 21,
+      legacyMemberId: 'M-21',
+      name: 'Ali',
+      phone: '03000000000',
+      email: null,
+    },
+  })) as any);
+
+  const result = await manualCheckIn(10, 21, checkInTime);
+
+  assert.ok(memberUpdates >= 1);
+  assert.equal(result.attendanceRecordId, '50');
+});
+
+test('manualCheckIn blocks inactive members when reactivation fails', async () => {
+  let call = 0;
+  mockMethod(prisma.member as any, 'findFirst', (async () => {
+    call += 1;
+    if (call === 1) return { id: 21 };
+    return {
+      id: 21,
+      gymId: 10,
+      name: 'Ali',
+      isActive: false,
+      inactiveFrom: new Date('2026-07-01T00:00:00.000Z'),
+      membershipEnd: null,
+    };
+  }) as any);
+  mockMethod(prisma.gymSubscription as any, 'findUnique', (async () => ({
+    plan: { maxMembers: 1, name: 'Starter', id: 1, code: 'STARTER', isActive: true },
+  })) as any);
+  mockMethod(prisma.member as any, 'count', (async () => 1) as any);
   await assert.rejects(
     () => manualCheckIn(10, 21, new Date('2026-08-14T05:00:00.000Z')),
-    /inactive member/i
+    /limit|reactivat/i
   );
 });
 

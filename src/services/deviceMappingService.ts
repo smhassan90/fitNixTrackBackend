@@ -4,6 +4,7 @@ import {
   getGymTimezone,
   parseDate,
 } from '../utils/dateHelpers';
+import { reactivateMemberOnReturn } from './memberReactivationService';
 
 export function normalizeMemberName(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -266,6 +267,9 @@ export async function applyPunchToAttendance(input: {
         where: { id: existingRecord.id },
         data: updateData,
       });
+      if (updateData.checkInTime) {
+        await reactivateMemberOnReturn(gymId, memberId, logDate);
+      }
       return true;
     }
     return false;
@@ -283,6 +287,9 @@ export async function applyPunchToAttendance(input: {
       deviceSerialNumber: deviceSerialNumber || undefined,
     },
   });
+  if (isCheckIn) {
+    await reactivateMemberOnReturn(gymId, memberId, logDate);
+  }
   return true;
 }
 
