@@ -2029,7 +2029,7 @@ function buildMemberSummaryWhere(
   search?: string,
   onlyWithOpenInstallments?: boolean
 ): Prisma.MemberWhereInput {
-  const and: Prisma.MemberWhereInput[] = [{ gymId }];
+  const and: Prisma.MemberWhereInput[] = [{ gymId, isActive: true }];
 
   if (search?.trim()) {
     const s = search.trim();

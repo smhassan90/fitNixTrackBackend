@@ -192,7 +192,7 @@ router.get(
       prisma.member.count({ where: { gymId } }),
       prisma.trainer.count({ where: { gymId } }),
       prisma.payment.findMany({
-        where: { gymId },
+        where: { gymId, member: { isActive: true } },
         select: {
           id: true,
           memberId: true,
@@ -215,8 +215,8 @@ router.get(
       }),
     ]);
 
-    // Calculate payment stats - only count next upcoming payment per member
-    // Group payments by member and get only the next upcoming payment for each
+    // Pending/overdue: next unpaid installment per *active* member (gym TZ buckets).
+    // Inactive leavers may still have older unpaid months; those stay on the member page, not here.
     const memberNextPayments = new Map<number, typeof allPayments[0]>();
     
     for (const payment of allPayments) {

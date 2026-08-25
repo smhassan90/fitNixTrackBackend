@@ -70,8 +70,8 @@ export type FinancialSummaryResult = {
   collectedMemberCountInRange: number;
   collectedByCategoryInRange: Record<FeeCollectionCategory, number>;
   /**
-   * Bucket totals use the **next unpaid installment per member** only (earliest `dueDate`, tie-break lower `id`),
-   * same basis as `GET /api/dashboard/stats` pending/overdue counts — not every open row in the gym.
+   * Bucket totals use the **next unpaid installment per active member** only (earliest `dueDate`, tie-break lower `id`),
+   * same basis as `GET /api/dashboard/stats` pending/overdue counts — inactive members are excluded.
    * Each *Amount and *Count use the **same** rows: that next row per member with **amount > 0**, classified by
    * `unpaidInstallmentDisplayBucket` (gym TZ). *Count is the number of members in that bucket.
    */
@@ -132,6 +132,7 @@ export async function getFinancialSummary(
       where: {
         gymId,
         status: { in: ['PENDING', 'OVERDUE'] },
+        member: { isActive: true },
       },
       select: { id: true, memberId: true, amount: true, dueDate: true },
       orderBy: { dueDate: 'asc' },

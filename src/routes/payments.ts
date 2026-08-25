@@ -111,6 +111,9 @@ router.get(
       // Check if we should filter to next payment per member
       // This applies when filtering by PENDING or OVERDUE status
       const isPendingOrOverdue = normalizedStatus === 'PENDING' || normalizedStatus === 'OVERDUE';
+      if (isPendingOrOverdue && !where.memberId) {
+        where.member = { ...(where.member ?? {}), isActive: true };
+      }
 
       if (isPendingOrOverdue) {
         // One next payment per member — aggregate in DB, paginate member IDs, then fetch page rows only
