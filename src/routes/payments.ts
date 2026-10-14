@@ -36,6 +36,7 @@ import {
   markSignupOneTimePaidAtDate,
   markSignupOneTimeUnpaid,
   deleteMonthlyPaymentAndReverseCollection,
+  waiveOptionalGapInstallment,
 } from '../services/paymentService';
 import {
   buildMonthlyPaymentReceipt,
@@ -704,6 +705,23 @@ router.put(
       });
 
       sendSuccess(res, mapRowMemberNumber(payment), 'Payment updated successfully');
+    } catch (error) {
+      sendError(res, error as Error);
+    }
+  }
+);
+
+// PATCH /api/payments/:id/waive — drop the optional pre-reactivation gap charge
+router.patch(
+  '/:id/waive',
+  requireGymPermission('gym.payments.manage'),
+  validate(markPaidSchema),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const gymId = req.gymId!;
+      const id = parseInt(req.params.id, 10);
+      await waiveOptionalGapInstallment(id, gymId);
+      sendSuccess(res, { id }, 'Gap charge waived');
     } catch (error) {
       sendError(res, error as Error);
     }

@@ -1,8 +1,11 @@
 import { prisma } from '../lib/prisma';
 import {
   calendarDateStringInGymTZ,
+  formatMonth,
+  getBillingAnchorDayUTC,
   getGymTimezone,
   getStartOfDay,
+  initialOpenInstallmentStatus,
   parseDate,
 } from '../utils/dateHelpers';
 import {
@@ -13,6 +16,8 @@ import {
   markOverduePayments,
   syncMissingNextMonthlyInstallment,
   ensureMonthlyInstallmentsThroughMonthKey,
+  buildInactiveGapCharge,
+  computeMemberMonthlyInstallmentAmount,
 } from './paymentService';
 
 export type ReactivateMemberOnReturnResult = {
@@ -25,7 +30,8 @@ export type ReactivateMemberOnReturnResult = {
 
 /**
  * Mark an inactive member active again after they return (check-in or manual reactivate).
- * Billing resumes from the **next calendar month** after the return date.
+ * Billing resumes on the return date. Months fully inside the inactive period are not billed.
+ * Days after the last paid coverage and before inactiveFrom are one optional prorated charge.
  */
 export async function reactivateMemberOnReturn(
   gymId: number,
@@ -39,6 +45,10 @@ export async function reactivateMemberOnReturn(
       isActive: true,
       inactiveFrom: true,
       membershipEnd: true,
+      membershipStart: true,
+      discount: true,
+      package: { select: { price: true, discount: true, duration: true } },
+      trainers: { include: { trainer: { select: { charges: true } } } },
     },
   });
 
@@ -82,6 +92,29 @@ export async function reactivateMemberOnReturn(
       ? new Date(member.membershipEnd.getTime() + pausedDays * dayMs)
       : member.membershipEnd;
 
+  const lastPaid = await prisma.payment.findFirst({
+    where: { memberId, gymId, status: 'PAID' },
+    orderBy: { dueDate: 'desc' },
+  });
+
+  let gapCharge: ReturnType<typeof buildInactiveGapCharge> = null;
+  if (lastPaid && member.membershipStart && member.package) {
+    const monthlyAmount = computeMemberMonthlyInstallmentAmount(
+      member.package,
+      member.trainers.map((mt) => mt.trainer),
+      member.discount
+    );
+    gapCharge = buildInactiveGapCharge({
+      lastPaidDueDate: lastPaid.dueDate,
+      inactiveFrom: member.inactiveFrom,
+      joinAnchorDay: getBillingAnchorDayUTC(member.membershipStart),
+      monthlyAmount,
+    });
+    if (gapCharge && formatMonth(billingResumeFrom) === gapCharge.month) {
+      gapCharge = null;
+    }
+  }
+
   await prisma.member.update({
     where: { id: memberId },
     data: {
@@ -91,6 +124,24 @@ export async function reactivateMemberOnReturn(
       ...(newMembershipEnd ? { membershipEnd: newMembershipEnd } : {}),
     },
   });
+
+  if (gapCharge) {
+    const existingGap = await prisma.payment.findFirst({
+      where: { memberId, gymId, month: gapCharge.month },
+    });
+    if (!existingGap) {
+      await prisma.payment.create({
+        data: {
+          gymId,
+          memberId,
+          month: gapCharge.month,
+          amount: gapCharge.amount,
+          status: initialOpenInstallmentStatus(gapCharge.dueDate, tz),
+          dueDate: gapCharge.dueDate,
+        },
+      });
+    }
+  }
 
   await syncMissingNextMonthlyInstallment(memberId, gymId);
   const resumeMonthKey = `${billingResumeFrom.getUTCFullYear()}-${String(

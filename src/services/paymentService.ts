@@ -105,6 +105,90 @@ export function resolveNextSyncDueAfterLastPaid(params: {
 }
 
 /**
+ * Day-of-month used for dues after a reactivation.
+ * Pre-operations resumes that land on the 1st keep the original join day.
+ * A later resume date (the day they came back) becomes the new billing day.
+ */
+export function resolveBillingAnchorDay(
+  membershipStart: Date | null | undefined,
+  billingResumeFrom: Date | null | undefined
+): number {
+  const start = membershipStart ? new Date(membershipStart) : null;
+  if (start) {
+    start.setUTCHours(0, 0, 0, 0);
+  }
+  const fallback = start ? getBillingAnchorDayUTC(start) : 1;
+  if (!start || !billingResumeFrom) {
+    return fallback;
+  }
+  const resume = new Date(billingResumeFrom);
+  resume.setUTCHours(0, 0, 0, 0);
+  if (resume.getTime() <= start.getTime()) {
+    return fallback;
+  }
+  if (resume.getUTCDate() === 1 && isPreOperationsAdmission(start)) {
+    return fallback;
+  }
+  return getBillingAnchorDayUTC(resume);
+}
+
+const GAP_DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Days after paid coverage ended and through the inactive date (0 when coverage already reached it). */
+export function inactiveGapDays(coverageEnd: Date, inactiveFrom: Date): number {
+  const end = new Date(coverageEnd);
+  end.setUTCHours(0, 0, 0, 0);
+  const inactive = new Date(inactiveFrom);
+  inactive.setUTCHours(0, 0, 0, 0);
+  return Math.max(0, Math.round((inactive.getTime() - end.getTime()) / GAP_DAY_MS));
+}
+
+/**
+ * Optional charge for the short active period after the last paid month and before inactiveFrom.
+ * Full inactive months are not included. Returns null when there is nothing to bill.
+ */
+export function buildInactiveGapCharge(params: {
+  lastPaidDueDate: Date;
+  inactiveFrom: Date;
+  joinAnchorDay: number;
+  monthlyAmount: number;
+}): { dueDate: Date; month: string; amount: number; gapDays: number } | null {
+  const lastPaid = new Date(params.lastPaidDueDate);
+  lastPaid.setUTCHours(0, 0, 0, 0);
+  const coverageEnd = nextBillingDueDate(lastPaid, params.joinAnchorDay);
+  const gapDays = inactiveGapDays(coverageEnd, params.inactiveFrom);
+  if (gapDays <= 0 || params.monthlyAmount <= 0) {
+    return null;
+  }
+  const amount = Math.round(((params.monthlyAmount * gapDays) / 30) * 100) / 100;
+  if (amount <= 0) {
+    return null;
+  }
+  const dueDate = new Date(params.inactiveFrom);
+  dueDate.setUTCHours(0, 0, 0, 0);
+  return {
+    dueDate,
+    month: formatMonth(coverageEnd),
+    amount,
+    gapDays,
+  };
+}
+
+export function isOptionalGapDue(
+  dueDate: Date,
+  billingResumeFrom: Date | null | undefined
+): boolean {
+  if (!billingResumeFrom) {
+    return false;
+  }
+  const due = new Date(dueDate);
+  due.setUTCHours(0, 0, 0, 0);
+  const resume = new Date(billingResumeFrom);
+  resume.setUTCHours(0, 0, 0, 0);
+  return due.getTime() < resume.getTime();
+}
+
+/**
  * Unpaid rows that are phantom gaps from historical admission seeding — not real debt.
  * Only applies to pre-operations admissions (before GYM_OPERATIONS_START).
  * - Later PAID exists: unpaid months after admission month and before first later PAID,
@@ -1160,7 +1244,7 @@ export async function syncMissingNextMonthlyInstallment(
 
   const amount = await refreshMemberOpenInstallmentAmounts(memberId, gymId);
 
-  const anchorDay = getBillingAnchorDayUTC(member.membershipStart);
+  const anchorDay = resolveBillingAnchorDay(member.membershipStart, member.billingResumeFrom);
   const tz = getGymTimezone();
   const syncCap = resolveInstallmentSyncCapDay(
     {
@@ -1270,7 +1354,7 @@ export async function ensureMonthlyInstallmentsThroughMonthKey(
     return;
   }
 
-  const anchorDay = getBillingAnchorDayUTC(member.membershipStart);
+  const anchorDay = resolveBillingAnchorDay(member.membershipStart, member.billingResumeFrom);
   const tz = getGymTimezone();
   const syncCap = resolveInstallmentSyncCapDay(
     {
@@ -1419,7 +1503,7 @@ export async function createNextInstallmentIfNeeded(
   }
 
   const anchorDay = member.membershipStart
-    ? getBillingAnchorDayUTC(member.membershipStart)
+    ? resolveBillingAnchorDay(member.membershipStart, member.billingResumeFrom)
     : getBillingAnchorDayUTC(paidPayment.dueDate);
   let nextDueDate = nextBillingDueDate(paidPayment.dueDate, anchorDay);
   nextDueDate = shiftToBillableDate(nextDueDate, anchorDay, member.billingResumeFrom);
@@ -1617,7 +1701,7 @@ async function ensureOpenMonthlyInstallmentExists(params: {
     return;
   }
 
-  const anchorDay = getBillingAnchorDayUTC(member.membershipStart);
+  const anchorDay = resolveBillingAnchorDay(member.membershipStart, member.billingResumeFrom);
 
   const open = await prisma.payment.findFirst({
     where: {
@@ -1692,7 +1776,12 @@ async function assertInstallmentsPayableInOrder(
     throw new ValidationError('At least one payment ID is required');
   }
 
-  const unpaid = await prisma.payment.findMany({
+  const member = await prisma.member.findFirst({
+    where: { id: memberId, gymId },
+    select: { billingResumeFrom: true },
+  });
+
+  const unpaidAll = await prisma.payment.findMany({
     where: {
       memberId,
       gymId,
@@ -1700,6 +1789,10 @@ async function assertInstallmentsPayableInOrder(
     },
     orderBy: { dueDate: 'asc' },
   });
+  // The short charge before reactivation is optional and must not block the new cycle.
+  const unpaid = unpaidAll.filter(
+    (p) => !isOptionalGapDue(p.dueDate, member?.billingResumeFrom)
+  );
 
   const targets = await prisma.payment.findMany({
     where: { id: { in: uniqueIds }, gymId, memberId },
@@ -1710,10 +1803,17 @@ async function assertInstallmentsPayableInOrder(
     throw new ValidationError('One or more payments were not found for this member');
   }
 
-  const expected = unpaid.slice(0, targets.length);
+  const requiredTargets = targets.filter(
+    (p) => !isOptionalGapDue(p.dueDate, member?.billingResumeFrom)
+  );
+  if (requiredTargets.length === 0) {
+    return;
+  }
+
+  const expected = unpaid.slice(0, requiredTargets.length);
   const matchesPrefix =
-    expected.length === targets.length &&
-    expected.every((exp, idx) => exp.id === targets[idx].id);
+    expected.length === requiredTargets.length &&
+    expected.every((exp, idx) => exp.id === requiredTargets[idx].id);
 
   if (matchesPrefix) return;
 
@@ -1721,7 +1821,7 @@ async function assertInstallmentsPayableInOrder(
   const hasOverdue = unpaid.some(
     (p) => p.status === 'OVERDUE' || isDueCalendarDateBeforeTodayInGymTZ(p.dueDate, tz)
   );
-  const targetHasPendingOrAdvance = targets.some((p) => {
+  const targetHasPendingOrAdvance = requiredTargets.some((p) => {
     const isOverdue =
       p.status === 'OVERDUE' || isDueCalendarDateBeforeTodayInGymTZ(p.dueDate, tz);
     return !isOverdue;
@@ -1743,6 +1843,30 @@ async function assertInstallmentsPayableInOrder(
  * Delete a monthly payment row and reverse its cash collection so dashboard
  * income / recent payments no longer include it.
  */
+/**
+ * Remove the optional pre-reactivation gap charge. Full months are not waivable here.
+ */
+export async function waiveOptionalGapInstallment(
+  paymentId: number,
+  gymId: number
+): Promise<void> {
+  const payment = await prisma.payment.findFirst({
+    where: { id: paymentId, gymId },
+    include: { member: { select: { billingResumeFrom: true } } },
+  });
+  if (!payment) {
+    throw new NotFoundError('Payment', paymentId);
+  }
+  if (payment.status === 'PAID') {
+    throw new ValidationError('Paid installments cannot be waived');
+  }
+  if (!isOptionalGapDue(payment.dueDate, payment.member.billingResumeFrom)) {
+    throw new ValidationError('Only the short charge from before reactivation can be waived');
+  }
+  await prisma.payment.delete({ where: { id: paymentId } });
+  invalidatePurgeCache(gymId);
+}
+
 export async function deleteMonthlyPaymentAndReverseCollection(
   paymentId: number,
   gymId: number

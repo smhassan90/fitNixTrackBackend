@@ -1,4 +1,4 @@
-import { calendarDateStringInGymTZ, getGymTimezone, parseDate, startOfNextCalendarMonthUTC } from './dateHelpers';
+import { calendarDateStringInGymTZ, getGymTimezone, parseDate } from './dateHelpers';
 
 /** Today as YYYY-MM-DD in the gym timezone (for deactivate/reactivate defaults). */
 export function todayInGymCalendarDate(): string {
@@ -12,13 +12,13 @@ export function resolveMemberStatusEffectiveDate(bodyEffectiveDate?: string | nu
 }
 
 /**
- * After a return check-in / reactivation, billing resumes the **next calendar month**
- * (not the month they walked back in).
+ * After a return check-in / reactivation, billing resumes on the return day itself.
+ * Later dues use that day of the month (not the original join day).
  */
 export function resolveBillingResumeFromAfterReturn(returnInstant: Date): Date {
   const tz = getGymTimezone();
   const returnDayStr = calendarDateStringInGymTZ(returnInstant, tz);
-  return startOfNextCalendarMonthUTC(parseDate(returnDayStr));
+  return parseDate(returnDayStr);
 }
 
 /** Format a stored date as YYYY-MM-DD for API / Excel export. */

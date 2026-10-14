@@ -9,6 +9,8 @@ import {
   isPreOperationsAdmission,
   startOfCurrentGymMonth,
   resolveNextSyncDueAfterLastPaid,
+  resolveBillingAnchorDay,
+  buildInactiveGapCharge,
   selectPhantomGapUnpaidPayments,
   getGymOperationsStartDate,
 } from './paymentService';
@@ -157,6 +159,33 @@ test('resolveNextSyncDueAfterLastPaid respects explicit billingResumeFrom', () =
   });
 
   assert.equal(formatMonth(next), '2026-03');
+});
+
+test('reactivation moves the billing day to the return date and skips inactive months', () => {
+  const membershipStart = parseDate('2026-03-05');
+  const anchorDay = resolveBillingAnchorDay(membershipStart, parseDate('2026-11-18'));
+  assert.equal(anchorDay, 18);
+
+  const next = resolveNextSyncDueAfterLastPaid({
+    lastPaidDueDate: parseDate('2026-07-05'),
+    membershipStart,
+    billingResumeFrom: parseDate('2026-11-18'),
+    anchorDay,
+    now: parseDate('2026-11-18'),
+  });
+
+  assert.equal(formatMonth(next), '2026-11');
+  assert.equal(next.getUTCDate(), 18);
+
+  const gap = buildInactiveGapCharge({
+    lastPaidDueDate: parseDate('2026-07-05'),
+    inactiveFrom: parseDate('2026-08-08'),
+    joinAnchorDay: 5,
+    monthlyAmount: 3000,
+  });
+  assert.equal(gap?.gapDays, 3);
+  assert.equal(gap?.month, '2026-08');
+  assert.equal(gap?.amount, 300);
 });
 
 test('resolveNextSyncDueAfterLastPaid keeps normal chain after recent paid month', () => {
