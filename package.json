@@ -18,7 +18,8 @@
     "prisma:studio": "prisma studio",
     "prisma:seed": "tsx prisma/seed.ts",
     "db:restore": "tsx prisma/restore-dropped-columns.ts",
-    "db:backfill-signup": "tsx prisma/backfill-pending-signup-payments.ts --gym-id=3"
+    "db:backfill-signup": "tsx prisma/backfill-pending-signup-payments.ts --gym-id=3",
+    "blob:migrate": "tsx scripts/migrate-vercel-blob.ts"
   },
   "keywords": [
     "gym",

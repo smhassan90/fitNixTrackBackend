@@ -1,43 +1,25 @@
-name: Build and Deploy
+name: Test, Build and Deploy
 
 on:
   push:
+  pull_request:
     branches: [main, master]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-and-deploy:
-    name: Build and Deploy to Vercel
+  verify:
+    name: Verify existing functionality
     runs-on: ubuntu-latest
     env:
       # CI does not connect to MySQL. Prisma only needs a syntactically valid URL for `prisma generate` / schema load.
-      # Real migrations run on Vercel build (`npm run vercel-build`) where DATABASE_URL is configured.
       DATABASE_URL: mysql://ci:ci@127.0.0.1:3306/ci
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      # secrets.* cannot be used in all workflow `if:` expressions; use outputs instead.
-      - name: Detect Vercel deploy secrets
-        id: vercel_secrets
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: |
-          missing=""
-          if [ -z "${VERCEL_TOKEN:-}" ]; then missing="${missing}VERCEL_TOKEN "; fi
-          if [ -z "${VERCEL_ORG_ID:-}" ]; then missing="${missing}VERCEL_ORG_ID "; fi
-          if [ -z "${VERCEL_PROJECT_ID:-}" ]; then missing="${missing}VERCEL_PROJECT_ID "; fi
-          if [ -z "$missing" ]; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-            echo "Vercel deploy secrets are present."
-          else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Vercel deploy will be skipped — empty GitHub Actions secrets: ${missing% }"
-            echo "Add them under: Repository → Settings → Secrets and variables → Actions"
-            echo "Token: https://vercel.com/account/tokens — Org/Project ID: run vercel link locally, then read .vercel/project.json"
-          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -45,37 +27,25 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Install dependencies
         run: npm ci
 
-      - name: Run linter
-        run: npm run lint || echo "Linting skipped"
+      - name: Generate Prisma client
+        run: npm run prisma:generate
 
       - name: Type check
-        run: npx tsc --noEmit
+        run: npm run type-check
+
+      - name: Run regression tests
+        run: npm test
+
+      - name: Test device access-control planner
+        run: python src/test_access_control_dry_run.py
 
       - name: Build
         run: npm run build
-
-      - name: Check build output
-        run: |
-          if [ ! -d "dist" ]; then
-            echo "Build failed - dist directory not found"
-            exit 1
-          fi
-          echo "Build successful"
-
-      - name: Deploy to Vercel
-        if: steps.vercel_secrets.outputs.ready == 'true'
-        continue-on-error: true
-        uses: amondnet/vercel-action@v25
-        with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          vercel-args: '--prod'
-
-      - name: Vercel deploy skipped (missing secrets)
-        if: steps.vercel_secrets.outputs.ready != 'true'
-        run: |
-          echo "Skipping Vercel deploy — CI still ran build/lint/tsc. Push to Vercel Git integration or add the three secrets to deploy from Actions."

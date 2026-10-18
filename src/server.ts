@@ -44,6 +44,14 @@ function getDeviceRoutes(): Router {
 const app: Express = express();
 const PORT = process.env.PORT || 3001;
 
+/** Comma-separated `CORS_ORIGINS` (preferred) or a single `CORS_ORIGIN`. */
+function corsAllowedOrigins(): string | string[] {
+  const raw = (process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || 'http://localhost:3000').trim();
+  const list = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  if (list.length <= 1) return list[0] || 'http://localhost:3000';
+  return list;
+}
+
 // Vercel always sets X-Forwarded-For. express-rate-limit v7 throws if trust proxy stays false
 // (ERR_ERL_UNEXPECTED_X_FORWARDED_FOR). Use hop count, not boolean true (forbidden by rate-limit validations).
 if (process.env.VERCEL === '1' || process.env.TRUST_PROXY === '1') {
@@ -52,7 +60,7 @@ if (process.env.VERCEL === '1' || process.env.TRUST_PROXY === '1') {
 
 // CORS configuration
 const corsOptions = {
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  origin: corsAllowedOrigins(),
   credentials: true,
   optionsSuccessStatus: 200,
 };
@@ -191,7 +199,8 @@ if (process.env.VERCEL !== '1') {
   app.listen(PORT, () => {
     console.log(`🚀 Server is running on port ${PORT}`);
     console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🌐 CORS enabled for: ${process.env.CORS_ORIGIN || 'http://localhost:3000'}`);
+    const origins = corsAllowedOrigins();
+    console.log(`🌐 CORS enabled for: ${Array.isArray(origins) ? origins.join(', ') : origins}`);
   });
 
   // V1 marketing schedule worker: poll due SCHEDULED posts every 60s.
