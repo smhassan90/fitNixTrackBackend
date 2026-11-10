@@ -38,13 +38,18 @@ export async function getGymTimezoneById(gymId: number): Promise<string> {
     return cached.timezone;
   }
 
-  const gym = await prisma.gym.findUnique({
-    where: { id: gymId },
-    select: { timezone: true },
-  });
-
-  const timezone =
-    gym?.timezone && isValidIanaTimezone(gym.timezone) ? gym.timezone : 'UTC';
+  let timezone = 'UTC';
+  try {
+    const gym = await prisma.gym.findUnique({
+      where: { id: gymId },
+      select: { timezone: true },
+    });
+    timezone =
+      gym?.timezone && isValidIanaTimezone(gym.timezone) ? gym.timezone : 'UTC';
+  } catch {
+    const envTz = process.env.GYM_TIMEZONE?.trim();
+    timezone = envTz && isValidIanaTimezone(envTz) ? envTz : 'UTC';
+  }
   timezoneCache.set(gymId, { timezone, expiresAt: now + CACHE_TTL_MS });
   return timezone;
 }

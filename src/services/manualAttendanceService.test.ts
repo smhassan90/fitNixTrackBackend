@@ -74,7 +74,7 @@ test('manualCheckIn reactivates inactive member on return', async () => {
     if (args?.select?.name && args.select.isActive !== undefined) {
       return { id: 21, name: 'Ali', isActive: false };
     }
-    if (args?.include?.trainers) {
+    if (args?.select?.inactiveFrom !== undefined && args?.select?.package) {
       return {
         id: 21,
         isActive: false,

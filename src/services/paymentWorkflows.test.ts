@@ -156,8 +156,8 @@ test('markLastPaidInstallmentUnpaid reverses status, future rows, and income led
     month: '2026-08',
     amount: 3000,
     status: 'PAID',
-    dueDate: new Date('2026-08-15T00:00:00.000Z'),
-    paidDate: new Date('2026-08-14T00:00:00.000Z'),
+    dueDate: new Date('2030-08-15T00:00:00.000Z'),
+    paidDate: new Date('2030-08-14T00:00:00.000Z'),
   };
   let finalRead = false;
   mockMethod(prisma.payment as any, 'findFirst', (async (args: any) => {
@@ -288,8 +288,11 @@ test('markPaymentAsPaid refuses later months while overdue exists', async () => 
   };
   mockMethod(prisma.payment as any, 'findFirst', (async () => later) as any);
   mockMethod(prisma.oneTimePayment as any, 'findFirst', (async () => null) as any);
+  mockMethod(prisma.member as any, 'findFirst', (async () => ({ billingResumeFrom: null })) as any);
   mockMethod(prisma.payment as any, 'findMany', (async (args: any) => {
     if (args.where?.status?.in) return [overdue, later];
+    if (args.where?.id?.in) return [later];
+    if (args.orderBy?.dueDate) return [overdue, later];
     return [later];
   }) as any);
 
