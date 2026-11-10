@@ -16,6 +16,7 @@ jobs:
     env:
       # CI does not connect to MySQL. Prisma only needs a syntactically valid URL for `prisma generate` / schema load.
       DATABASE_URL: mysql://ci:ci@127.0.0.1:3306/ci
+      GYM_TIMEZONE: Asia/Karachi
 
     steps:
       - name: Checkout code

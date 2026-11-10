@@ -6,7 +6,7 @@ import {
   startOfGymCalendarDayUtc,
   startOfNextGymCalendarDayUtc,
 } from '../utils/dateHelpers';
-import { normalizeOneTimePaymentBreakdown } from './paymentService';
+import { normalizeOneTimePaymentBreakdown } from './paymentSignupFees';
 
 type Tx = Prisma.TransactionClient;
 

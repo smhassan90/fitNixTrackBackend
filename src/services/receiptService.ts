@@ -4,7 +4,7 @@ import {
   computeReceiptPackageCoverage,
   formatMonth,
 } from '../utils/dateHelpers';
-import { normalizeOneTimePaymentBreakdown } from './paymentService';
+import { normalizeOneTimePaymentBreakdown } from './paymentSignupFees';
 
 type ReceiptPrintedBy = {
   id: number;

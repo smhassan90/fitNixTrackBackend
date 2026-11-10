@@ -68,24 +68,50 @@ test('manualCheckIn creates attendance and returns overdue alert', async () => {
 });
 
 test('manualCheckIn reactivates inactive member on return', async () => {
-  mockResolvedMember(false);
-  mockMethod(prisma.attendanceRecord as any, 'findUnique', (async () => null) as any);
   const checkInTime = new Date('2026-08-14T05:00:00.000Z');
   let memberUpdates = 0;
+  mockMethod(prisma.member as any, 'findFirst', (async (args: any) => {
+    if (args?.select?.name && args.select.isActive !== undefined) {
+      return { id: 21, name: 'Ali', isActive: false };
+    }
+    if (args?.include?.trainers) {
+      return {
+        id: 21,
+        isActive: false,
+        inactiveFrom: new Date('2026-07-01T00:00:00.000Z'),
+        membershipEnd: null,
+        membershipStart: new Date('2026-06-01T00:00:00.000Z'),
+        discount: 0,
+        package: null,
+        trainers: [],
+      };
+    }
+    if (args?.include?.package) {
+      return {
+        id: 21,
+        gymId: 10,
+        packageId: null,
+        membershipStart: new Date('2026-06-01T00:00:00.000Z'),
+        membershipEnd: null,
+        billingResumeFrom: new Date('2026-08-14T00:00:00.000Z'),
+        isActive: true,
+        package: null,
+      };
+    }
+    return { id: 21, gymId: 10, name: 'Ali', isActive: false };
+  }) as any);
   mockMethod(prisma.member as any, 'update', (async () => {
     memberUpdates += 1;
     return { id: 21, isActive: true };
   }) as any);
-  mockMethod(prisma.member as any, 'findFirst', (async () => ({
-    id: 21,
-    gymId: 10,
-    name: 'Ali',
-    isActive: false,
-    inactiveFrom: new Date('2026-07-01T00:00:00.000Z'),
-    membershipEnd: null,
-  })) as any);
   mockMethod(prisma.gymSubscription as any, 'findUnique', (async () => null) as any);
-  mockMethod(prisma.payment as any, 'findMany', (async () => []) as any);
+  mockMethod(prisma.payment as any, 'findFirst', (async () => null) as any);
+  mockMethod(prisma.payment as any, 'findMany', (async (args: any) => {
+    if (args?.where?.status === 'PENDING' && args?.select?.member) return [];
+    return [];
+  }) as any);
+  mockMethod(prisma.payment as any, 'updateMany', (async () => ({ count: 0 })) as any);
+  mockMethod(prisma.attendanceRecord as any, 'findUnique', (async () => null) as any);
   mockMethod(prisma.attendanceRecord as any, 'create', (async (args: any) => ({
     id: 50,
     memberId: 21,

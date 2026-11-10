@@ -21,6 +21,15 @@ function mockMethod<T extends object, K extends keyof T>(obj: T, key: K, value: 
   });
 }
 
+/** markPaymentAsPaid / reactivation call markOverduePayments without a DB in CI. */
+function mockOverduePaymentSweepNoop() {
+  mockMethod(prisma.payment as any, 'updateMany', (async () => ({ count: 0 })) as any);
+}
+
+function isMarkOverdueSweepQuery(args: any): boolean {
+  return args?.where?.status === 'PENDING' && args?.select?.member;
+}
+
 afterEach(() => {
   while (restores.length) restores.pop()?.();
 });
@@ -96,9 +105,13 @@ test('markPaymentAsPaid updates installment and creates dashboard fee collection
     },
   };
   mockMethod(prisma.payment as any, 'findFirst', (async () => payment) as any);
-  mockMethod(prisma.payment as any, 'findMany', (async () => [payment]) as any);
+  mockMethod(prisma.payment as any, 'findMany', (async (args: any) => {
+    if (isMarkOverdueSweepQuery(args)) return [];
+    return [payment];
+  }) as any);
   mockMethod(prisma.oneTimePayment as any, 'findFirst', (async () => null) as any);
   mockMethod(prisma.member as any, 'findFirst', (async () => ({ id: 21, packageId: null })) as any);
+  mockOverduePaymentSweepNoop();
 
   let paidUpdate: any;
   let collection: any;
@@ -154,8 +167,12 @@ test('markLastPaidInstallmentUnpaid reverses status, future rows, and income led
     }
     return payment;
   }) as any);
-  mockMethod(prisma.payment as any, 'findMany', (async () => []) as any);
+  mockMethod(prisma.payment as any, 'findMany', (async (args: any) => {
+    if (isMarkOverdueSweepQuery(args)) return [];
+    return [];
+  }) as any);
   mockMethod(prisma.member as any, 'findFirst', (async () => ({ id: 21, packageId: null })) as any);
+  mockOverduePaymentSweepNoop();
 
   let futureDelete: any;
   let reverted: any;
@@ -323,9 +340,13 @@ test('markPaymentAsPaid skips fee collection when signup already covers month 1'
     },
   };
   mockMethod(prisma.payment as any, 'findFirst', (async () => payment) as any);
-  mockMethod(prisma.payment as any, 'findMany', (async () => [payment]) as any);
+  mockMethod(prisma.payment as any, 'findMany', (async (args: any) => {
+    if (isMarkOverdueSweepQuery(args)) return [];
+    return [payment];
+  }) as any);
   mockMethod(prisma.oneTimePayment as any, 'findFirst', (async () => null) as any);
   mockMethod(prisma.member as any, 'findFirst', (async () => ({ id: 21, packageId: null })) as any);
+  mockOverduePaymentSweepNoop();
 
   let createdLedger = false;
   const tx = {

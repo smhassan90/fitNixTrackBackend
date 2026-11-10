@@ -22,235 +22,46 @@ import {
   removeFeeCollectionBySource,
   removeSignupFeeCollectionsForOneTimePayment,
 } from './feeCollectionService';
+import {
+  buildInactiveGapCharge,
+  getGymOperationsStartDate,
+  isBeforeCurrentGymMonth,
+  isOptionalGapDue,
+  isPreOperationsAdmission,
+  resolveBillingAnchorDay,
+  resolveNextSyncDueAfterLastPaid,
+  selectPhantomGapUnpaidPayments,
+  shiftToBillableDate,
+  startOfCurrentGymMonth,
+} from './paymentBillingSync';
+import {
+  computeMemberMonthlyInstallmentAmount,
+  computeMonthlyPackageFee,
+  computeSignupOneTimeFees,
+  normalizeOneTimePaymentBreakdown,
+} from './paymentSignupFees';
+
+export {
+  buildInactiveGapCharge,
+  getGymOperationsStartDate,
+  inactiveGapDays,
+  isBeforeCurrentGymMonth,
+  isOptionalGapDue,
+  isPreOperationsAdmission,
+  resolveBillingAnchorDay,
+  resolveNextSyncDueAfterLastPaid,
+  selectPhantomGapUnpaidPayments,
+  startOfCurrentGymMonth,
+} from './paymentBillingSync';
+export {
+  computeMemberMonthlyInstallmentAmount,
+  computeMonthlyPackageFee,
+  computeSignupOneTimeFees,
+  computeTrainerFeeFromTrainers,
+  normalizeOneTimePaymentBreakdown,
+} from './paymentSignupFees';
 
 type Tx = Prisma.TransactionClient;
-
-/**
- * First calendar day monthly billing is considered live for this deployment.
- * Admissions before this date are treated as pre-opening signup (admission fee only)
- * until billing resumes — they must not invent months of overdue.
- *
- * Override with GYM_OPERATIONS_START=YYYY-MM-DD when needed.
- */
-export function getGymOperationsStartDate(): Date {
-  const raw = process.env.GYM_OPERATIONS_START?.trim();
-  if (raw && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-    return parseDate(raw);
-  }
-  return parseDate('2026-01-01');
-}
-
-/** Admission/join before gym monthly operations started. */
-export function isPreOperationsAdmission(membershipStart: Date): boolean {
-  const start = new Date(membershipStart);
-  start.setUTCHours(0, 0, 0, 0);
-  return start.getTime() < getGymOperationsStartDate().getTime();
-}
-
-/** True when paid/join month is before the current gym calendar month. */
-export function isBeforeCurrentGymMonth(date: Date, now: Date = new Date()): boolean {
-  const tz = getGymTimezone();
-  const dateYm = calendarDateStringInGymTZ(date, tz).slice(0, 7);
-  const todayYm = calendarDateStringInGymTZ(now, tz).slice(0, 7);
-  return dateYm < todayYm;
-}
-
-/** First day of the current gym calendar month (UTC midnight). */
-export function startOfCurrentGymMonth(now: Date = new Date()): Date {
-  const tz = getGymTimezone();
-  const todayStr = calendarDateStringInGymTZ(now, tz);
-  return parseDate(`${todayStr.slice(0, 7)}-01`);
-}
-
-/**
- * After last PAID, choose the first due date sync may create.
- * Pre-operations admissions whose only paid row is the signup month jump to the
- * current gym month (or billingResumeFrom) — never invent a year of phantom overdue.
- * Post-operations members keep a normal month-to-month chain.
- */
-export function resolveNextSyncDueAfterLastPaid(params: {
-  lastPaidDueDate: Date;
-  membershipStart: Date | null;
-  billingResumeFrom: Date | null | undefined;
-  anchorDay: number;
-  now?: Date;
-}): Date {
-  const {
-    lastPaidDueDate,
-    membershipStart,
-    billingResumeFrom,
-    anchorDay,
-    now = new Date(),
-  } = params;
-
-  let billableFrom = billingResumeFrom ?? null;
-  const lastPaid = new Date(lastPaidDueDate);
-  lastPaid.setUTCHours(0, 0, 0, 0);
-
-  const isSignupSeedMonth =
-    !!membershipStart && formatMonth(lastPaid) === formatMonth(membershipStart);
-
-  if (
-    !billableFrom &&
-    membershipStart &&
-    isPreOperationsAdmission(membershipStart) &&
-    isSignupSeedMonth &&
-    isBeforeCurrentGymMonth(lastPaid, now)
-  ) {
-    billableFrom = startOfCurrentGymMonth(now);
-  }
-
-  const d = nextBillingDueDate(lastPaid, anchorDay);
-  return shiftToBillableDate(d, anchorDay, billableFrom);
-}
-
-/**
- * Day-of-month used for dues after a reactivation.
- * Pre-operations resumes that land on the 1st keep the original join day.
- * A later resume date (the day they came back) becomes the new billing day.
- */
-export function resolveBillingAnchorDay(
-  membershipStart: Date | null | undefined,
-  billingResumeFrom: Date | null | undefined
-): number {
-  const start = membershipStart ? new Date(membershipStart) : null;
-  if (start) {
-    start.setUTCHours(0, 0, 0, 0);
-  }
-  const fallback = start ? getBillingAnchorDayUTC(start) : 1;
-  if (!start || !billingResumeFrom) {
-    return fallback;
-  }
-  const resume = new Date(billingResumeFrom);
-  resume.setUTCHours(0, 0, 0, 0);
-  if (resume.getTime() <= start.getTime()) {
-    return fallback;
-  }
-  if (resume.getUTCDate() === 1 && isPreOperationsAdmission(start)) {
-    return fallback;
-  }
-  return getBillingAnchorDayUTC(resume);
-}
-
-const GAP_DAY_MS = 24 * 60 * 60 * 1000;
-
-/** Days after paid coverage ended and through the inactive date (0 when coverage already reached it). */
-export function inactiveGapDays(coverageEnd: Date, inactiveFrom: Date): number {
-  const end = new Date(coverageEnd);
-  end.setUTCHours(0, 0, 0, 0);
-  const inactive = new Date(inactiveFrom);
-  inactive.setUTCHours(0, 0, 0, 0);
-  return Math.max(0, Math.round((inactive.getTime() - end.getTime()) / GAP_DAY_MS));
-}
-
-/**
- * Optional charge for the short active period after the last paid month and before inactiveFrom.
- * Full inactive months are not included. Returns null when there is nothing to bill.
- */
-export function buildInactiveGapCharge(params: {
-  lastPaidDueDate: Date;
-  inactiveFrom: Date;
-  joinAnchorDay: number;
-  monthlyAmount: number;
-}): { dueDate: Date; month: string; amount: number; gapDays: number } | null {
-  const lastPaid = new Date(params.lastPaidDueDate);
-  lastPaid.setUTCHours(0, 0, 0, 0);
-  const coverageEnd = nextBillingDueDate(lastPaid, params.joinAnchorDay);
-  const gapDays = inactiveGapDays(coverageEnd, params.inactiveFrom);
-  if (gapDays <= 0 || params.monthlyAmount <= 0) {
-    return null;
-  }
-  const amount = Math.round(((params.monthlyAmount * gapDays) / 30) * 100) / 100;
-  if (amount <= 0) {
-    return null;
-  }
-  const dueDate = new Date(params.inactiveFrom);
-  dueDate.setUTCHours(0, 0, 0, 0);
-  return {
-    dueDate,
-    month: formatMonth(coverageEnd),
-    amount,
-    gapDays,
-  };
-}
-
-export function isOptionalGapDue(
-  dueDate: Date,
-  billingResumeFrom: Date | null | undefined
-): boolean {
-  if (!billingResumeFrom) {
-    return false;
-  }
-  const due = new Date(dueDate);
-  due.setUTCHours(0, 0, 0, 0);
-  const resume = new Date(billingResumeFrom);
-  resume.setUTCHours(0, 0, 0, 0);
-  return due.getTime() < resume.getTime();
-}
-
-/**
- * Unpaid rows that are phantom gaps from historical admission seeding — not real debt.
- * Only applies to pre-operations admissions (before GYM_OPERATIONS_START).
- * - Later PAID exists: unpaid months after admission month and before first later PAID,
- *   but only months that themselves fall before operations start.
- * - Only admission month PAID: unpaid before the current gym month (resume billing now).
- */
-export function selectPhantomGapUnpaidPayments<
-  T extends { status: string; dueDate: Date },
->(params: {
-  membershipStart: Date;
-  payments: T[];
-  resumeFrom?: Date;
-  now?: Date;
-  operationsStart?: Date;
-}): { gapUnpaid: T[]; setBillingResume: boolean } {
-  const membershipStart = new Date(params.membershipStart);
-  membershipStart.setUTCHours(0, 0, 0, 0);
-  if (!isPreOperationsAdmission(membershipStart)) {
-    return { gapUnpaid: [], setBillingResume: false };
-  }
-
-  const resumeFrom = params.resumeFrom ?? startOfCurrentGymMonth(params.now);
-  const operationsStart = params.operationsStart ?? getGymOperationsStartDate();
-  const payments = params.payments;
-
-  const paid = payments.filter((p) => p.status === 'PAID');
-  const month1Key = formatMonth(membershipStart);
-  const month1Paid = paid.find((p) => formatMonth(p.dueDate) === month1Key);
-  if (!month1Paid) {
-    return { gapUnpaid: [], setBillingResume: false };
-  }
-
-  // Compare by calendar month, not dueDate > join day (join day-of-month can be 1
-  // while due is the 31st of the same month).
-  const paidAfterMonth1 = paid
-    .filter((p) => formatMonth(p.dueDate) > month1Key)
-    .sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
-
-  if (paidAfterMonth1.length > 0) {
-    const firstLaterPaidMonth = formatMonth(paidAfterMonth1[0].dueDate);
-    return {
-      gapUnpaid: payments.filter((p) => {
-        if (p.status !== 'OVERDUE' && p.status !== 'PENDING') return false;
-        const ym = formatMonth(p.dueDate);
-        return ym > month1Key && ym < firstLaterPaidMonth && p.dueDate.getTime() < operationsStart.getTime();
-      }),
-      setBillingResume: false,
-    };
-  }
-
-  const onlyMonth1Paid = paid.length === 1;
-  if (!onlyMonth1Paid) {
-    return { gapUnpaid: [], setBillingResume: false };
-  }
-
-  const gapUnpaid = payments.filter((p) => {
-    if (p.status !== 'OVERDUE' && p.status !== 'PENDING') return false;
-    const ym = formatMonth(p.dueDate);
-    return ym > month1Key && p.dueDate.getTime() < resumeFrom.getTime();
-  });
-  return { gapUnpaid, setBillingResume: gapUnpaid.length > 0 };
-}
 
 /**
  * After a historical signup seed (admission long before today), do not invent
@@ -320,92 +131,6 @@ type MemberWithPackage = {
   billingResumeFrom?: Date | null;
   package: { price: number; discount: number | null; duration: string } | null;
 };
-
-/** Monthly package portion (annual plans divided by 12). */
-export function computeMonthlyPackageFee(packageData: {
-  price: number;
-  discount: number | null;
-  duration: string;
-}): number {
-  const packageDiscount = packageData.discount ?? 0;
-  const net = Math.max(0, packageData.price - packageDiscount);
-  const months = parseDurationToMonths(packageData.duration);
-  return months === 12 ? net / 12 : net;
-}
-
-export function computeTrainerFeeFromTrainers(
-  trainers: { charges: number | null }[]
-): number {
-  return trainers.reduce((sum, t) => sum + (t.charges ?? 0), 0);
-}
-
-/** Package + trainer fees minus member-level discount (matches portal monthly billing). */
-export function computeMemberMonthlyInstallmentAmount(
-  packageData: { price: number; discount: number | null; duration: string } | null,
-  trainers: { charges: number | null }[],
-  memberDiscount: number | null | undefined
-): number {
-  const packageFee = packageData ? computeMonthlyPackageFee(packageData) : 0;
-  const trainerFee = computeTrainerFeeFromTrainers(trainers);
-  return Math.max(0, packageFee + trainerFee - (memberDiscount ?? 0));
-}
-
-/** Signup one-time = admission + first month (monthly package + trainer − discount). */
-export function computeSignupOneTimeFees(params: {
-  admissionFeePaid: number;
-  packageData: { price: number; discount: number | null; duration: string } | null;
-  trainers: { charges: number | null }[];
-  memberDiscount: number | null | undefined;
-}): {
-  admissionFee: number;
-  packageFee: number;
-  trainerFee: number;
-  firstMonthRecurring: number;
-  totalAmount: number;
-  monthlyInstallmentAmount: number;
-} {
-  const monthlyPackageFee = params.packageData
-    ? computeMonthlyPackageFee(params.packageData)
-    : 0;
-  const trainerFee = computeTrainerFeeFromTrainers(params.trainers);
-  const monthlyInstallmentAmount = computeMemberMonthlyInstallmentAmount(
-    params.packageData,
-    params.trainers,
-    params.memberDiscount
-  );
-  const firstMonthRecurring =
-    params.packageData || trainerFee > 0 ? monthlyInstallmentAmount : 0;
-  const totalAmount = params.admissionFeePaid + firstMonthRecurring;
-  // First-month package portion after member discount so line items sum to totalAmount.
-  const packageFee = Math.max(0, monthlyInstallmentAmount - trainerFee);
-
-  return {
-    admissionFee: params.admissionFeePaid,
-    packageFee,
-    trainerFee,
-    firstMonthRecurring,
-    totalAmount,
-    monthlyInstallmentAmount,
-  };
-}
-
-/** Ensure admission + package + trainer line items match total (legacy rows may omit member discount on packageFee). */
-export function normalizeOneTimePaymentBreakdown(payment: {
-  admissionFee: number;
-  packageFee: number;
-  trainerFee: number;
-  totalAmount: number;
-}): { admissionFee: number; packageFee: number; trainerFee: number; totalAmount: number } {
-  const lineSum = payment.admissionFee + payment.packageFee + payment.trainerFee;
-  if (Math.abs(lineSum - payment.totalAmount) < 0.01) {
-    return payment;
-  }
-  const firstMonthRecurring = Math.max(0, payment.totalAmount - payment.admissionFee);
-  return {
-    ...payment,
-    packageFee: Math.max(0, firstMonthRecurring - payment.trainerFee),
-  };
-}
 
 export type PendingOneTimeSummary = {
   id: number;
@@ -1315,24 +1040,6 @@ function endOfUtcMonthFromYearMonthKey(ym: string): Date {
   const [y, mo] = ym.split('-').map(Number);
   const d = new Date(Date.UTC(y, mo, 0));
   d.setUTCHours(0, 0, 0, 0);
-  return d;
-}
-
-function shiftToBillableDate(
-  dueDate: Date,
-  anchorDay: number,
-  billableFrom: Date | null | undefined
-): Date {
-  if (!billableFrom) {
-    return dueDate;
-  }
-  const from = new Date(billableFrom);
-  from.setUTCHours(0, 0, 0, 0);
-  let d = new Date(dueDate);
-  d.setUTCHours(0, 0, 0, 0);
-  for (let i = 0; i < 120 && d.getTime() < from.getTime(); i++) {
-    d = nextBillingDueDate(d, anchorDay);
-  }
   return d;
 }
 

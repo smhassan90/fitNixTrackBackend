@@ -1,10 +1,12 @@
-import test from 'node:test';
+import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   computeSignupOneTimeFees,
   computeMonthlyPackageFee,
   computeMemberMonthlyInstallmentAmount,
   normalizeOneTimePaymentBreakdown,
+} from './paymentSignupFees';
+import {
   isBeforeCurrentGymMonth,
   isPreOperationsAdmission,
   startOfCurrentGymMonth,
@@ -13,7 +15,11 @@ import {
   buildInactiveGapCharge,
   selectPhantomGapUnpaidPayments,
   getGymOperationsStartDate,
-} from './paymentService';
+} from './paymentBillingSync';
+
+before(() => {
+  process.env.GYM_TIMEZONE = 'Asia/Karachi';
+});
 import { formatMonth, getBillingAnchorDayUTC, parseDate } from '../utils/dateHelpers';
 
 test('computeSignupOneTimeFees uses first month package not full annual price', () => {
