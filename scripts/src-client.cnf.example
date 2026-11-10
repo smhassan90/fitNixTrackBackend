@@ -1,0 +1,6 @@
+# Copy to /opt/apps/fitnixtrack/data/src-client.cnf (chmod 600). Not committed.
+[client]
+host=66.135.60.203
+port=3308
+user=fitnixtrack_user
+password=REPLACE_ME

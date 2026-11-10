@@ -18,6 +18,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -62,7 +63,8 @@ ACCESS_CONTROL_MIN_INTERVAL_SEC = 5 * 60
 # =============================================================================
 # USER SETTINGS — edit these values on the tablet (only place to change config)
 # =============================================================================
-BACKEND_URL = "https://fitnixtrackbackend.vercel.app"
+# VPS API (was https://fitnixtrackbackend.vercel.app — wrote to legacy MySQL). Override on tablet: FITNIX_BACKEND_URL
+BACKEND_URL = os.environ.get("FITNIX_BACKEND_URL", "https://backend.fitnixtrack.com").strip()
 DEVICE_ID = 3
 API_KEY = "fnx_3_Q0XJi0Ad6x0uqOLMcd-3-NX8VZ1fNARq"
 
