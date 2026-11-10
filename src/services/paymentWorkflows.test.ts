@@ -271,10 +271,10 @@ test('markPaymentAsPaid refuses later months while overdue exists', async () => 
     id: 6,
     gymId: 10,
     memberId: 21,
-    month: '2026-08',
+    month: '2030-08',
     amount: 3000,
     status: 'PENDING',
-    dueDate: new Date('2026-08-15T00:00:00.000Z'),
+    dueDate: new Date('2030-08-15T00:00:00.000Z'),
     member: { id: 21, name: 'Ali', isActive: true, packageId: null, package: null },
   };
   const overdue = {
